@@ -24,7 +24,7 @@ import 'app_logger.dart';
 class NaiMetadataParser {
   static const String _magic = 'stealth_pngcomp';
   static const int _maxFileSize = 20 * 1024 * 1024;
-  static const Duration _parseTimeout = Duration(seconds: 10);
+  static const Duration _stealthParseTimeout = Duration(seconds: 3); // 缩短stealth超时，避免长时间等待
 
   /// 从 PNG 文件路径提取元数据（使用 Isolate 避免阻塞 UI）
   ///
@@ -40,10 +40,14 @@ class NaiMetadataParser {
     }
   }
 
-  /// 从 PNG 文件字节提取元数据（使用 Isolate 避免阻塞 UI）
+  /// 从 PNG 文件字节提取元数据
   ///
   /// 注意：此方法会读取整个文件。对于大文件，推荐使用 [ImageMetadataService]
   /// 它使用流式解析（只读前50KB），性能更好。
+  ///
+  /// 优化策略：
+  /// 1. chunks 解析直接在主线程执行（很快，无需 isolate 开销）
+  /// 2. 只有当 chunks 没有分离字段时，才在 isolate 中尝试 stealth 解析
   static Future<NaiImageMetadata?> extractFromBytes(Uint8List bytes) async {
     if (bytes.length > _maxFileSize) {
       AppLogger.w(
@@ -53,67 +57,119 @@ class NaiMetadataParser {
       return null;
     }
 
-    NaiImageMetadata? fastResult;
-    NaiImageMetadata? stealthResult;
+    final totalStopwatch = Stopwatch()..start();
 
-    // 独立执行两种提取方式，互不干扰
+    // Phase 1: 在主线程直接解析 chunks（无需 isolate，避免启动开销）
+    NaiImageMetadata? fastResult;
     try {
-      fastResult = await compute(_extractFromChunksIsolate, bytes)
-          .timeout(const Duration(seconds: 5));
+      final fastStopwatch = Stopwatch()..start();
+      // 关键优化：直接在主线程执行，避免 isolate 启动开销
+      fastResult = _extractFromChunksSync(bytes);
+      fastStopwatch.stop();
       AppLogger.d(
-        '[NaiMetadataParser] Fast chunk: hasData=${fastResult != null}, '
-        'hasSeparatedFields=${fastResult?.hasSeparatedFields ?? false}',
+        '[NaiMetadataParser] Fast chunk: ${fastStopwatch.elapsedMilliseconds}ms, '
+        'hasData=${fastResult != null}, hasSeparatedFields=${fastResult?.hasSeparatedFields ?? false}',
         'NaiMetadataParser',
       );
-    } on TimeoutException {
-      AppLogger.w('[NaiMetadataParser] Fast chunk extraction timeout', 'NaiMetadataParser');
+
+      // 优化：如果 fast 结果有分离字段，直接返回，不需要 stealth 解析
+      if (fastResult?.hasSeparatedFields == true) {
+        totalStopwatch.stop();
+        AppLogger.d(
+          '[NaiMetadataParser] Fast chunk has separated fields, skipping stealth (${totalStopwatch.elapsedMilliseconds}ms total)',
+          'NaiMetadataParser',
+        );
+        return fastResult;
+      }
     } catch (e) {
       AppLogger.w('[NaiMetadataParser] Fast chunk extraction error: $e', 'NaiMetadataParser');
     }
 
+    // Phase 2: 只有当 fast 没有分离字段时，才尝试 stealth 解析
+    // 注意：stealth 需要解码整个 PNG，所以在 isolate 中执行
+    NaiImageMetadata? stealthResult;
     try {
+      final stealthStopwatch = Stopwatch()..start();
       stealthResult = await compute(_extractMetadataIsolate, bytes)
-          .timeout(_parseTimeout);
+          .timeout(_stealthParseTimeout);
+      stealthStopwatch.stop();
       AppLogger.d(
-        '[NaiMetadataParser] Stealth: hasData=${stealthResult != null}, '
-        'hasSeparatedFields=${stealthResult?.hasSeparatedFields ?? false}',
+        '[NaiMetadataParser] Stealth: ${stealthStopwatch.elapsedMilliseconds}ms, '
+        'hasData=${stealthResult != null}, hasSeparatedFields=${stealthResult?.hasSeparatedFields ?? false}',
         'NaiMetadataParser',
       );
+
+      // 如果 stealth 有分离字段，优先使用 stealth
+      if (stealthResult?.hasSeparatedFields == true) {
+        totalStopwatch.stop();
+        AppLogger.d(
+          '[NaiMetadataParser] Using stealth result with separated fields (${totalStopwatch.elapsedMilliseconds}ms total)',
+          'NaiMetadataParser',
+        );
+        return stealthResult;
+      }
     } on TimeoutException {
       AppLogger.w('[NaiMetadataParser] Stealth extraction timeout', 'NaiMetadataParser');
     } catch (e) {
       AppLogger.w('[NaiMetadataParser] Stealth extraction error: $e', 'NaiMetadataParser');
     }
 
-    // 简化策略：优先使用有分离字段的数据源
-    // 因为分离字段只在保存时写入，说明这是最新数据
+    totalStopwatch.stop();
+
+    // 合并策略：优先使用有分离字段的结果
     if (fastResult?.hasSeparatedFields == true) {
+      AppLogger.d(
+        '[NaiMetadataParser] Final: fast result with separated fields (${totalStopwatch.elapsedMilliseconds}ms total)',
+        'NaiMetadataParser',
+      );
       return fastResult;
     }
     if (stealthResult?.hasSeparatedFields == true) {
+      AppLogger.d(
+        '[NaiMetadataParser] Final: stealth result with separated fields (${totalStopwatch.elapsedMilliseconds}ms total)',
+        'NaiMetadataParser',
+      );
       return stealthResult;
     }
 
-    // 没有分离字段，优先使用tEXt结果（性能更好）
+    // 没有分离字段，优先使用 chunks 结果（性能更好）
     if (fastResult != null && fastResult.hasData) {
+      AppLogger.d(
+        '[NaiMetadataParser] Final: fast result (${totalStopwatch.elapsedMilliseconds}ms total)',
+        'NaiMetadataParser',
+      );
       return fastResult;
     }
 
-    // fallback到stealth
+    // fallback 到 stealth
     if (stealthResult != null && stealthResult.hasData) {
+      AppLogger.d(
+        '[NaiMetadataParser] Final: stealth result (${totalStopwatch.elapsedMilliseconds}ms total)',
+        'NaiMetadataParser',
+      );
       return stealthResult;
     }
 
+    AppLogger.d(
+      '[NaiMetadataParser] Final: no metadata found (${totalStopwatch.elapsedMilliseconds}ms total)',
+      'NaiMetadataParser',
+    );
     return null;
   }
 
   /// 从 PNG chunks 提取标准元数据（无需完整解码 PNG）
-  static Future<NaiImageMetadata?> _extractFromChunksIsolate(Uint8List bytes) async {
+  ///
+  /// 优化：
+  /// 1. 直接在主线程同步执行（无需 isolate，避免启动开销）
+  /// 2. 只解析前15个chunks，NAI元数据通常位于文件前面
+  static NaiImageMetadata? _extractFromChunksSync(Uint8List bytes) {
     try {
+      final stopwatch = Stopwatch()..start();
       final chunks = png_extract.extractChunks(bytes);
-      AppLogger.d('Found ${chunks.length} PNG chunks', 'NaiMetadataParser');
+      final maxChunks = chunks.length > 15 ? 15 : chunks.length;
 
-      for (final chunk in chunks) {
+      for (var i = 0; i < maxChunks; i++) {
+        final chunk = chunks[i];
         final name = chunk['name'] as String?;
         if (name == null || !const {'tEXt', 'zTXt', 'iTXt'}.contains(name)) continue;
 
@@ -125,11 +181,23 @@ class NaiMetadataParser {
 
         final json = _tryParseNaiJson(textData);
         if (json != null) {
-          AppLogger.d('Found NAI metadata in $name chunk', 'NaiMetadataParser');
+          stopwatch.stop();
+          AppLogger.d(
+            '[NaiMetadataParser] Found NAI metadata in $name chunk at index $i (${stopwatch.elapsedMilliseconds}ms)',
+            'NaiMetadataParser',
+          );
           return NaiImageMetadata.fromNaiComment(json, rawJson: textData);
         }
       }
 
+      stopwatch.stop();
+      // 优化：如果解析很快（<50ms）且没找到，只输出debug日志
+      if (stopwatch.elapsedMilliseconds > 50) {
+        AppLogger.w(
+          '[NaiMetadataParser] Slow chunks parse: ${stopwatch.elapsedMilliseconds}ms for ${bytes.length ~/ 1024}KB, ${chunks.length} chunks',
+          'NaiMetadataParser',
+        );
+      }
       return null;
     } catch (e, stack) {
       AppLogger.e('Error extracting from chunks', e, stack, 'NaiMetadataParser');

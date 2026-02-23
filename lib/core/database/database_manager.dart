@@ -25,11 +25,7 @@ enum DatabaseInitState {
   error,
 }
 
-/// 数据库管理器 V3
-///
-/// 架构：
-/// 1. 资产数据库（预打包，只读）：translation.db, cooccurrence.db
-/// 2. 运行时数据库（可写）：danbooru.db（原统一数据库）, gallery 等
+/// 数据库管理器
 class DatabaseManager {
   DatabaseManager._();
 
@@ -47,7 +43,7 @@ class DatabaseManager {
 
   /// 初始化数据库管理器
   static Future<DatabaseManager> initialize({
-    int maxConnections = 3,
+    int maxConnections = 20,
   }) async {
     if (_instance != null) {
       // 检查是否可用
@@ -77,7 +73,7 @@ class DatabaseManager {
     return _instance!;
   }
 
-  static const int _maxConnections = 3;
+  static const int _maxConnections = 20;
   static const String _danbooruDbName = 'danbooru.db';
 
   DatabaseInitState _state = DatabaseInitState.uninitialized;
@@ -122,13 +118,6 @@ class DatabaseManager {
   /// 画廊数据源
   GalleryDataSource? get galleryDataSource => _galleryDataSource;
 
-  /// 获取数据源（泛型方法）
-  ///
-  /// 根据类型返回对应的数据源实例：
-  /// - TranslationDataSource: 翻译数据源
-  /// - CooccurrenceDataSource: 共现数据源
-  /// - DanbooruTagDataSource: Danbooru 标签数据源
-  /// - GalleryDataSource: 画廊数据源
   T? getDataSource<T>(String name) {
     if (T == TranslationDataSource) {
       return _translationDataSource as T?;
@@ -167,55 +156,33 @@ class DatabaseManager {
   Future<void> get initialized => _initCompleter.future;
 
   /// 执行初始化
-  Future<void> _doInitialize({
-    required int maxConnections,
-  }) async {
+  Future<void> _doInitialize({required int maxConnections}) async {
     _state = DatabaseInitState.initializing;
 
     try {
-      // 1. 初始化资产数据库（预打包数据库）
-      AppLogger.i('Initializing asset databases...', 'DatabaseManager');
       await AssetDatabaseManager.initialize();
 
-      // 2. 初始化翻译数据源
       _translationDataSource = TranslationDataSource();
       await _translationDataSource!.initialize();
-      AppLogger.i('TranslationDataSource initialized', 'DatabaseManager');
 
-      // 3. 初始化共现数据源
       _cooccurrenceDataSource = CooccurrenceDataSource();
       await _cooccurrenceDataSource!.initialize();
-      AppLogger.i('CooccurrenceDataSource initialized', 'DatabaseManager');
 
-      // 4. 初始化 Danbooru 数据库（运行时数据库）
       _dbPath = await _getDatabasePath(_danbooruDbName);
-      AppLogger.i('Danbooru database path: $_dbPath', 'DatabaseManager');
 
       await ConnectionPoolHolder.initialize(
         dbPath: _dbPath!,
         maxConnections: maxConnections,
       );
-      AppLogger.i(
-        'ConnectionPool initialized for Danbooru DB',
-        'DatabaseManager',
-      );
 
-      // 5. 注册运行时数据源
       await _registerRuntimeDataSources();
-
-      // 6. 启动健康监控
       _startHealthMonitoring();
-
-      // 7. 启动指标报告
       _startMetricsReporting();
 
       _state = DatabaseInitState.initialized;
       _initCompleter.complete();
 
-      AppLogger.i(
-        'DatabaseManager initialized successfully',
-        'DatabaseManager',
-      );
+      AppLogger.i('DatabaseManager initialized', 'DatabaseManager');
     } catch (e, stack) {
       _state = DatabaseInitState.error;
       _errorMessage = e.toString();
@@ -224,12 +191,7 @@ class DatabaseManager {
         _initCompleter.completeError(e, stack);
       }
 
-      AppLogger.e(
-        'DatabaseManager initialization failed',
-        e,
-        stack,
-        'DatabaseManager',
-      );
+      AppLogger.e('DatabaseManager initialization failed', e, stack, 'DatabaseManager');
       rethrow;
     }
   }
@@ -294,17 +256,12 @@ class DatabaseManager {
     }
   }
 
-  /// 执行数据库恢复
   Future<void> recover() async {
-    AppLogger.i('Starting database recovery...', 'DatabaseManager');
-
     try {
-      // 重置 ConnectionPool
       await ConnectionPoolHolder.reset(
         dbPath: _dbPath!,
         maxConnections: _maxConnections,
       );
-
       AppLogger.i('Database recovery completed', 'DatabaseManager');
     } catch (e, stack) {
       AppLogger.e('Database recovery failed', e, stack, 'DatabaseManager');
@@ -361,57 +318,28 @@ class DatabaseManager {
 
   /// 关闭数据库管理器
   Future<void> dispose() async {
-    AppLogger.i('Disposing DatabaseManager...', 'DatabaseManager');
-
-    // 停止健康监控
     _healthMonitor?.stop();
     _healthMonitor?.dispose();
     _healthMonitor = null;
-    AppLogger.i('Health monitor stopped', 'DatabaseManager');
 
-    // 停止指标报告
     _metricsReporter?.stopReporting();
     _metricsReporter = null;
-    AppLogger.i('Metrics reporter stopped', 'DatabaseManager');
 
-    // 释放资产数据源
     try {
       await _translationDataSource?.dispose();
-      AppLogger.i('TranslationDataSource disposed', 'DatabaseManager');
-    } catch (e) {
-      AppLogger.w(
-        'Failed to dispose TranslationDataSource: $e',
-        'DatabaseManager',
-      );
-    }
+    } catch (_) {}
 
     try {
       await _cooccurrenceDataSource?.dispose();
-      AppLogger.i('CooccurrenceDataSource disposed', 'DatabaseManager');
-    } catch (e) {
-      AppLogger.w(
-        'Failed to dispose CooccurrenceDataSource: $e',
-        'DatabaseManager',
-      );
-    }
+    } catch (_) {}
 
-    // 释放运行时数据源
     try {
       await _danbooruTagDataSource?.dispose();
-      AppLogger.i('DanbooruTagDataSource disposed', 'DatabaseManager');
-    } catch (e) {
-      AppLogger.w(
-        'Failed to dispose DanbooruTagDataSource: $e',
-        'DatabaseManager',
-      );
-    }
+    } catch (_) {}
 
     try {
       await _galleryDataSource?.dispose();
-      AppLogger.i('GalleryDataSource disposed', 'DatabaseManager');
-    } catch (e) {
-      AppLogger.w('Failed to dispose GalleryDataSource: $e', 'DatabaseManager');
-    }
+    } catch (_) {}
 
     await ConnectionPoolHolder.dispose();
 
@@ -421,53 +349,26 @@ class DatabaseManager {
     AppLogger.i('DatabaseManager disposed', 'DatabaseManager');
   }
 
-  // ===========================================================================
-  // 数据源管理
-  // ===========================================================================
-
-  /// 注册运行时数据源（使用 ConnectionPool 的数据源）
   Future<void> _registerRuntimeDataSources() async {
-    AppLogger.i('Registering runtime data sources...', 'DatabaseManager');
-
-    // 注册 Danbooru 标签数据源
     _danbooruTagDataSource = DanbooruTagDataSource();
     try {
       await _danbooruTagDataSource!.initialize();
-      AppLogger.i('DanbooruTagDataSource initialized', 'DatabaseManager');
     } catch (e, stack) {
-      AppLogger.e(
-        'Failed to initialize DanbooruTagDataSource',
-        e,
-        stack,
-        'DatabaseManager',
-      );
+      AppLogger.e('Failed to initialize DanbooruTagDataSource', e, stack, 'DatabaseManager');
     }
 
-    // 注册画廊数据源
     _galleryDataSource = GalleryDataSource();
     try {
       await _galleryDataSource!.initialize();
-      AppLogger.i('GalleryDataSource initialized', 'DatabaseManager');
     } catch (e, stack) {
-      AppLogger.e(
-        'Failed to initialize GalleryDataSource',
-        e,
-        stack,
-        'DatabaseManager',
-      );
-      // 数据源初始化失败不应阻塞整体启动
+      AppLogger.e('Failed to initialize GalleryDataSource', e, stack, 'DatabaseManager');
     }
 
-    // 预热连接池
     await _warmupConnectionPool();
-
-    AppLogger.i('Runtime data sources registered', 'DatabaseManager');
   }
 
-  /// 预热连接池
   Future<void> _warmupConnectionPool() async {
     try {
-      AppLogger.i('Warming up connection pool...', 'DatabaseManager');
       final result = await ConnectionPoolHolder.warmup(
         connections: _maxConnections,
         timeout: const Duration(seconds: 5),
@@ -475,88 +376,52 @@ class DatabaseManager {
 
       if (result.success) {
         AppLogger.i(
-          'Connection pool warmed up successfully: '
-              '${result.validatedConnections} connections validated in ${result.duration.inMilliseconds}ms',
+          'Connection pool warmed up: ${result.validatedConnections} connections in ${result.duration.inMilliseconds}ms',
           'DatabaseManager',
         );
       } else {
         AppLogger.w(
-          'Connection pool warmup incomplete: '
-              '${result.validatedConnections} connections validated. Error: ${result.error}',
+          'Connection pool warmup incomplete: ${result.validatedConnections} connections. Error: ${result.error}',
           'DatabaseManager',
         );
       }
     } catch (e, stack) {
-      AppLogger.e(
-        'Failed to warmup connection pool',
-        e,
-        stack,
-        'DatabaseManager',
-      );
-      // 预热失败不应阻塞整体启动
+      AppLogger.e('Failed to warmup connection pool', e, stack, 'DatabaseManager');
     }
   }
 
-  /// 启动健康监控
   void _startHealthMonitoring() {
     try {
       _healthMonitor = health_monitor.ConnectionHealthMonitor(
         config: health_monitor.HealthCheckConfig(),
         onStatusChange: (oldStatus, newStatus, result) {
           AppLogger.w(
-            'Database health status changed: $oldStatus -> $newStatus '
-                '(latency: ${result.connectionAcquireLatency.inMilliseconds}ms, '
-                'failureRate: ${result.failureRate.toStringAsFixed(2)}%)',
+            'Database health changed: $oldStatus -> $newStatus '
+            '(latency: ${result.connectionAcquireLatency.inMilliseconds}ms, '
+            'failureRate: ${result.failureRate.toStringAsFixed(2)}%)',
             'DatabaseManager',
           );
         },
         onAlert: (alertType, message, result) {
-          AppLogger.e(
-            'Database health alert [$alertType]: $message',
-            null,
-            null,
-            'DatabaseManager',
-          );
+          AppLogger.e('Database health alert [$alertType]: $message', null, null, 'DatabaseManager');
         },
       );
       _healthMonitor!.start();
-      AppLogger.i(
-        'Health monitoring started (interval: 30s)',
-        'DatabaseManager',
-      );
     } catch (e, stack) {
-      AppLogger.e(
-        'Failed to start health monitoring',
-        e,
-        stack,
-        'DatabaseManager',
-      );
+      AppLogger.e('Failed to start health monitoring', e, stack, 'DatabaseManager');
     }
   }
 
-  /// 启动指标报告
   void _startMetricsReporting() {
     try {
       _metricsReporter = metrics_reporter.MetricsReporter();
 
-      // 根据环境配置报告间隔
-      const isProduction =
-          bool.fromEnvironment('dart.vm.product', defaultValue: false);
-      const reportInterval =
-          isProduction ? Duration(minutes: 5) : Duration(minutes: 10);
+      const isProduction = bool.fromEnvironment('dart.vm.product', defaultValue: false);
+      const reportInterval = isProduction ? Duration(minutes: 5) : Duration(minutes: 10);
 
       _metricsReporter!.startReporting(interval: reportInterval);
-      AppLogger.i(
-        'Metrics reporting started (interval: ${reportInterval.inMinutes}min, environment: ${isProduction ? 'production' : 'development'})',
-        'DatabaseManager',
-      );
     } catch (e, stack) {
-      AppLogger.e(
-        'Failed to start metrics reporting',
-        e,
-        stack,
-        'DatabaseManager',
-      );
+      AppLogger.e('Failed to start metrics reporting', e, stack, 'DatabaseManager');
     }
   }
 

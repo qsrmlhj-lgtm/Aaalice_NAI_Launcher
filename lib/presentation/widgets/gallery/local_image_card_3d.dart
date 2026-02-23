@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/cache/thumbnail_cache_service.dart';
 import '../../../data/models/gallery/local_image_record.dart';
+import '../../../data/services/thumbnail_generation_queue.dart';
 import '../../themes/theme_extension.dart';
 import '../common/app_toast.dart';
 import '../common/floating_action_buttons.dart';
@@ -29,6 +32,9 @@ class LocalImageCard3D extends StatefulWidget {
   final VoidCallback? onFavoriteToggle;
   final VoidCallback? onSendToHome;
 
+  /// 卡片是否在视口中可见（用于优先级控制）
+  final bool isVisible;
+
   const LocalImageCard3D({
     super.key,
     required this.record,
@@ -42,6 +48,7 @@ class LocalImageCard3D extends StatefulWidget {
     this.showFavoriteIndicator = true,
     this.onFavoriteToggle,
     this.onSendToHome,
+    this.isVisible = false,
   });
 
   @override
@@ -59,6 +66,12 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
   /// 光泽动画
   late Animation<double> _glossAnimation;
 
+  /// 缩略图路径
+  String? _thumbnailPath;
+
+  /// 缩略图缓存服务
+  ThumbnailCacheService? _thumbnailService;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -74,6 +87,63 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     _glossAnimation = Tween<double>(begin: -1.5, end: 1.5).animate(
       CurvedAnimation(parent: _glossController, curve: Curves.easeInOut),
     );
+
+    // 异步加载缩略图
+    _loadThumbnail();
+  }
+
+  /// 异步加载或生成缩略图
+  ///
+  /// 流式加载策略：
+  /// 1. 立即检查缩略图缓存，如果存在则显示
+  /// 2. 如果不存在，立即显示原图（不等待）
+  /// 3. 使用 ThumbnailGenerationQueue 后台生成缩略图，支持优先级控制
+  Future<void> _loadThumbnail() async {
+    try {
+      // 获取缩略图服务
+      _thumbnailService = ThumbnailCacheService();
+      await _thumbnailService!.init();
+
+      // 首先检查缩略图是否已存在
+      final existingPath = await _thumbnailService!.getThumbnailPath(
+        widget.record.path,
+      );
+
+      if (existingPath != null && mounted) {
+        setState(() {
+          _thumbnailPath = existingPath;
+        });
+        return;
+      }
+
+      // 缩略图不存在：先显示原图，然后使用队列后台生成缩略图
+      if (mounted) {
+        setState(() {
+          _thumbnailPath = null; // 使用原图
+        });
+      }
+
+      // 使用 ThumbnailGenerationQueue 进行优先级队列生成
+      final queue = ThumbnailGenerationQueue.instance;
+      await queue.enqueueTask(
+        widget.record.path,
+        priority: widget.isVisible ? 1 : 5, // 可见卡片优先级更高
+        onComplete: (path) {
+          if (path != null && mounted && _thumbnailPath != path) {
+            setState(() {
+              _thumbnailPath = path;
+            });
+          }
+        },
+      );
+    } catch (e) {
+      // 出错时使用原图
+      if (mounted) {
+        setState(() {
+          _thumbnailPath = null;
+        });
+      }
+    }
   }
 
   void _onHoverEnter(PointerEvent event) {
@@ -329,18 +399,42 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
   }
 
   Widget _buildImage() {
-    final file = File(widget.record.path);
     final pixelRatio = MediaQuery.of(context).devicePixelRatio;
     final cacheWidth = (widget.width * pixelRatio).toInt();
+
+    // 流式加载策略：
+    // 1. 直接显示图片（无 placeholder）
+    // 2. 图片加载中显示黑色背景，加载完成后自动显示
+    // 3. 缩略图生成后会自动刷新（通过 _thumbnailPath 变化）
+
+    final String imagePath = _thumbnailPath ?? widget.record.path;
+    final File imageFile = File(imagePath);
 
     return Container(
       color: Colors.black.withOpacity(0.05),
       child: Image.file(
-        file,
+        imageFile,
         fit: BoxFit.contain,
         cacheWidth: cacheWidth,
         gaplessPlayback: true,
         errorBuilder: (context, error, stackTrace) {
+          // 如果缩略图加载失败，尝试回退到原图
+          if (_thumbnailPath != null && _thumbnailPath != widget.record.path) {
+            return Image.file(
+              File(widget.record.path),
+              fit: BoxFit.contain,
+              cacheWidth: cacheWidth,
+              gaplessPlayback: true,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  color: Colors.grey[300],
+                  child: const Center(
+                    child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+                  ),
+                );
+              },
+            );
+          }
           return Container(
             color: Colors.grey[300],
             child: const Center(
@@ -348,18 +442,8 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
             ),
           );
         },
-        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-          if (wasSynchronouslyLoaded || frame != null) {
-            return child;
-          }
-          // Show placeholder while loading
-          return Container(
-            color: Colors.grey[200],
-            child: const Center(
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        },
+        // 移除 frameBuilder，不显示 loading placeholder
+        // 图片加载时会显示上面的黑色背景，加载完成后自动显示图片
       ),
     );
   }

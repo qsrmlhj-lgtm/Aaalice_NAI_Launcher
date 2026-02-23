@@ -142,6 +142,7 @@ class ImageMetadataService {
     String path, {
     bool forceFullParse = false,
   }) async {
+    final stopwatch = Stopwatch()..start();
     final hash = await _getFileHash(path);
 
     final memoryCached = _memoryCache.get(hash);
@@ -175,7 +176,12 @@ class ImageMetadataService {
     _pendingFutures[hash] = future;
 
     try {
-      return await future;
+      final result = await future;
+      stopwatch.stop();
+      if (stopwatch.elapsedMilliseconds > 50) {
+        AppLogger.w('[PERF] Slow getMetadata: ${stopwatch.elapsedMilliseconds}ms for $path', 'ImageMetadataService');
+      }
+      return result;
     } finally {
       _pendingFutures.remove(hash);
       _fileSemaphore.release();
@@ -395,6 +401,7 @@ class ImageMetadataService {
     required String hash,
     required bool forceFullParse,
   }) async {
+    final totalStopwatch = Stopwatch()..start();
     try {
       final file = File(path);
       if (!await file.exists()) return null;
@@ -403,16 +410,37 @@ class ImageMetadataService {
       NaiImageMetadata? metadata;
 
       if (!forceFullParse) {
+        final fastStopwatch = Stopwatch()..start();
         metadata = await _extractMetadataFast(file);
-        if (metadata != null) _fastParseCount++;
+        fastStopwatch.stop();
+        if (metadata != null) {
+          _fastParseCount++;
+          if (fastStopwatch.elapsedMilliseconds > 10) {
+            AppLogger.w('[PERF] Slow _extractMetadataFast: ${fastStopwatch.elapsedMilliseconds}ms for $path', 'ImageMetadataService');
+          }
+        }
       }
 
-      metadata ??= await NaiMetadataParser.extractFromFile(file);
-      if (metadata != null) _fallbackParseCount++;
+      if (metadata == null) {
+        final fallbackStopwatch = Stopwatch()..start();
+        metadata = await NaiMetadataParser.extractFromFile(file);
+        fallbackStopwatch.stop();
+        if (metadata != null) {
+          _fallbackParseCount++;
+          if (fallbackStopwatch.elapsedMilliseconds > 50) {
+            AppLogger.w('[PERF] Slow NaiMetadataParser.extractFromFile: ${fallbackStopwatch.elapsedMilliseconds}ms for $path', 'ImageMetadataService');
+          }
+        }
+      }
 
       if (metadata != null && metadata.hasData) {
         _memoryCache.put(hash, metadata);
         await _saveToPersistentCache(hash, metadata);
+      }
+
+      totalStopwatch.stop();
+      if (totalStopwatch.elapsedMilliseconds > 100) {
+        AppLogger.w('[PERF] Slow _parseAndCache: ${totalStopwatch.elapsedMilliseconds}ms for $path', 'ImageMetadataService');
       }
 
       return metadata;

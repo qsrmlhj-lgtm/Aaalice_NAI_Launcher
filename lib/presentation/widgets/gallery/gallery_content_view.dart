@@ -142,6 +142,43 @@ class _GenericGalleryContentViewState<T>
   /// 宽高比缓存
   final Map<String, double> _aspectRatioCache = {};
 
+  /// 延迟骨架屏显示 - 用于避免短暂加载时显示骨架屏
+  bool _showSkeleton = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initSkeletonDelay();
+  }
+
+  @override
+  void didUpdateWidget(GenericGalleryContentView<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 当加载状态从 true 变为 false 时，重置骨架屏状态
+    if (oldWidget.state.isPageLoading && !widget.state.isPageLoading) {
+      _showSkeleton = false;
+    }
+    // 当加载状态从 false 变为 true 时，重新启动延迟
+    if (!oldWidget.state.isPageLoading && widget.state.isPageLoading) {
+      _initSkeletonDelay();
+    }
+  }
+
+  /// 初始化骨架屏延迟显示
+  void _initSkeletonDelay() {
+    _showSkeleton = false;
+    if (widget.state.isPageLoading) {
+      // 延迟 300ms 后才显示骨架屏，避免短暂加载时闪烁
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted && widget.state.isPageLoading) {
+          setState(() {
+            _showSkeleton = true;
+          });
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -161,8 +198,8 @@ class _GenericGalleryContentViewState<T>
       );
     }
 
-    // Loading skeleton
-    if (widget.state.isPageLoading) {
+    // Loading skeleton - 延迟显示，避免短暂加载时闪烁
+    if (widget.state.isPageLoading && _showSkeleton) {
       return _buildLoadingSkeleton();
     }
 

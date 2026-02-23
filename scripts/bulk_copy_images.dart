@@ -9,7 +9,7 @@ void main(List<String> args) async {
   final home = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
   final basePath = '$home\\Documents\\NAI_Launcher\\images';
   final sourceDir = Directory(basePath);
-  final testDir = Directory('$basePath\\test_bulk_${count}');
+  final testDir = Directory('$basePath\\test_bulk_$count');
 
   if (!await sourceDir.exists()) {
     print('错误: 源目录不存在: $basePath');

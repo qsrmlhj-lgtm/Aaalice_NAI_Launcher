@@ -477,6 +477,17 @@ class GalleryDataSource extends EnhancedBaseDataSource {
       CREATE INDEX IF NOT EXISTS idx_gallery_images_metadata_status
       ON $_imagesTable(metadata_status)
     ''');
+
+    // 关键索引：画廊扫描性能优化
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_gallery_images_file_hash
+      ON $_imagesTable(file_hash) WHERE is_deleted = 0
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_gallery_images_file_path
+      ON $_imagesTable(file_path) WHERE is_deleted = 0
+    ''');
   }
 
   Future<void> _createMetadataTable(Database db) async {

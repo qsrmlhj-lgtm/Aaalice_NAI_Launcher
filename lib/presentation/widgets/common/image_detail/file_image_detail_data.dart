@@ -103,13 +103,42 @@ class FileImageDetailData implements ImageDetailData {
   @override
   String get identifier => _id ?? filePath;
 
+  /// 异步获取文件信息
+  ///
+  /// 使用异步文件操作避免阻塞 UI 线程
+  Future<FileInfo> getFileInfoAsync() async {
+    final file = File(filePath);
+    final stat = await file.stat();
+    return FileInfo(
+      path: filePath,
+      fileName: p.basename(filePath),
+      size: stat.size,
+      modifiedAt: stat.modified,
+    );
+  }
+
   @override
-  FileInfo get fileInfo => FileInfo(
+  FileInfo get fileInfo {
+    // 同步回退：返回默认值，实际数据通过 getFileInfoAsync 获取
+    // 警告：同步获取文件信息可能在文件系统繁忙时阻塞 UI
+    final file = File(filePath);
+    try {
+      return FileInfo(
         path: filePath,
         fileName: p.basename(filePath),
-        size: File(filePath).lengthSync(),
-        modifiedAt: File(filePath).lastModifiedSync(),
+        size: file.lengthSync(),
+        modifiedAt: file.lastModifiedSync(),
       );
+    } catch (_) {
+      // 如果同步获取失败，返回默认值
+      return FileInfo(
+        path: filePath,
+        fileName: p.basename(filePath),
+        size: 0,
+        modifiedAt: DateTime.now(),
+      );
+    }
+  }
 
   @override
   bool get showSaveButton => false;

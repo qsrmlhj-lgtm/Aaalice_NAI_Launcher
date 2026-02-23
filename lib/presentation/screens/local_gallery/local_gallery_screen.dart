@@ -388,6 +388,11 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   Future<void> _autoRefresh() async {
     final notifier = ref.read(localGalleryNotifierProvider.notifier);
     await notifier.refresh();
+
+    // 【修复】自动同步文件系统文件夹到分类系统
+    // 这样嵌套文件夹（如 test_batch）会显示在左侧导航栏
+    final categoryNotifier = ref.read(galleryCategoryNotifierProvider.notifier);
+    await categoryNotifier.syncWithFileSystem();
   }
 
   /// 构建工具栏或选择栏

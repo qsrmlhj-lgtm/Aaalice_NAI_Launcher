@@ -21,38 +21,26 @@ DatabaseStateMachine databaseStateMachine(Ref ref) {
   return machine;
 }
 
-/// 连接池生命周期管理器
-///
-/// 关键修复：确保与 ConnectionPoolHolder 状态同步
 @Riverpod(keepAlive: true)
 ConnectionPoolLifecycleManager connectionPoolLifecycle(Ref ref) {
   final manager = ConnectionPoolLifecycleManager();
-
-  // 步骤1: 首先同步状态（如果 Holder 已初始化）
   manager.syncWithHolder();
 
-  // 步骤2: 尝试从 DatabaseManager 获取数据库路径进行初始化
   try {
     final dbManager = DatabaseManager.instance;
     if (dbManager.dbPath != null && manager.dbPath == null) {
-      // 使用 scheduleMicrotask 避免阻塞 provider 创建
       Future.microtask(() async {
         try {
           await manager.initialize(
             dbPath: dbManager.dbPath!,
-            maxConnections: 3,
+            maxConnections: 20,
           );
         } catch (e) {
-          AppLogger.w(
-            'Failed to initialize ConnectionPoolLifecycleManager: $e',
-            'ConnectionPoolLifecycle',
-          );
+          AppLogger.w('Failed to initialize ConnectionPoolLifecycleManager: $e', 'ConnectionPoolLifecycle');
         }
       });
     }
-  } catch (e) {
-    // DatabaseManager 尚未初始化，syncWithHolder 已经处理了 Holder 已初始化的情况
-  }
+  } catch (_) {}
 
   ref.onDispose(manager.dispose);
   return manager;
@@ -125,7 +113,6 @@ class DatabaseStatusNotifier extends _$DatabaseStatusNotifier {
     }
   }
 
-  /// 执行原子清除操作
   Future<ClearOperationResult> clearCache({
     required Future<void> Function()? serviceClearCallback,
   }) async {
@@ -134,28 +121,19 @@ class DatabaseStatusNotifier extends _$DatabaseStatusNotifier {
 
     return operation.execute(
       clearTables: () async {
-        // 关键修复：使用 lifecycleManager 获取连接
-        // 由于 syncWithHolder() 确保了状态同步，现在可以正常使用
         final db = await lifecycle.acquireConnection();
         try {
-          // 只清除 Danbooru 标签表，保留翻译和共现数据
           const tables = ['danbooru_tags'];
           final stats = <String, int>{};
 
           await db.execute('BEGIN TRANSACTION');
           try {
             for (final table in tables) {
-              final countResult = await db.rawQuery(
-                'SELECT COUNT(*) as count FROM $table',
-              );
-              final count =
-                  (countResult.first['count'] as num?)?.toInt() ?? 0;
-
+              final countResult = await db.rawQuery('SELECT COUNT(*) as count FROM $table');
+              stats[table] = (countResult.first['count'] as num?)?.toInt() ?? 0;
               await db.execute('DELETE FROM $table');
-              stats[table] = count;
             }
             await db.execute('COMMIT');
-
             return stats;
           } catch (e) {
             await db.execute('ROLLBACK');
@@ -167,18 +145,10 @@ class DatabaseStatusNotifier extends _$DatabaseStatusNotifier {
       },
       preClear: serviceClearCallback,
       postClear: () async {
-        // 清除完成后刷新 Provider
-        // 关键：按依赖顺序失效 - 先失效数据源 Provider，再失效服务 Provider
-        // 否则缓存的服务实例仍持有旧的数据源引用
         ref.invalidate(danbooruTagDataSourceProvider);
         ref.invalidate(danbooruTagsLazyServiceProvider);
         ref.invalidate(danbooruTagsCacheNotifierProvider);
-        AppLogger.i(
-          '[DatabaseStatusNotifier] Providers invalidated after clear: '
-          'danbooruTagDataSourceProvider, danbooruTagsLazyServiceProvider, '
-          'danbooruTagsCacheNotifierProvider',
-          'DatabaseStatusNotifier',
-        );
+        AppLogger.i('Providers invalidated after clear', 'DatabaseStatusNotifier');
       },
       tablesToClear: const ['danbooru_tags'],
     );

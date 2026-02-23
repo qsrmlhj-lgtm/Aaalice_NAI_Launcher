@@ -156,11 +156,13 @@ class ThumbnailCacheService {
   /// 如果不存在，返回 null，需要调用 generateThumbnail 生成
   ///
   /// [originalPath] 原始图片路径
-  String? getThumbnailPath(String originalPath) {
+  ///
+  /// 注意：此方法使用异步文件检查，不会阻塞 UI 线程
+  Future<String?> getThumbnailPath(String originalPath) async {
     final thumbnailPath = _getThumbnailPath(originalPath);
     final file = File(thumbnailPath);
 
-    if (file.existsSync()) {
+    if (await file.exists()) {
       _hitCount++;
       // 记录访问时间用于 LRU
       _lastAccessTimes[thumbnailPath] = DateTime.now();
@@ -173,6 +175,24 @@ class ThumbnailCacheService {
     return null;
   }
 
+  /// 同步获取缩略图路径（仅用于已知缓存存在的情况）
+  ///
+  /// 警告：此方法使用同步文件检查，在主线程频繁调用可能阻塞 UI。
+  /// 推荐使用异步版本的 [getThumbnailPath]。
+  String? getThumbnailPathSync(String originalPath) {
+    final thumbnailPath = _getThumbnailPath(originalPath);
+    final file = File(thumbnailPath);
+
+    if (file.existsSync()) {
+      _hitCount++;
+      _lastAccessTimes[thumbnailPath] = DateTime.now();
+      return thumbnailPath;
+    }
+
+    _missCount++;
+    return null;
+  }
+
   /// 异步获取或生成缩略图
   ///
   /// 如果缩略图已存在，直接返回路径
@@ -181,7 +201,7 @@ class ThumbnailCacheService {
   /// [originalPath] 原始图片路径
   Future<String?> getOrGenerateThumbnail(String originalPath) async {
     // 首先检查缓存
-    final existingPath = getThumbnailPath(originalPath);
+    final existingPath = await getThumbnailPath(originalPath);
     if (existingPath != null) {
       return existingPath;
     }
@@ -205,6 +225,13 @@ class ThumbnailCacheService {
   /// [originalPath] 原始图片路径
   /// 返回生成的缩略图路径，失败返回 null
   Future<String?> generateThumbnail(String originalPath) async {
+    // 【修复】防止为缩略图生成缩略图
+    if (originalPath.contains('.thumb.') ||
+        originalPath.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}')) {
+      AppLogger.w('Refusing to generate thumbnail for thumbnail: $originalPath', 'ThumbnailCache');
+      return null;
+    }
+
     final thumbnailPath = _getThumbnailPath(originalPath);
 
     // 检查是否已在生成中
@@ -568,6 +595,69 @@ class ThumbnailCacheService {
     }
   }
 
+  /// 【修复】清理嵌套的.thumbs目录
+  ///
+  /// 修复缩略图递归生成bug遗留的嵌套目录问题
+  /// [rootPath] 画廊根目录路径
+  /// 返回清理的嵌套目录数量
+  Future<int> cleanupNestedThumbs(String rootPath) async {
+    final rootDir = Directory(rootPath);
+    if (!await rootDir.exists()) return 0;
+
+    int cleanedCount = 0;
+    int deletedFiles = 0;
+
+    try {
+      // 找到所有.thumbs目录
+      final thumbsDirs = <Directory>[];
+      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+        if (entity is Directory) {
+          final dirName = p.basename(entity.path);
+          if (dirName == thumbsDirName) {
+            thumbsDirs.add(entity);
+          }
+        }
+      }
+
+      // 检查每个.thumbs目录是否有嵌套的.thumbs子目录
+      for (final thumbsDir in thumbsDirs) {
+        await for (final entity in thumbsDir.list(recursive: true, followLinks: false)) {
+          if (entity is Directory) {
+            final dirName = p.basename(entity.path);
+            if (dirName == thumbsDirName) {
+              // 统计要删除的文件数
+              int filesInDir = 0;
+              await for (final file in entity.list(recursive: true)) {
+                if (file is File) {
+                  filesInDir++;
+                }
+              }
+
+              AppLogger.i('Deleting nested thumbs: ${entity.path} ($filesInDir files)', 'ThumbnailCache');
+
+              try {
+                await entity.delete(recursive: true);
+                cleanedCount++;
+                deletedFiles += filesInDir;
+              } catch (e) {
+                AppLogger.w('Failed to delete nested thumbs: ${entity.path}', 'ThumbnailCache');
+              }
+            }
+          }
+        }
+      }
+
+      if (cleanedCount > 0) {
+        AppLogger.i('Cleaned $cleanedCount nested thumbs directories ($deletedFiles files)', 'ThumbnailCache');
+      }
+
+      return cleanedCount;
+    } catch (e, stack) {
+      AppLogger.e('Failed to cleanup nested thumbs: $e', e, stack, 'ThumbnailCache');
+      return 0;
+    }
+  }
+
   /// 格式化字节数为可读字符串
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
@@ -673,10 +763,21 @@ class ThumbnailCacheService {
     }
   }
 
-  /// 检查缩略图是否存在
+  /// 检查缩略图是否存在（同步版本，仅用于快速检查）
+  ///
+  /// 警告：此方法是同步的，如果在主线程频繁调用可能阻塞 UI。
+  /// 推荐使用 [thumbnailExistsAsync] 进行异步检查。
   bool thumbnailExists(String originalPath) {
     final thumbnailPath = _getThumbnailPath(originalPath);
     return File(thumbnailPath).existsSync();
+  }
+
+  /// 异步检查缩略图是否存在
+  ///
+  /// 此方法是异步的，不会阻塞 UI 线程。
+  Future<bool> thumbnailExistsAsync(String originalPath) async {
+    final thumbnailPath = _getThumbnailPath(originalPath);
+    return await File(thumbnailPath).exists();
   }
 
   /// 执行 LRU 淘汰

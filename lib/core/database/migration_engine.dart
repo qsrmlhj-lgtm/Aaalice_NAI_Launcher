@@ -111,8 +111,16 @@ class MigrationEngine {
         )
       ''');
 
-      // 初始化版本号
-      await _setVersion(db, 0);
+      // 初始化版本号（只在首次创建时设置为0，不覆盖已有版本）
+      final currentVersion = await _getVersion(db);
+      if (currentVersion == 0) {
+        // 检查是否真的是新数据库（没有迁移记录）
+        final existingMigrations = await getMigrationHistory();
+        if (existingMigrations.isEmpty) {
+          await _setVersion(db, 0);
+          AppLogger.i('Initialized database version to 0', 'MigrationEngine');
+        }
+      }
 
       _initialized = true;
       AppLogger.i('MigrationEngine initialized', 'MigrationEngine');

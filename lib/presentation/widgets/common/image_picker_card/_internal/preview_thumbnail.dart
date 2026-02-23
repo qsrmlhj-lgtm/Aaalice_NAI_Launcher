@@ -49,21 +49,32 @@ class PreviewThumbnail extends StatelessWidget {
       );
     }
 
-    // 其次使用文件路径
+    // 其次使用文件路径 - 异步检查避免阻塞UI
     if (imagePath != null && imagePath!.isNotEmpty) {
-      final file = File(imagePath!);
-      if (file.existsSync()) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: Image.file(
-            file,
-            width: size,
-            height: size,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => _buildFallback(theme),
-          ),
-        );
-      }
+      return FutureBuilder<bool>(
+        future: File(imagePath!).exists(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            // 加载中显示占位符
+            return _buildLoadingPlaceholder(theme);
+          }
+
+          if (snapshot.data == true) {
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(borderRadius),
+              child: Image.file(
+                File(imagePath!),
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => _buildFallback(theme),
+              ),
+            );
+          }
+
+          return _buildFallback(theme);
+        },
+      );
     }
 
     // 默认显示图标
@@ -82,6 +93,26 @@ class PreviewThumbnail extends StatelessWidget {
         fallbackIcon,
         size: size * 0.5,
         color: theme.colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+
+  /// 构建加载中的占位符
+  Widget _buildLoadingPlaceholder(ThemeData theme) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+      child: SizedBox(
+        width: size * 0.3,
+        height: size * 0.3,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+        ),
       ),
     );
   }

@@ -407,7 +407,7 @@ class ThumbnailMigrationService {
 
           // 删除现有缩略图
           try {
-            final thumbPath = _thumbnailService?.getThumbnailPath(record.path);
+            final thumbPath = _thumbnailService?.getThumbnailPathSync(record.path);
             if (thumbPath != null) {
               final thumbFile = File(thumbPath);
               if (await thumbFile.exists()) {
