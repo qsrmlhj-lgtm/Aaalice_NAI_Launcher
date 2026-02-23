@@ -26,6 +26,7 @@ import 'core/utils/hive_storage_helper.dart';
 import 'data/datasources/local/nai_tags_data_source.dart';
 import 'data/models/gallery/nai_image_metadata.dart';
 import 'data/repositories/gallery_folder_repository.dart';
+import 'core/cache/gallery_cache_manager.dart';
 import 'core/cache/thumbnail_cache_service.dart';
 import 'data/services/gallery/gallery_scan_service.dart';
 import 'data/services/image_metadata_service.dart';
@@ -331,6 +332,15 @@ void main() async {
   // 初始化图像元数据服务（包含持久化缓存，用于详情页快速加载）
   await ImageMetadataService().initialize();
   AppLogger.i('图像元数据服务初始化完成', 'Main');
+
+  // 后台执行 L2 Hive 缓存清理（不阻塞启动）
+  Future.microtask(() async {
+    try {
+      await L2CacheCleaner().checkAndClean();
+    } catch (e) {
+      AppLogger.w('L2 cache cleanup failed: $e', 'Main');
+    }
+  });
 
   // 初始化缩略图生成队列服务
   final thumbnailService = ThumbnailCacheService();

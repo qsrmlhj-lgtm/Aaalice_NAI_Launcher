@@ -132,7 +132,7 @@ class ImageMetadataBatchService {
         }
 
         // 解析 chunks（只解析已读取的部分）
-        final metadata = _extractMetadataFromChunksSync(bytes);
+        final metadata = _extractMetadataFromChunksSync(bytes, filePathForLog: filePath);
         results.add((filePath, metadata, null));
       } catch (e, stack) {
         AppLogger.e('[MetadataBatchService] Error parsing $filePath', e, stack, 'ImageMetadataBatchService');
@@ -178,9 +178,13 @@ class ImageMetadataBatchService {
   }
 
   /// 从 chunks 同步提取元数据（优化版）
-  static NaiImageMetadata? _extractMetadataFromChunksSync(Uint8List bytes) {
+  /// 【增强】添加详细日志用于诊断
+  static NaiImageMetadata? _extractMetadataFromChunksSync(Uint8List bytes, {String? filePathForLog}) {
     try {
       final chunks = png_extract.extractChunks(bytes);
+      final fileName = filePathForLog?.split(Platform.pathSeparator).last ?? 'unknown';
+
+      AppLogger.d('[MetadataBatchService] [$fileName] Total chunks: ${chunks.length}', 'ImageMetadataBatchService');
 
       // 只检查前 10 个 chunks（NAI 元数据通常很靠前）
       final maxChunks = chunks.length > 10 ? 10 : chunks.length;
@@ -188,8 +192,11 @@ class ImageMetadataBatchService {
       for (var i = 0; i < maxChunks; i++) {
         final chunk = chunks[i];
         final name = chunk['name'] as String?;
+
         // 【修复】支持 tEXt, zTXt, iTXt 三种chunk类型
         if (name == null || !{'tEXt', 'zTXt', 'iTXt'}.contains(name)) continue;
+
+        AppLogger.d('[MetadataBatchService] [$fileName] Found text chunk #$i: $name', 'ImageMetadataBatchService');
 
         final data = chunk['data'] as Uint8List?;
         if (data == null) continue;
@@ -206,20 +213,35 @@ class ImageMetadataBatchService {
           default:
             textData = null;
         }
-        if (textData == null) continue;
+
+        if (textData == null) {
+          AppLogger.d('[MetadataBatchService] [$fileName] Chunk #$i: Failed to parse text data', 'ImageMetadataBatchService');
+          continue;
+        }
+
+        AppLogger.d('[MetadataBatchService] [$fileName] Chunk #$i: Text length=${textData.length}', 'ImageMetadataBatchService');
 
         // 快速检查：是否包含 NAI 特征
-        if (!textData.contains('prompt') && !textData.contains('sampler')) continue;
+        final hasPrompt = textData.contains('prompt');
+        final hasSampler = textData.contains('sampler');
+        AppLogger.d('[MetadataBatchService] [$fileName] Chunk #$i: hasPrompt=$hasPrompt, hasSampler=$hasSampler', 'ImageMetadataBatchService');
+
+        if (!hasPrompt && !hasSampler) continue;
 
         // 尝试解析 JSON
         final json = _tryParseNaiJsonSync(textData);
         if (json != null) {
+          AppLogger.i('[MetadataBatchService] [$fileName] Successfully parsed NAI metadata from chunk #$i', 'ImageMetadataBatchService');
           return NaiImageMetadata.fromNaiComment(json, rawJson: textData);
+        } else {
+          AppLogger.w('[MetadataBatchService] [$fileName] Chunk #$i: Has prompt/sampler but JSON parsing failed', 'ImageMetadataBatchService');
         }
       }
 
+      AppLogger.d('[MetadataBatchService] [$fileName] No NAI metadata found in first $maxChunks chunks', 'ImageMetadataBatchService');
       return null;
-    } catch (e) {
+    } catch (e, stack) {
+      AppLogger.e('[MetadataBatchService] Error extracting metadata', e, stack, 'ImageMetadataBatchService');
       return null;
     }
   }
@@ -310,14 +332,47 @@ class ImageMetadataBatchService {
   }
 
   /// 尝试解析 NAI JSON
+  /// 【修复】支持两种格式：
+  /// 1. 官方格式：{"prompt": "...", "uc": "..."} - prompt在顶层
+  /// 2. 应用格式：{"Comment": {"prompt": "...", "uc": "..."}} - prompt在Comment嵌套内
   static Map<String, dynamic>? _tryParseNaiJsonSync(String text) {
     try {
       final json = jsonDecode(text) as Map<String, dynamic>;
+
+      // 格式1: 官方格式 - prompt/comment在顶层
       if (json.containsKey('prompt') || json.containsKey('comment')) {
+        AppLogger.d('[MetadataBatchService] Found NAI JSON (official format)', 'ImageMetadataBatchService');
         return json;
       }
+
+      // 格式2: 应用生成的嵌套格式 - Comment字段包含实际元数据
+      if (json.containsKey('Comment')) {
+        final comment = json['Comment'];
+        if (comment is Map<String, dynamic>) {
+          if (comment.containsKey('prompt') || comment.containsKey('uc')) {
+            AppLogger.d('[MetadataBatchService] Found NAI JSON (nested Comment format)', 'ImageMetadataBatchService');
+            // 返回嵌套的 Comment 对象作为元数据
+            return comment;
+          }
+        }
+        // Comment 可能是字符串，需要再次解析
+        if (comment is String) {
+          try {
+            final nestedJson = jsonDecode(comment) as Map<String, dynamic>;
+            if (nestedJson.containsKey('prompt') || nestedJson.containsKey('uc')) {
+              AppLogger.d('[MetadataBatchService] Found NAI JSON (nested string format)', 'ImageMetadataBatchService');
+              return nestedJson;
+            }
+          } catch (_) {
+            // 不是有效的 JSON，忽略
+          }
+        }
+      }
+
+      AppLogger.d('[MetadataBatchService] JSON does not contain NAI metadata fields', 'ImageMetadataBatchService');
       return null;
     } catch (e) {
+      AppLogger.d('[MetadataBatchService] JSON parse error: $e', 'ImageMetadataBatchService');
       return null;
     }
   }

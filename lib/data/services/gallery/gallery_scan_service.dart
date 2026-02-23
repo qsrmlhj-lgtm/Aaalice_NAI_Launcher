@@ -144,6 +144,16 @@ class GalleryScanService {
     _pathToIdMap?[path] = id;
   }
 
+  /// 清除所有缓存
+  ///
+  /// 用于手动刷新或重置扫描状态
+  void clearCache() {
+    _hashToIdMap = null;
+    _pathToIdMap = null;
+    _cacheValidUntil = null;
+    AppLogger.i('GalleryScanService cache cleared', 'GalleryScanService');
+  }
+
   /// 检测需要处理的文件数量
   Future<(int, int)> detectFilesNeedProcessing(Directory rootDir) async {
     final stopwatch = Stopwatch()..start();
@@ -611,15 +621,33 @@ class GalleryScanService {
   }
 
   /// 处理指定文件
-  Future<void> processFiles(List<File> files, {ScanPriority priority = ScanPriority.low}) async {
+  Future<void> processFiles(
+    List<File> files, {
+    ScanPriority priority = ScanPriority.low,
+    ScanProgressCallback? onProgress,
+  }) async {
     if (files.isEmpty) return;
 
     final result = ScanResult();
-    await _processFilesSmart(files, result, isFullScan: false, priority: priority);
+    await _processFilesSmart(
+      files,
+      result,
+      isFullScan: false,
+      priority: priority,
+      onProgress: onProgress,
+    );
 
     AppLogger.d(
       'Processed ${files.length} files: ${result.filesAdded} added, ${result.filesUpdated} updated',
       'GalleryScanService',
+    );
+
+    // 通知完成
+    onProgress?.call(
+      processed: files.length,
+      total: files.length,
+      currentFile: '',
+      phase: 'completed',
     );
   }
 
@@ -836,8 +864,30 @@ class GalleryScanService {
         // 解析 JSON
         try {
           final json = jsonDecode(textData) as Map<String, dynamic>;
+
+          // 格式1: 直接格式 - prompt在顶层
           if (json.containsKey('prompt') || json.containsKey('comment')) {
             return NaiImageMetadata.fromNaiComment(json, rawJson: textData);
+          }
+
+          // 格式2: PNG标准格式 - Description/Software/Source/Comment
+          // Comment字段包含实际元数据（JSON字符串）
+          if (json.containsKey('Comment')) {
+            final comment = json['Comment'];
+            if (comment is String) {
+              try {
+                final commentJson = jsonDecode(comment) as Map<String, dynamic>;
+                if (commentJson.containsKey('prompt') || commentJson.containsKey('uc')) {
+                  return NaiImageMetadata.fromNaiComment(commentJson, rawJson: textData);
+                }
+              } catch (_) {
+                // Comment不是有效的JSON，忽略
+              }
+            } else if (comment is Map<String, dynamic>) {
+              if (comment.containsKey('prompt') || comment.containsKey('uc')) {
+                return NaiImageMetadata.fromNaiComment(comment, rawJson: textData);
+              }
+            }
           }
         } catch (_) {
           continue;

@@ -228,8 +228,13 @@ class NaiImageMetadata with _$NaiImageMetadata {
       if (v4Prompt is Map<String, dynamic>) {
         final caption = v4Prompt['caption'];
         if (caption is Map<String, dynamic>) {
-          final mainCaption = caption['main_caption'] as String? ?? '';
-          return _extractPromptParts(mainCaption);
+          // 支持 base_caption（NAI官方格式）和 main_caption（旧版）
+          final baseCaption = caption['base_caption'] as String? ??
+              caption['main_caption'] as String? ??
+              '';
+          if (baseCaption.isNotEmpty) {
+            return _extractPromptParts(baseCaption);
+          }
         }
       }
       if (promptStr.isNotEmpty) {

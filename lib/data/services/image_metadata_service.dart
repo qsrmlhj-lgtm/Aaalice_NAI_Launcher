@@ -39,6 +39,8 @@ class ImageMetadataService {
 
   int _cacheHits = 0;
   int _cacheMisses = 0;
+  int _persistentCacheHits = 0;
+  int _persistentCacheMisses = 0;
   int _fastParseCount = 0;
   int _fallbackParseCount = 0;
   int _parseErrors = 0;
@@ -280,6 +282,69 @@ class ImageMetadataService {
       'errorCount': _preloadErrorCount,
     },
   };
+
+  // ============================================
+  // 缓存统计公共 API
+  // ============================================
+
+  /// L1 内存缓存大小
+  int get memoryCacheSize => _memoryCache.length;
+
+  /// L1 内存缓存命中率 (0.0 - 1.0)
+  double get memoryCacheHitRate {
+    final total = _cacheHits + _cacheMisses;
+    return total > 0 ? _cacheHits / total : 0.0;
+  }
+
+  /// L2 Hive 缓存大小
+  Future<int> get persistentCacheSize async {
+    final box = _persistentBox;
+    if (box == null || !box.isOpen) return 0;
+    // 减去内部版本键
+    return box.length - (box.containsKey('_cacheVersion') ? 1 : 0);
+  }
+
+  /// L2 Hive 缓存命中率 (0.0 - 1.0)
+  double get persistentCacheHitRate {
+    final total = _persistentCacheHits + _persistentCacheMisses;
+    return total > 0 ? _persistentCacheHits / total : 0.0;
+  }
+
+  /// Hive 缓存 Box（用于 L2CacheCleaner 访问）
+  Box<String>? get persistentBox => _persistentBox;
+
+  /// 获取哈希对应的所有路径
+  List<String> getPathsForHash(String hash) {
+    final paths = _hashToPathsMap[hash];
+    return paths?.toList() ?? [];
+  }
+
+  /// 重置所有统计计数器
+  void resetStatistics() {
+    _cacheHits = 0;
+    _cacheMisses = 0;
+    _persistentCacheHits = 0;
+    _persistentCacheMisses = 0;
+    AppLogger.i('ImageMetadataService statistics reset', 'ImageMetadataService');
+  }
+
+  /// 清除持久化缓存（仅 Hive，不清除内存缓存）
+  Future<void> clearPersistentCache() async {
+    try {
+      final box = _persistentBox;
+      if (box != null && box.isOpen) {
+        // 保留版本键
+        final version = box.get('_cacheVersion');
+        await box.clear();
+        if (version != null) {
+          await box.put('_cacheVersion', version);
+        }
+        AppLogger.i('Persistent cache cleared', 'ImageMetadataService');
+      }
+    } catch (e, stack) {
+      AppLogger.e('Failed to clear persistent cache', e, stack, 'ImageMetadataService');
+    }
+  }
 
   /// 通知路径变更（文件重命名检测）
   void notifyPathChanged(String oldPath, String newPath) {
@@ -631,9 +696,32 @@ class ImageMetadataService {
         return null;
       }
       final json = jsonDecode(text) as Map<String, dynamic>;
+
+      // 格式1: 直接格式 - prompt在顶层
       if (json.containsKey('prompt') || json.containsKey('comment')) {
         return json;
       }
+
+      // 格式2: PNG标准格式 - Description/Software/Source/Comment
+      // Comment字段包含实际元数据（JSON字符串）
+      if (json.containsKey('Comment')) {
+        final comment = json['Comment'];
+        if (comment is String) {
+          try {
+            final commentJson = jsonDecode(comment) as Map<String, dynamic>;
+            if (commentJson.containsKey('prompt') || commentJson.containsKey('uc')) {
+              return commentJson;
+            }
+          } catch (_) {
+            // Comment不是有效的JSON，忽略
+          }
+        } else if (comment is Map<String, dynamic>) {
+          if (comment.containsKey('prompt') || comment.containsKey('uc')) {
+            return comment;
+          }
+        }
+      }
+
       return null;
     } catch (e) {
       return null;
@@ -653,10 +741,15 @@ class ImageMetadataService {
     try {
       final box = _getBox();
       final jsonString = box.get(key);
-      if (jsonString == null) return null;
+      if (jsonString == null) {
+        _persistentCacheMisses++;
+        return null;
+      }
       final json = jsonDecode(jsonString) as Map<String, dynamic>;
+      _persistentCacheHits++;
       return NaiImageMetadata.fromJson(json);
     } catch (e) {
+      _persistentCacheMisses++;
       return null;
     }
   }

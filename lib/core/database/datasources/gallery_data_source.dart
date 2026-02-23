@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../../data/models/gallery/nai_image_metadata.dart';
+import '../../../data/services/image_metadata_service.dart';
 import '../../utils/app_logger.dart';
 import '../base_data_source.dart';
 import '../data_source.dart'
@@ -382,7 +383,6 @@ class ScanLogRecord {
 /// 管理本地图片画廊的数据存储和查询，支持图片元数据、标签、收藏和全文搜索。
 class GalleryDataSource extends EnhancedBaseDataSource {
   static const int _maxImageCacheSize = 500;
-  static const int _maxMetadataCacheSize = 200;
 
   static const String _imagesTable = 'gallery_images';
   static const String _metadataTable = 'gallery_metadata';
@@ -394,8 +394,6 @@ class GalleryDataSource extends EnhancedBaseDataSource {
 
   final LRUCache<int, GalleryImageRecord> _imageCache =
       LRUCache(maxSize: _maxImageCacheSize);
-  final LRUCache<int, GalleryMetadataRecord> _metadataCache =
-      LRUCache(maxSize: _maxMetadataCacheSize);
   final Set<int> _favoriteCache = <int>{};
   bool _favoritesLoaded = false;
 
@@ -410,7 +408,6 @@ class GalleryDataSource extends EnhancedBaseDataSource {
 
   void clearCache() {
     _imageCache.clear();
-    _metadataCache.clear();
     _favoriteCache.clear();
     _favoritesLoaded = false;
     AppLogger.i('Gallery cache cleared', 'GalleryDS');
@@ -418,7 +415,7 @@ class GalleryDataSource extends EnhancedBaseDataSource {
 
   Map<String, dynamic> getCacheStatistics() => {
         'imageCache': _imageCache.statistics,
-        'metadataCache': _metadataCache.statistics,
+        'metadataCache': 'delegated_to_ImageMetadataService',
       };
 
   @override
@@ -673,10 +670,8 @@ class GalleryDataSource extends EnhancedBaseDataSource {
           'metadataCount': metadataCount,
           'tagCount': tagCount,
           'imageCacheSize': _imageCache.size,
-          'metadataCacheSize': _metadataCache.size,
           'cacheHitRate': {
             'image': _imageCache.hitRate,
-            'metadata': _metadataCache.hitRate,
           },
         },
         timestamp: DateTime.now(),
@@ -1328,7 +1323,6 @@ class GalleryDataSource extends EnhancedBaseDataSource {
         maxRetries: 3,
       );
 
-      _metadataCache.remove(imageId);
       await _updateFtsIndex(imageId, fullPromptText);
 
       AppLogger.d('Upserted metadata for image: $imageId', 'GalleryDS');
@@ -1437,7 +1431,6 @@ class GalleryDataSource extends EnhancedBaseDataSource {
             );
 
             ftsUpdates[imageId] = fullPromptText;
-            _metadataCache.remove(imageId);
           }
 
           await _batchUpdateFtsIndex(txn, ftsUpdates);
@@ -1483,12 +1476,17 @@ class GalleryDataSource extends EnhancedBaseDataSource {
   }
 
   Future<GalleryMetadataRecord?> getMetadataByImageId(int imageId) async {
-    final cached = _metadataCache.get(imageId);
-    if (cached != null) {
-      return cached;
-    }
-
     try {
+      // 1. 先从 ImageMetadataService 获取（统一缓存）
+      final imageRecord = await getImageById(imageId);
+      if (imageRecord != null) {
+        final metadata = await ImageMetadataService().getMetadata(imageRecord.filePath);
+        if (metadata != null && metadata.hasData) {
+          return GalleryMetadataRecord.fromNaiMetadata(imageId, metadata);
+        }
+      }
+
+      // 2. 回退到数据库查询
       return await execute(
         'getMetadataByImageId',
         (db) async {
@@ -1502,10 +1500,7 @@ class GalleryDataSource extends EnhancedBaseDataSource {
 
           if (result.isEmpty) return null;
 
-          final record = GalleryMetadataRecord.fromMap(result.first);
-          _metadataCache.put(imageId, record);
-
-          return record;
+          return GalleryMetadataRecord.fromMap(result.first);
         },
         timeout: const Duration(seconds: 10),
         maxRetries: 3,
@@ -1527,62 +1522,48 @@ class GalleryDataSource extends EnhancedBaseDataSource {
     if (imageIds.isEmpty) return {};
 
     final results = <int, GalleryMetadataRecord?>{};
-    final missingIds = <int>[];
 
-    for (final id in imageIds) {
-      final cached = _metadataCache.get(id);
-      if (cached != null) {
-        results[id] = cached;
-      } else {
-        missingIds.add(id);
-      }
-    }
+    try {
+      // 直接从数据库批量查询（ImageMetadataService 的内存缓存由调用方处理）
+      const batchSize = 900;
+      final chunks = chunk(imageIds, batchSize);
 
-    if (missingIds.isNotEmpty) {
-      try {
-        const batchSize = 900;
-        final chunks = chunk(missingIds, batchSize);
+      for (final chunk in chunks) {
+        await execute(
+          'getMetadataByImageIds',
+          (db) async {
+            final placeholders = List.filled(chunk.length, '?').join(',');
 
-        for (final chunk in chunks) {
-          await execute(
-            'getMetadataByImageIds',
-            (db) async {
-              final placeholders = List.filled(chunk.length, '?').join(',');
+            final dbResults = await db.rawQuery(
+              '''
+              SELECT * FROM $_metadataTable
+              WHERE image_id IN ($placeholders)
+              ''',
+              chunk,
+            );
 
-              final dbResults = await db.rawQuery(
-                '''
-                SELECT * FROM $_metadataTable
-                WHERE image_id IN ($placeholders)
-                ''',
-                chunk,
-              );
+            for (final id in chunk) {
+              results[id] = null;
+            }
 
-              for (final id in chunk) {
-                results[id] = null;
-              }
-
-              for (final row in dbResults) {
-                final record = GalleryMetadataRecord.fromMap(row);
-                final id = record.imageId;
-
-                results[id] = record;
-                _metadataCache.put(id, record);
-              }
-            },
-            timeout: const Duration(seconds: 30),
-            maxRetries: 3,
-          );
-        }
-      } catch (e, stack) {
-        AppLogger.e(
-          'Failed to get metadata by image IDs: ${imageIds.length} IDs',
-          e,
-          stack,
-          'GalleryDS',
+            for (final row in dbResults) {
+              final record = GalleryMetadataRecord.fromMap(row);
+              results[record.imageId] = record;
+            }
+          },
+          timeout: const Duration(seconds: 30),
+          maxRetries: 3,
         );
-        for (final id in missingIds) {
-          results.putIfAbsent(id, () => null);
-        }
+      }
+    } catch (e, stack) {
+      AppLogger.e(
+        'Failed to get metadata by image IDs: ${imageIds.length} IDs',
+        e,
+        stack,
+        'GalleryDS',
+      );
+      for (final id in imageIds) {
+        results.putIfAbsent(id, () => null);
       }
     }
 
@@ -2177,6 +2158,55 @@ class GalleryDataSource extends EnhancedBaseDataSource {
     } catch (e, stack) {
       AppLogger.e('Failed to get sampler distribution', e, stack, 'GalleryDS');
       return [];
+    }
+  }
+
+  /// 删除所有图片记录（保留文件）
+  ///
+  /// 用于深度清除画廊数据，强制下次重新扫描
+  Future<void> deleteAllImages() async {
+    try {
+      await execute(
+        'deleteAllImages',
+        (db) async {
+          // 先删除关联的元数据（外键约束）
+          await db.delete(_metadataTable);
+          // 删除收藏记录
+          await db.delete(_favoritesTable);
+          // 删除图片标签关联
+          await db.delete(_imageTagsTable);
+          // 最后删除图片记录
+          final count = await db.delete(_imagesTable);
+          AppLogger.i('Deleted $count image records', 'GalleryDS');
+        },
+        timeout: const Duration(seconds: 30),
+        maxRetries: 2,
+      );
+
+      // 清除内存缓存
+      clearCache();
+    } catch (e, stack) {
+      AppLogger.e('Failed to delete all images', e, stack, 'GalleryDS');
+      rethrow;
+    }
+  }
+
+  /// 删除所有元数据记录
+  Future<void> deleteAllMetadata() async {
+    try {
+      await execute(
+        'deleteAllMetadata',
+        (db) async {
+          final count = await db.delete(_metadataTable);
+          AppLogger.i('Deleted $count metadata records', 'GalleryDS');
+        },
+        timeout: const Duration(seconds: 30),
+        maxRetries: 2,
+      );
+
+    } catch (e, stack) {
+      AppLogger.e('Failed to delete all metadata', e, stack, 'GalleryDS');
+      rethrow;
     }
   }
 }

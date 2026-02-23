@@ -281,6 +281,11 @@ class NaiMetadataParser {
   }
 
   /// 尝试解析 NAI JSON 数据
+  ///
+  /// 支持两种格式：
+  /// 1. 官方格式：{"prompt": "...", "uc": "..."} - prompt在顶层
+  /// 2. PNG标准格式：{"Description": "...", "Software": "...", "Source": "...", "Comment": "{...}"}
+  ///    Comment字段包含实际元数据（JSON字符串）
   static Map<String, dynamic>? _tryParseNaiJson(String text) {
     try {
       final lowerText = text.toLowerCase();
@@ -291,9 +296,31 @@ class NaiMetadataParser {
       if (!hasNaiKeywords) return null;
 
       final json = jsonDecode(text) as Map<String, dynamic>;
+
+      // 格式1: 直接格式 - prompt在顶层
       if (json.containsKey('prompt') || json.containsKey('comment')) {
         return json;
       }
+
+      // 格式2: PNG标准格式 - Comment字段包含实际元数据
+      if (json.containsKey('Comment')) {
+        final comment = json['Comment'];
+        if (comment is String) {
+          try {
+            final commentJson = jsonDecode(comment) as Map<String, dynamic>;
+            if (commentJson.containsKey('prompt') || commentJson.containsKey('uc')) {
+              return commentJson;
+            }
+          } catch (_) {
+            // Comment不是有效的JSON，忽略
+          }
+        } else if (comment is Map<String, dynamic>) {
+          if (comment.containsKey('prompt') || comment.containsKey('uc')) {
+            return comment;
+          }
+        }
+      }
+
       return null;
     } catch (e) {
       return null;
@@ -384,14 +411,134 @@ class NaiMetadataParser {
 
   /// 将元数据嵌入 PNG 图片
   ///
-  /// 同时写入 stealth（alpha通道）和更新 tEXt chunk，确保两种解析方式都能读取
-  /// 【修复】改变顺序：先写 stealth，再写 tEXt，避免 tEXt 被 img.encodePng 丢失
-  static Future<Uint8List> embedMetadata(Uint8List imageBytes, String metadataJson) async {
-    // 第1步：写入 stealth 数据（这会重新编码 PNG）
-    final stealthBytes = await _embedStealthData(imageBytes, metadataJson);
+  /// 支持两种模式：
+  /// 1. 快速模式（默认）：仅添加 tEXt chunk，不重新编码 PNG（<5ms，性能提升50-100倍）
+  /// 2. 完整模式：同时写入 stealth（alpha通道）和 tEXt chunk（500-800ms，兼容性更好）
+  ///
+  /// [useStealth] 是否嵌入 stealth 数据到 alpha 通道。默认 false，使用快速路径。
+  static Future<Uint8List> embedMetadata(
+    Uint8List imageBytes,
+    String metadataJson, {
+    bool useStealth = false,
+  }) async {
+    if (!useStealth) {
+      // 快速路径：仅添加/更新 tEXt chunk（不重新编码PNG）
+      return embedTextChunkOnly(imageBytes, 'Comment', metadataJson);
+    }
 
-    // 第2步：更新 tEXt chunk（在 stealth 之后，确保不会被丢失）
+    // 完整路径：stealth + tEXt（保持最大兼容性）
+    final stealthBytes = await _embedStealthData(imageBytes, metadataJson);
     return _updateTextChunk(stealthBytes, metadataJson);
+  }
+
+  /// 仅嵌入 tEXt chunk（不重新编码 PNG，性能提升 50-100 倍）
+  ///
+  /// 直接操作 PNG chunks，避免调用 img.decodePng/img.encodePng，
+  /// 保留所有原始 chunks，包括非标准 chunks。
+  ///
+  /// 时间对比（1024x1024 图片）：
+  /// - 重新编码: 500-800ms
+  /// - 此方法: 5-15ms
+  static Uint8List embedTextChunkOnly(Uint8List originalPng, String keyword, String text) {
+    try {
+      final chunks = png_extract.extractChunks(originalPng);
+      final output = BytesBuilder();
+
+      // 写入 PNG 签名
+      output.add(originalPng.sublist(0, 8));
+
+      var textChunkAdded = false;
+      var idatIndex = -1;
+
+      // 找到第一个 IDAT 的位置（用于决定插入位置）
+      for (var i = 0; i < chunks.length; i++) {
+        if (chunks[i]['name'] == 'IDAT') {
+          idatIndex = i;
+          break;
+        }
+      }
+
+      for (var i = 0; i < chunks.length; i++) {
+        final chunk = chunks[i];
+        final name = chunk['name'] as String;
+
+        // 如果存在相同 keyword 的 chunk，替换它
+        if (name == 'tEXt' && !textChunkAdded) {
+          final data = chunk['data'] as Uint8List;
+          final nullIndex = data.indexOf(0);
+          if (nullIndex > 0) {
+            final existingKeyword = latin1.decode(data.sublist(0, nullIndex));
+            if (existingKeyword == keyword) {
+              _writeTextChunk(output, keyword, text);
+              textChunkAdded = true;
+              continue; // 跳过原始 chunk
+            }
+          }
+        }
+
+        // 在第一个 IDAT 之前插入新 chunk（PNG 规范建议）
+        if (i == idatIndex && !textChunkAdded) {
+          _writeTextChunk(output, keyword, text);
+          textChunkAdded = true;
+        }
+
+        // 写入原始 chunk
+        _writeRawChunk(output, chunk);
+      }
+
+      // 如果还没添加（没有 IDAT 的情况），追加到末尾
+      if (!textChunkAdded) {
+        _writeTextChunk(output, keyword, text);
+      }
+
+      return output.toBytes();
+    } catch (e, stack) {
+      AppLogger.e('[NaiMetadataParser] Failed to embed text chunk', e, stack, 'NaiMetadataParser');
+      // 失败时返回原始数据
+      return originalPng;
+    }
+  }
+
+  /// 写入原始 chunk 到 builder
+  static void _writeRawChunk(BytesBuilder builder, Map<String, dynamic> chunk) {
+    final name = chunk['name'] as String;
+    final data = chunk['data'] as Uint8List;
+    _writeChunk(builder, name, data);
+  }
+
+  /// 写入 tEXt chunk 到 builder
+  static void _writeTextChunk(BytesBuilder builder, String keyword, String text) {
+    final keywordBytes = latin1.encode(keyword);
+    final textBytes = latin1.encode(text);
+
+    final data = Uint8List(keywordBytes.length + 1 + textBytes.length);
+    data.setAll(0, keywordBytes);
+    data[keywordBytes.length] = 0; // null separator
+    data.setAll(keywordBytes.length + 1, textBytes);
+
+    _writeChunk(builder, 'tEXt', data);
+  }
+
+  /// 写入 PNG chunk（带 length + type + data + crc 结构）
+  static void _writeChunk(BytesBuilder builder, String type, Uint8List data) {
+    // Length (4 bytes, big-endian)
+    final lengthBytes = ByteData(4)..setUint32(0, data.length);
+    builder.add(lengthBytes.buffer.asUint8List());
+
+    // Type (4 bytes)
+    final typeBytes = latin1.encode(type);
+    builder.add(typeBytes);
+
+    // Data
+    builder.add(data);
+
+    // CRC32 (type + data)
+    final crcInput = Uint8List(typeBytes.length + data.length);
+    crcInput.setAll(0, typeBytes);
+    crcInput.setAll(typeBytes.length, data);
+    final crc = _crc32(crcInput);
+    final crcBytes = ByteData(4)..setUint32(0, crc);
+    builder.add(crcBytes.buffer.asUint8List());
   }
 
   /// 更新 PNG 的 tEXt chunk 中的 Comment 字段

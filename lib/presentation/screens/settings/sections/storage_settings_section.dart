@@ -12,6 +12,8 @@ import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/vibe_library_path_helper.dart';
 import '../../../providers/image_save_settings_provider.dart';
 import '../../../widgets/common/app_toast.dart';
+import '../widgets/cache_statistics_tile.dart';
+import '../widgets/clear_cache_button.dart';
 import '../widgets/settings_card.dart';
 
 /// 存储设置板块
@@ -128,6 +130,12 @@ class _StorageSettingsSectionState
           const VibeLibraryPathTile(),
           // Hive 数据存储路径设置
           const HiveStoragePathTile(),
+          const Divider(height: 32),
+          // 缓存统计
+          const CacheStatisticsTile(),
+          const Divider(height: 32),
+          // 清除画廊缓存按钮
+          const ClearGalleryCacheTile(),
         ],
       ),
     );

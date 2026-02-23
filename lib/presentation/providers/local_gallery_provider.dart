@@ -16,6 +16,7 @@ import '../../data/models/gallery/nai_image_metadata.dart';
 import '../../data/repositories/gallery_folder_repository.dart';
 import '../../data/services/gallery/gallery_scan_service.dart';
 import '../../data/services/image_metadata_service.dart';
+import 'gallery_scan_progress_provider.dart';
 
 part 'local_gallery_provider.freezed.dart';
 part 'local_gallery_provider.g.dart';
@@ -679,7 +680,15 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
       if (rootPath == null) return;
 
       final scanService = GalleryScanService.instance;
-      await scanService.processFiles(files);
+      final progressNotifier = ref.read(galleryScanProgressProvider.notifier);
+
+      // 创建进度回调
+      final progressCallback = createScanProgressCallback(progressNotifier);
+
+      await scanService.processFiles(
+        files,
+        onProgress: progressCallback,
+      );
 
       // 扫描完成后刷新当前页以显示元数据
       await loadPage(state.currentPage, showLoading: false);

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_launcher/presentation/widgets/common/themed_input.dart';
 
+import '../gallery/gallery_scan_progress_bar.dart';
+
 /// Enhanced pagination bar with complete navigation features
 /// 增强分页栏，包含完整的导航功能
 ///
@@ -144,6 +146,9 @@ class _PaginationBarState extends State<PaginationBar> {
         // Total info
         if (widget.showTotalInfo && widget.totalItems > 0)
           _buildTotalInfo(theme, colorScheme),
+
+        // Scan progress indicator
+        const ScanProgressIndicator(),
 
         const Spacer(),
 
