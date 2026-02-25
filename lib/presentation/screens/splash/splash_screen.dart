@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_version.dart';
-import '../../../core/services/app_warmup_service.dart';
 import '../../../core/utils/localization_extension.dart';
 import '../../providers/warmup_provider.dart';
 

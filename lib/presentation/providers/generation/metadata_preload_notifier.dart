@@ -143,7 +143,7 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
     try {
       _metadataService = ImageMetadataService();
       await _metadataService!.initialize();
-      AppLogger.i('MetadataPreloadNotifier: ImageMetadataService initialized', 'MetadataPreload');
+      // AppLogger.i('MetadataPreloadNotifier: ImageMetadataService initialized', 'MetadataPreload');
     } catch (e, stack) {
       AppLogger.e('Failed to initialize ImageMetadataService', e, stack, 'MetadataPreload');
       state = state.copyWith(
@@ -185,10 +185,7 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
   ///
   /// 用于用户主动打开图像详情页时，不受后台队列影响
   Future<NaiImageMetadata?> getMetadataImmediate(String path) async {
-    if (_metadataService == null) {
-      AppLogger.w('Metadata service not initialized', 'MetadataPreload');
-      return null;
-    }
+    if (_metadataService == null) return null;
 
     try {
       return await _metadataService!.getMetadataImmediate(path);
@@ -203,10 +200,7 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
     String path, {
     bool forceFullParse = false,
   }) async {
-    if (_metadataService == null) {
-      AppLogger.w('Metadata service not initialized', 'MetadataPreload');
-      return null;
-    }
+    if (_metadataService == null) return null;
 
     try {
       return await _metadataService!.getMetadata(path);
@@ -218,10 +212,7 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
 
   /// 从字节数组获取元数据
   Future<NaiImageMetadata?> getMetadataFromBytes(Uint8List bytes) async {
-    if (_metadataService == null) {
-      AppLogger.w('Metadata service not initialized', 'MetadataPreload');
-      return null;
-    }
+    if (_metadataService == null) return null;
 
     try {
       return await _metadataService!.getMetadataFromBytes(bytes);
@@ -239,13 +230,10 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
     String? filePath,
     Uint8List? bytes,
   }) {
-    if (_metadataService == null) {
-      AppLogger.w('Metadata service not initialized', 'MetadataPreload');
-      return;
-    }
+    if (_metadataService == null) return;
 
     if (state.isPaused) {
-      AppLogger.d('Preload is paused, skipping enqueue: $taskId', 'MetadataPreload');
+      // AppLogger.d('Preload is paused, skipping enqueue: $taskId', 'MetadataPreload');
       return;
     }
 
@@ -265,14 +253,11 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
 
   /// 批量预加载
   void enqueuePreloadBatch(List<GeneratedImageInfo> images) {
-    if (_metadataService == null) {
-      AppLogger.w('Metadata service not initialized', 'MetadataPreload');
-      return;
-    }
+    if (_metadataService == null) return;
 
     if (images.isEmpty) return;
 
-    AppLogger.i('Enqueueing ${images.length} images for metadata preload', 'MetadataPreload');
+    // AppLogger.i('Enqueueing ${images.length} images for metadata preload', 'MetadataPreload');
 
     for (final image in images) {
       enqueuePreload(
@@ -296,13 +281,11 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
   /// 暂停预加载
   void pause() {
     state = state.copyWith(isPaused: true);
-    AppLogger.i('Metadata preload paused', 'MetadataPreload');
   }
 
   /// 恢复预加载
   void resume() {
     state = state.copyWith(isPaused: false);
-    AppLogger.i('Metadata preload resumed', 'MetadataPreload');
   }
 
   /// 清除错误
@@ -354,10 +337,10 @@ class MetadataPreloadNotifier extends _$MetadataPreloadNotifier {
   void onGenerationCompleted(List<GeneratedImageInfo> images) {
     if (images.isEmpty) return;
 
-    AppLogger.i(
-      'Generation completed, scheduling metadata preload for ${images.length} images',
-      'MetadataPreload',
-    );
+    // AppLogger.i(
+    //   'Generation completed, scheduling metadata preload for ${images.length} images',
+    //   'MetadataPreload',
+    // );
 
     // 延迟执行预加载，避免阻塞生成完成后的 UI 更新
     Future.delayed(const Duration(milliseconds: 100), () {

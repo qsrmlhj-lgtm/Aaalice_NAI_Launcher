@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/painting.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/network/proxy_service.dart';
 import '../../core/enums/warmup_phase.dart';
-import '../../core/services/app_warmup_service.dart';
 import '../../core/database/database.dart';
 import '../../core/database/datasources/gallery_data_source.dart';
 import '../../core/services/danbooru_tags_lazy_service.dart';
@@ -25,6 +23,45 @@ import 'subscription_provider.dart';
 import '../../data/services/vibe_library_migration_service.dart';
 
 part 'warmup_provider.g.dart';
+
+/// 预加载进度
+class WarmupProgress {
+  /// 当前进度 (0.0 - 1.0)
+  final double progress;
+
+  /// 当前任务名称
+  final String currentTask;
+
+  /// 是否完成
+  final bool isComplete;
+
+  /// 错误信息
+  final String? error;
+
+  const WarmupProgress({
+    required this.progress,
+    required this.currentTask,
+    this.isComplete = false,
+    this.error,
+  });
+
+  factory WarmupProgress.initial() => const WarmupProgress(
+        progress: 0.0,
+        currentTask: 'warmup_preparing',
+      );
+
+  factory WarmupProgress.complete() => const WarmupProgress(
+        progress: 1.0,
+        currentTask: 'warmup_complete',
+        isComplete: true,
+      );
+
+  factory WarmupProgress.error(String message) => WarmupProgress(
+        progress: 0.0,
+        currentTask: message,
+        error: message,
+      );
+}
 
 /// 预加载状态
 class WarmupState {
@@ -128,11 +165,8 @@ class WarmupNotifier extends _$WarmupNotifier {
     }
   }
 
-  Future<void> _configureImageCache() async {
-    PaintingBinding.instance.imageCache.maximumSize = 500;
-    PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024;
-    AppLogger.i('Image cache configured: max=500, maxBytes=100MB', 'Warmup');
-  }
+  // 【修复】移除了 _configureImageCache 方法
+  // Image Cache 配置已在 main.dart 中统一处理（200MB）
 
   Future<void> _preloadFonts() async {
     final fontConfig = ref.read(fontNotifierProvider);
@@ -174,34 +208,40 @@ class WarmupNotifier extends _$WarmupNotifier {
     _startWarmup();
   }
 
-  /// 检查网络环境（循环等待直到连接成功）
+  /// 检查网络环境（最多尝试2次，失败不阻塞启动）
+  ///
+  /// 总超时控制在 8 秒内（调度器 timeout），避免被强制终止
   Future<void> _checkNetworkEnvironment() async {
-    const checkInterval = Duration(seconds: 2);
+    const maxAttempts = 2;
+    const timeout = Duration(seconds: 3);
 
-    var attempt = 0;
-    while (true) {
-      attempt++;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       state = state.copyWith(
-        subTaskMessage: '正在检测网络连接... (尝试 $attempt)',
+        subTaskMessage: '正在检测网络连接... (尝试 $attempt/$maxAttempts)',
       );
 
-      final result = await ProxyService.testNovelAIConnection();
-      if (result.success) {
-        AppLogger.i('Network check successful: ${result.latencyMs}ms', 'Warmup');
-        state = state.copyWith(
-          subTaskMessage: '网络连接正常 (${result.latencyMs}ms)',
-        );
-        await Future.delayed(const Duration(milliseconds: 500));
+      try {
+        final result = await ProxyService.testNovelAIConnection(timeout: timeout);
+
+        if (result.success) {
+          AppLogger.i('Network check successful: ${result.latencyMs}ms', 'Warmup');
+          state = state.copyWith(subTaskMessage: '网络连接正常 (${result.latencyMs}ms)');
+          await Future.delayed(const Duration(milliseconds: 300));
+          return;
+        }
+
+        AppLogger.w('Network check attempt $attempt/$maxAttempts failed: ${result.errorMessage}', 'Warmup');
+      } catch (e) {
+        AppLogger.w('Network check attempt $attempt/$maxAttempts error: $e', 'Warmup');
+      }
+
+      if (attempt >= maxAttempts) {
+        AppLogger.w('Network check reached max attempts, continuing offline', 'Warmup');
+        state = state.copyWith(subTaskMessage: '网络未连接，已离线启动');
         return;
       }
 
-      AppLogger.w(
-        'Network check attempt $attempt failed: ${result.errorMessage}',
-        'Warmup',
-      );
-
-      // 等待后重试
-      await Future.delayed(checkInterval);
+      await Future.delayed(const Duration(seconds: 1));
     }
   }
 
@@ -242,13 +282,8 @@ class WarmupNotifier extends _$WarmupNotifier {
         phase: WarmupPhase.critical,
         parallel: true,
         tasks: [
-          PhasedWarmupTask(
-            name: 'warmup_imageCache',
-            displayName: '图片缓存',
-            phase: WarmupPhase.critical,
-            weight: 1,
-            task: _configureImageCache,
-          ),
+          // 【修复】移除 warmup_imageCache 任务，因为 main.dart 已配置（200MB）
+          // 避免重复配置和参数不一致问题
           PhasedWarmupTask(
             name: 'warmup_fonts',
             displayName: '字体加载',
@@ -306,13 +341,14 @@ class WarmupNotifier extends _$WarmupNotifier {
       ),
     );
 
-    // 4. 网络检测
+    // 4. 网络检测（8秒超时，防止无限等待）
     _scheduler.registerTask(
       PhasedWarmupTask(
         name: 'warmup_networkCheck',
         displayName: '检测网络',
         phase: WarmupPhase.quick,
         weight: 1,
+        timeout: const Duration(seconds: 8),
         task: _checkNetworkEnvironment,
       ),
     );
@@ -662,75 +698,45 @@ class WarmupNotifier extends _$WarmupNotifier {
     };
 
     try {
-      // 1. 拉取一般标签（category = 0）
-      if (needsGeneralFetch) {
-        await service.fetchGeneralTags(
-          threshold: 1000, // 热度阈值
-          maxPages: 50,    // 最多50页
-        ).timeout(
-          const Duration(seconds: 60),
-          onTimeout: () {
-            AppLogger.w('General tags fetch timeout', 'Warmup');
-            // 超时不阻塞，继续拉取角色标签
-          },
-        );
-        AppLogger.i('General tags fetched successfully', 'Warmup');
-      } else {
-        AppLogger.i('Skipping general tags fetch (already has data)', 'Warmup');
-      }
+      // 定义标签拉取任务
+      final fetchTasks = [
+        (
+          name: '一般',
+          needed: needsGeneralFetch,
+          message: '拉取一般标签...',
+          fetch: () => service.fetchGeneralTags(threshold: 1000, maxPages: 50),
+        ),
+        (
+          name: '角色',
+          needed: needsCharacterFetch,
+          message: '拉取角色标签...',
+          fetch: () => service.fetchCharacterTags(threshold: 100, maxPages: 50),
+        ),
+        (
+          name: '版权',
+          needed: needsCopyrightFetch,
+          message: '拉取版权标签...',
+          fetch: () => service.fetchCopyrightTags(threshold: 500, maxPages: 50),
+        ),
+        (
+          name: '元',
+          needed: needsMetaFetch,
+          message: '拉取元标签...',
+          fetch: () => service.fetchMetaTags(threshold: 10000, maxPages: 50),
+        ),
+      ];
 
-      // 2. 拉取角色标签（category = 4）
-      if (needsCharacterFetch) {
-        state = state.copyWith(subTaskMessage: '拉取角色标签...');
-        await service.fetchCharacterTags(
-          threshold: 100,  // 角色标签阈值较低
-          maxPages: 50,    // 最多50页
-        ).timeout(
+      for (final task in fetchTasks) {
+        if (!task.needed) {
+          AppLogger.i('Skipping ${task.name} tags fetch (already has data)', 'Warmup');
+          continue;
+        }
+        state = state.copyWith(subTaskMessage: task.message);
+        await task.fetch().timeout(
           const Duration(seconds: 60),
-          onTimeout: () {
-            AppLogger.w('Character tags fetch timeout', 'Warmup');
-            // 超时不阻塞
-          },
+          onTimeout: () => AppLogger.w('${task.name} tags fetch timeout', 'Warmup'),
         );
-        AppLogger.i('Character tags fetched successfully', 'Warmup');
-      } else {
-        AppLogger.i('Skipping character tags fetch (already has data)', 'Warmup');
-      }
-
-      // 3. 拉取版权标签（category = 3）
-      if (needsCopyrightFetch) {
-        state = state.copyWith(subTaskMessage: '拉取版权标签...');
-        await service.fetchCopyrightTags(
-          threshold: 500,  // 版权标签阈值中等
-          maxPages: 50,    // 最多50页
-        ).timeout(
-          const Duration(seconds: 60),
-          onTimeout: () {
-            AppLogger.w('Copyright tags fetch timeout', 'Warmup');
-            // 超时不阻塞
-          },
-        );
-        AppLogger.i('Copyright tags fetched successfully', 'Warmup');
-      } else {
-        AppLogger.i('Skipping copyright tags fetch (already has data)', 'Warmup');
-      }
-
-      // 4. 拉取元标签（category = 5）
-      if (needsMetaFetch) {
-        state = state.copyWith(subTaskMessage: '拉取元标签...');
-        await service.fetchMetaTags(
-          threshold: 10000,  // 元标签阈值较高
-          maxPages: 50,      // 最多50页
-        ).timeout(
-          const Duration(seconds: 60),
-          onTimeout: () {
-            AppLogger.w('Meta tags fetch timeout', 'Warmup');
-            // 超时不阻塞
-          },
-        );
-        AppLogger.i('Meta tags fetched successfully', 'Warmup');
-      } else {
-        AppLogger.i('Skipping meta tags fetch (already has data)', 'Warmup');
+        AppLogger.i('${task.name} tags fetched successfully', 'Warmup');
       }
 
       // 验证拉取后的数据
@@ -863,82 +869,43 @@ class WarmupNotifier extends _$WarmupNotifier {
       final needsCopyrightFetch = copyrightCount == 0;
       final needsMetaFetch = metaCount == 0;
 
-      if (needsGeneralFetch || needsCharacterFetch || needsCopyrightFetch || needsMetaFetch) {
-        AppLogger.w(
-          '部分标签分类为空，触发补充拉取: '
-          'general=$needsGeneralFetch, character=$needsCharacterFetch, '
-          'copyright=$needsCopyrightFetch, meta=$needsMetaFetch',
-          'Warmup',
-        );
-        state = state.copyWith(
-          subTaskMessage: '正在从服务器拉取标签数据...',
-        );
+      final needsAnyFetch = needsGeneralFetch || needsCharacterFetch ||
+          needsCopyrightFetch || needsMetaFetch;
 
-        // 拉取一般标签
-        if (needsGeneralFetch) {
-          await service.fetchGeneralTags(
-            threshold: 1000,
-            maxPages: 50,
-          ).timeout(
-            const Duration(seconds: 60),
-            onTimeout: () {
-              AppLogger.w('一般标签拉取超时，将在后台继续', 'Warmup');
-            },
-          );
-        }
-
-        // 拉取角色标签
-        if (needsCharacterFetch) {
-          state = state.copyWith(
-            subTaskMessage: '正在拉取角色标签...',
-          );
-          await service.fetchCharacterTags(
-            threshold: 100,
-            maxPages: 50,
-          ).timeout(
-            const Duration(seconds: 60),
-            onTimeout: () {
-              AppLogger.w('角色标签拉取超时，将在后台继续', 'Warmup');
-            },
-          );
-        }
-
-        // 拉取版权标签
-        if (needsCopyrightFetch) {
-          state = state.copyWith(
-            subTaskMessage: '正在拉取版权标签...',
-          );
-          await service.fetchCopyrightTags(
-            threshold: 500,
-            maxPages: 50,
-          ).timeout(
-            const Duration(seconds: 60),
-            onTimeout: () {
-              AppLogger.w('版权标签拉取超时，将在后台继续', 'Warmup');
-            },
-          );
-        }
-
-        // 拉取元标签
-        if (needsMetaFetch) {
-          state = state.copyWith(
-            subTaskMessage: '正在拉取元标签...',
-          );
-          await service.fetchMetaTags(
-            threshold: 10000,
-            maxPages: 50,
-          ).timeout(
-            const Duration(seconds: 60),
-            onTimeout: () {
-              AppLogger.w('元标签拉取超时，将在后台继续', 'Warmup');
-            },
-          );
-        }
-
-        AppLogger.i('标签数据拉取完成', 'Warmup');
-      } else {
+      if (!needsAnyFetch) {
         AppLogger.i('所有标签分类数据已存在，跳过拉取', 'Warmup');
+        return;
       }
+
+      AppLogger.w(
+        '部分标签分类为空，触发补充拉取: '
+        'general=$needsGeneralFetch, character=$needsCharacterFetch, '
+        'copyright=$needsCopyrightFetch, meta=$needsMetaFetch',
+        'Warmup',
+      );
+      state = state.copyWith(subTaskMessage: '正在从服务器拉取标签数据...');
+
+      // 定义标签拉取任务
+      final fetchTasks = [
+        if (needsGeneralFetch)
+          (message: '正在拉取一般标签...', fetch: () => service.fetchGeneralTags(threshold: 1000, maxPages: 50)),
+        if (needsCharacterFetch)
+          (message: '正在拉取角色标签...', fetch: () => service.fetchCharacterTags(threshold: 100, maxPages: 50)),
+        if (needsCopyrightFetch)
+          (message: '正在拉取版权标签...', fetch: () => service.fetchCopyrightTags(threshold: 500, maxPages: 50)),
+        if (needsMetaFetch)
+          (message: '正在拉取元标签...', fetch: () => service.fetchMetaTags(threshold: 10000, maxPages: 50)),
+      ];
+
+      for (final task in fetchTasks) {
+        state = state.copyWith(subTaskMessage: task.message);
+        await task.fetch().timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => AppLogger.w('${task.message}超时，将在后台继续', 'Warmup'),
+        );
+      }
+
+      AppLogger.i('标签数据拉取完成', 'Warmup');
     } on StateError catch (e) {
       // 数据库正在恢复中，不阻塞启动
       AppLogger.w('检查数据完整性时数据库正在恢复，将在后台重试: $e', 'Warmup');

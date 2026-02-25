@@ -8,15 +8,7 @@ import '../../../data/models/gallery/local_image_record.dart';
 import '../common/themed_divider.dart';
 import 'package:nai_launcher/presentation/widgets/common/themed_input.dart';
 
-/// 画廊分类树视图
-///
-/// 支持：
-/// - 无限层级嵌套
-/// - 拖拽分类（跨层级移动）
-/// - 拖拽图片到分类
-/// - 悬停自动展开
-/// - 右键菜单
-/// - 触觉反馈
+/// Gallery category tree view with drag-drop support
 class GalleryCategoryTreeView extends StatefulWidget {
   final List<GalleryCategory> categories;
   final int totalImageCount;
@@ -27,8 +19,7 @@ class GalleryCategoryTreeView extends StatefulWidget {
   final ValueChanged<String>? onCategoryDelete;
   final ValueChanged<String?>? onAddSubCategory;
   final void Function(String categoryId, String? newParentId)? onCategoryMove;
-  final void Function(String? parentId, int oldIndex, int newIndex)?
-      onCategoryReorder;
+  final void Function(String? parentId, int oldIndex, int newIndex)? onCategoryReorder;
   final void Function(String imagePath, String? categoryId)? onImageDrop;
   final VoidCallback? onSyncWithFileSystem;
 
@@ -68,15 +59,9 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
     _autoExpandTimer?.cancel();
     _autoExpandTimer = Timer(const Duration(milliseconds: 800), () {
       if (_hoveredCategoryId == categoryId && mounted) {
-        setState(() {
-          _expandedIds.add(categoryId);
-        });
+        setState(() => _expandedIds.add(categoryId));
       }
     });
-  }
-
-  void _cancelAutoExpandTimer() {
-    _autoExpandTimer?.cancel();
   }
 
   @override
@@ -85,14 +70,12 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
 
     return GestureDetector(
       onSecondaryTapUp: widget.onAddSubCategory != null
-          ? (details) =>
-              _showEmptyAreaContextMenu(context, details.globalPosition)
+          ? (details) => _showEmptyAreaContextMenu(context, details.globalPosition)
           : null,
       behavior: HitTestBehavior.translucent,
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          // 全部图片
           _buildImageDropTarget(
             categoryId: null,
             child: _CategoryItem(
@@ -103,8 +86,6 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
               onTap: () => widget.onCategorySelected(null),
             ),
           ),
-
-          // 收藏
           _CategoryItem(
             icon: widget.selectedCategoryId == 'favorites'
                 ? Icons.favorite
@@ -115,12 +96,8 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
             isSelected: widget.selectedCategoryId == 'favorites',
             onTap: () => widget.onCategorySelected('favorites'),
           ),
-
           if (widget.categories.isNotEmpty)
-            // 分类标题分割线
             const ThemedDivider(height: 16, indent: 12, endIndent: 12),
-
-          // 分类树
           ...widget.categories.rootCategories.sortedByOrder().map(
                 (category) => _buildCategoryNode(theme, category, 0),
               ),
@@ -132,12 +109,7 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
   void _showEmptyAreaContextMenu(BuildContext context, Offset position) {
     showMenu(
       context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx + 1,
-        position.dy + 1,
-      ),
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
       items: [
         PopupMenuItem(
           onTap: () => widget.onAddSubCategory?.call(null),
@@ -153,11 +125,7 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
     );
   }
 
-  Widget _buildCategoryNode(
-    ThemeData theme,
-    GalleryCategory category,
-    int depth,
-  ) {
+  Widget _buildCategoryNode(ThemeData theme, GalleryCategory category, int depth) {
     final children = widget.categories.getChildren(category.id).sortedByOrder();
     final hasChildren = children.isNotEmpty;
     final isExpanded = _expandedIds.contains(category.id);
@@ -174,15 +142,13 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
       isExpanded: isExpanded,
       onTap: () => widget.onCategorySelected(category.id),
       onExpand: hasChildren
-          ? () {
-              setState(() {
+          ? () => setState(() {
                 if (isExpanded) {
                   _expandedIds.remove(category.id);
                 } else {
                   _expandedIds.add(category.id);
                 }
-              });
-            }
+              })
           : null,
       onRename: widget.onCategoryRename != null
           ? (newName) => widget.onCategoryRename!(category.id, newName)
@@ -198,27 +164,22 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
           : null,
     );
 
-    // 包装为可拖拽
     if (widget.onCategoryMove != null || widget.onCategoryReorder != null) {
       categoryItem = _buildDraggableCategory(category, categoryItem);
     }
 
-    // 包装为拖拽目标
     if (widget.onCategoryMove != null) {
       categoryItem = _buildCategoryDragTarget(theme, category, categoryItem);
     }
 
-    // 包装为图片拖拽目标
-    categoryItem =
-        _buildImageDropTarget(categoryId: category.id, child: categoryItem);
+    categoryItem = _buildImageDropTarget(categoryId: category.id, child: categoryItem);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         categoryItem,
         if (hasChildren && isExpanded)
-          ...children
-              .map((child) => _buildCategoryNode(theme, child, depth + 1)),
+          ...children.map((child) => _buildCategoryNode(theme, child, depth + 1)),
       ],
     );
   }
@@ -264,7 +225,7 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
       childWhenDragging: Opacity(opacity: 0.4, child: child),
       onDragStarted: () => HapticFeedback.mediumImpact(),
       onDragEnd: (_) {
-        _cancelAutoExpandTimer();
+        _autoExpandTimer?.cancel();
         setState(() => _hoveredCategoryId = null);
       },
       child: child,
@@ -279,16 +240,10 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
     return DragTarget<GalleryCategory>(
       onWillAcceptWithDetails: (details) {
         final draggedCategory = details.data;
-        // 不能拖到自己
         if (draggedCategory.id == targetCategory.id) return false;
-        // 检查循环引用
-        if (widget.categories.wouldCreateCycle(
-          draggedCategory.id,
-          targetCategory.id,
-        )) {
+        if (widget.categories.wouldCreateCycle(draggedCategory.id, targetCategory.id)) {
           return false;
         }
-        // 已经是子分类则不接受
         if (draggedCategory.parentId == targetCategory.id) return false;
         return true;
       },
@@ -299,13 +254,12 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
           _expandedIds.add(targetCategory.id);
           _hoveredCategoryId = null;
         });
-        _cancelAutoExpandTimer();
+        _autoExpandTimer?.cancel();
       },
       onMove: (details) {
         if (_hoveredCategoryId != targetCategory.id) {
           setState(() => _hoveredCategoryId = targetCategory.id);
-          final hasChildren =
-              widget.categories.getChildren(targetCategory.id).isNotEmpty;
+          final hasChildren = widget.categories.getChildren(targetCategory.id).isNotEmpty;
           if (hasChildren && !_expandedIds.contains(targetCategory.id)) {
             _startAutoExpandTimer(targetCategory.id);
           }
@@ -314,7 +268,7 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
       onLeave: (_) {
         if (_hoveredCategoryId == targetCategory.id) {
           setState(() => _hoveredCategoryId = null);
-          _cancelAutoExpandTimer();
+          _autoExpandTimer?.cancel();
         }
       },
       builder: (context, candidateData, rejectedData) {
@@ -350,10 +304,7 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
     if (widget.onImageDrop == null) return child;
 
     return DragTarget<LocalImageRecord>(
-      onWillAcceptWithDetails: (details) {
-        // 可以接受任何图片
-        return true;
-      },
+      onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (details) {
         HapticFeedback.heavyImpact();
         widget.onImageDrop?.call(details.data.path, categoryId);
@@ -386,7 +337,6 @@ class _GalleryCategoryTreeViewState extends State<GalleryCategoryTreeView> {
   }
 }
 
-/// 分类项组件
 class _CategoryItem extends StatefulWidget {
   final IconData icon;
   final Color? iconColor;
@@ -484,16 +434,13 @@ class _CategoryItemState extends State<_CategoryItem> {
               ),
               child: Row(
                 children: [
-                  // 展开/折叠按钮
                   if (widget.hasChildren)
                     GestureDetector(
                       onTap: widget.onExpand,
                       child: Padding(
                         padding: const EdgeInsets.only(right: 4),
                         child: Icon(
-                          widget.isExpanded
-                              ? Icons.expand_more
-                              : Icons.chevron_right,
+                          widget.isExpanded ? Icons.expand_more : Icons.chevron_right,
                           size: 16,
                           color: theme.colorScheme.outline,
                         ),
@@ -501,8 +448,6 @@ class _CategoryItemState extends State<_CategoryItem> {
                     )
                   else
                     const SizedBox(width: 20),
-
-                  // 图标
                   Icon(
                     widget.icon,
                     size: 18,
@@ -512,8 +457,6 @@ class _CategoryItemState extends State<_CategoryItem> {
                             : theme.colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(width: 8),
-
-                  // 名称
                   Expanded(
                     child: _isEditing
                         ? ThemedInput(
@@ -531,17 +474,13 @@ class _CategoryItemState extends State<_CategoryItem> {
                               }
                               setState(() => _isEditing = false);
                             },
-                            onTapOutside: (_) {
-                              setState(() => _isEditing = false);
-                            },
+                            onTapOutside: (_) => setState(() => _isEditing = false),
                           )
                         : Text(
                             widget.label,
                             style: TextStyle(
                               fontSize: 13,
-                              fontWeight: widget.isSelected
-                                  ? FontWeight.w600
-                                  : FontWeight.w500,
+                              fontWeight: widget.isSelected ? FontWeight.w600 : FontWeight.w500,
                               color: widget.isSelected
                                   ? theme.colorScheme.primary
                                   : theme.colorScheme.onSurface,
@@ -549,8 +488,6 @@ class _CategoryItemState extends State<_CategoryItem> {
                             overflow: TextOverflow.ellipsis,
                           ),
                   ),
-
-                  // 拖拽提示图标
                   if (_isHovering && widget.onRename != null)
                     Padding(
                       padding: const EdgeInsets.only(right: 4),
@@ -560,8 +497,6 @@ class _CategoryItemState extends State<_CategoryItem> {
                         color: theme.colorScheme.outline.withOpacity(0.5),
                       ),
                     ),
-
-                  // 数量
                   Text(
                     widget.count.toString(),
                     style: TextStyle(
@@ -581,22 +516,13 @@ class _CategoryItemState extends State<_CategoryItem> {
   void _showContextMenu(BuildContext context, Offset position) {
     showMenu(
       context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx + 1,
-        position.dy + 1,
-      ),
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx + 1, position.dy + 1),
       items: [
         if (widget.onRename != null)
           PopupMenuItem(
-            onTap: () {
-              Future.delayed(const Duration(milliseconds: 100), () {
-                if (mounted) {
-                  setState(() => _isEditing = true);
-                }
-              });
-            },
+            onTap: () => Future.delayed(const Duration(milliseconds: 100), () {
+              if (mounted) setState(() => _isEditing = true);
+            }),
             child: const Row(
               children: [
                 Icon(Icons.edit, size: 18),

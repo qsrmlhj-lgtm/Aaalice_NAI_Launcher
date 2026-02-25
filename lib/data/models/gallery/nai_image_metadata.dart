@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:hive/hive.dart';
 
+import '../../../core/utils/app_logger.dart';
 import '../vibe/vibe_reference.dart';
 
 part 'nai_image_metadata.freezed.dart';
@@ -140,50 +141,73 @@ class NaiImageMetadata with _$NaiImageMetadata {
 
   /// 从 NAI Comment JSON 构造
   factory NaiImageMetadata.fromNaiComment(Map<String, dynamic> json, {String? rawJson}) {
-    final (commentData, software, source) = _extractCommentData(json);
+    try {
+      final (commentData, software, source) = _extractCommentData(json);
 
-    // 提取固定词（应用专属扩展）
-    final parts = _extractFixedTags(commentData);
+      // 提取固定词（应用专属扩展）
+      final parts = _extractFixedTags(commentData);
 
-    // 提取 V4 角色提示词
-    final (characterPrompts, characterNegativePrompts, characterInfos) =
-        _extractCharacterPrompts(commentData, parts);
+      // 提取 V4 角色提示词
+      final (characterPrompts, characterNegativePrompts, characterInfos) =
+          _extractCharacterPrompts(commentData, parts);
 
-    // 提取 Vibe 数据
-    final vibeReferences = _extractVibeReferences(commentData);
+      // 提取 Vibe 数据
+      final vibeReferences = _extractVibeReferences(commentData);
 
-    return NaiImageMetadata(
-      prompt: commentData['prompt'] as String? ?? '',
-      negativePrompt: commentData['uc'] as String? ?? '',
-      seed: commentData['seed'] as int?,
-      sampler: commentData['sampler'] as String?,
-      steps: commentData['steps'] as int?,
-      scale: _extractScale(commentData),
-      width: commentData['width'] as int?,
-      height: commentData['height'] as int?,
-      model: commentData['model'] as String?,
-      smea: commentData['sm'] as bool?,
-      smeaDyn: commentData['sm_dyn'] as bool?,
-      noiseSchedule: commentData['noise_schedule'] as String?,
-      cfgRescale: (commentData['cfg_rescale'] as num?)?.toDouble(),
-      ucPreset: commentData['uc_preset'] as int?,
-      qualityToggle: commentData['quality_toggle'] as bool?,
-      isImg2Img: commentData['image'] != null,
-      strength: (commentData['strength'] as num?)?.toDouble(),
-      noise: (commentData['noise'] as num?)?.toDouble(),
-      software: software,
-      source: source,
-      version: commentData['version']?.toString(),
-      characterPrompts: characterPrompts,
-      characterNegativePrompts: characterNegativePrompts,
-      rawJson: rawJson,
-      fixedPrefixTags: parts['fixedPrefix'] ?? [],
-      fixedSuffixTags: parts['fixedSuffix'] ?? [],
-      qualityTags: parts['qualityTags'] ?? [],
-      characterInfos: characterInfos,
-      vibeReferences: vibeReferences,
-      originalPrompt: commentData['prompt'] as String? ?? '',
-    );
+      return NaiImageMetadata(
+        prompt: commentData['prompt'] as String? ?? '',
+        negativePrompt: commentData['uc'] as String? ?? '',
+        seed: _toInt(commentData['seed']),
+        sampler: commentData['sampler'] as String?,
+        steps: _toInt(commentData['steps']),
+        scale: _extractScale(commentData),
+        width: _toInt(commentData['width']),
+        height: _toInt(commentData['height']),
+        model: commentData['model'] as String?,
+        smea: commentData['sm'] as bool?,
+        smeaDyn: commentData['sm_dyn'] as bool?,
+        noiseSchedule: commentData['noise_schedule'] as String?,
+        cfgRescale: _toDouble(commentData['cfg_rescale']),
+        ucPreset: _toInt(commentData['uc_preset']),
+        qualityToggle: commentData['quality_toggle'] as bool?,
+        isImg2Img: commentData['image'] != null,
+        strength: _toDouble(commentData['strength']),
+        noise: _toDouble(commentData['noise']),
+        software: software,
+        source: source,
+        version: commentData['version']?.toString(),
+        characterPrompts: characterPrompts,
+        characterNegativePrompts: characterNegativePrompts,
+        rawJson: rawJson,
+        fixedPrefixTags: parts['fixedPrefix'] ?? [],
+        fixedSuffixTags: parts['fixedSuffix'] ?? [],
+        qualityTags: parts['qualityTags'] ?? [],
+        characterInfos: characterInfos,
+        vibeReferences: vibeReferences,
+        originalPrompt: commentData['prompt'] as String? ?? '',
+      );
+    } catch (e, stack) {
+      AppLogger.e('fromNaiComment failed', e, stack, 'NaiImageMetadata');
+      throw FormatException('Failed to parse NAI metadata: $e\nJSON keys: ${json.keys.toList()}');
+    }
+  }
+
+  /// 安全转换为 int
+  static int? _toInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  /// 安全转换为 double
+  static double? _toDouble(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
   }
 
   /// 提取 Comment 数据（支持官网格式和直接格式）

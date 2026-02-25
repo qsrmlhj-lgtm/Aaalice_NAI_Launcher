@@ -25,13 +25,17 @@ import 'core/utils/app_logger.dart';
 import 'core/utils/hive_storage_helper.dart';
 import 'data/datasources/local/nai_tags_data_source.dart';
 import 'data/models/gallery/nai_image_metadata.dart';
+import 'data/repositories/collection_repository.dart';
 import 'data/repositories/gallery_folder_repository.dart';
 import 'core/cache/gallery_cache_manager.dart';
-import 'core/cache/thumbnail_cache_service.dart';
-import 'data/services/gallery/gallery_scan_service.dart';
+
+import 'core/cache/tag_cache_service.dart';
+import 'data/services/gallery/index.dart';
 import 'data/services/image_metadata_service.dart';
+import 'data/services/metadata/isolate_metadata_service.dart';
+import 'data/services/search_index_service.dart';
 import 'data/services/temp_image_service.dart';
-import 'data/services/thumbnail_generation_queue.dart';
+import 'data/services/thumbnail_service.dart';
 import 'presentation/providers/data_source_cache_provider.dart';
 import 'presentation/screens/splash/app_bootstrap.dart';
 
@@ -182,7 +186,8 @@ class AppWindowListener extends WindowListener {
         'WindowListener',
       );
     } catch (e) {
-      AppLogger.w('Failed to save window state on resize: $e', 'WindowListener');
+      AppLogger.w(
+          'Failed to save window state on resize: $e', 'WindowListener',);
     }
   }
 
@@ -211,7 +216,8 @@ class AppWindowListener extends WindowListener {
         'WindowListener',
       );
     } catch (e) {
-      AppLogger.w('Failed to save window position on move: $e', 'WindowListener');
+      AppLogger.w(
+          'Failed to save window position on move: $e', 'WindowListener',);
     }
   }
 }
@@ -220,7 +226,7 @@ class AppWindowListener extends WindowListener {
 /// 当新实例启动时，已存在的实例会收到此消息
 void setupWindowsWakeUpChannel() {
   if (!Platform.isWindows) return;
-  
+
   const channel = MethodChannel('com.nailauncher/window_control');
   channel.setMethodCallHandler((call) async {
     if (call.method == 'wakeUp') {
@@ -284,30 +290,30 @@ void main() async {
   // ===== V2 架构：数据库初始化和恢复（在 runApp 之前完成）====
   AppLogger.i('等待数据库初始化...', 'Main');
   final container = ProviderContainer();
-  
+
   try {
     // V2 架构：DatabaseManagerV2 自动处理热重启检测
     final manager = await DatabaseManager.initialize();
     await manager.initialized;
-    
+
     // 检查数据完整性
     final stats = await manager.getStatistics();
     final tableStats = stats['tables'] as Map<String, int>? ?? {};
     final translationCount = tableStats['translations'] ?? 0;
     final cooccurrenceCount = tableStats['cooccurrences'] ?? 0;
-    
+
     AppLogger.i(
       '数据表状态: translations=$translationCount, cooccurrences=$cooccurrenceCount',
       'Main',
     );
-    
+
     // 如果需要恢复（首次启动或数据缺失）
     if (translationCount == 0 || cooccurrenceCount == 0) {
       AppLogger.w('核心数据缺失，执行恢复..', 'Main');
       await manager.recover();
       AppLogger.i('数据恢复完成', 'Main');
     }
-    
+
     AppLogger.i('数据库初始化完成', 'Main');
   } catch (e, stack) {
     AppLogger.e('数据库初始化失败', e, stack, 'Main');
@@ -325,6 +331,8 @@ void main() async {
   await Hive.openBox(StorageKeys.searchIndexBox);
   // 统计数据缓存 Box
   await Hive.openBox(StorageKeys.statisticsCacheBox);
+  // 收藏集合 Box
+  await Hive.openBox(StorageKeys.collectionsBox);
   // 队列相关 Box（预加载以避免首次打开队列管理页面时的延迟）
   await Hive.openBox<String>(StorageKeys.replicationQueueBox);
   await Hive.openBox<String>(StorageKeys.queueExecutionStateBox);
@@ -342,18 +350,40 @@ void main() async {
     }
   });
 
-  // 初始化缩略图生成队列服务
-  final thumbnailService = ThumbnailCacheService();
-  await thumbnailService.init();
-  ThumbnailGenerationQueue.instance.init(thumbnailService);
-  AppLogger.i('缩略图生成队列初始化完成', 'Main');
+  // 初始化统一缩略图服务
+  final thumbnailService = ThumbnailService.instance;
+  await thumbnailService.initialize();
+  AppLogger.i('缩略图服务初始化完成', 'Main');
+
+  // 【修复】初始化收藏集合仓库
+  await CollectionRepository.instance.initialize();
+  AppLogger.i('收藏集合仓库初始化完成', 'Main');
+
+  // 【修复】初始化扫描状态管理器（确保检查点功能正常工作）
+  await ScanStateManager.instance.initialize();
+  AppLogger.i('扫描状态管理器初始化完成', 'Main');
+
+  // 【修复】初始化 Isolate 元数据服务（详情页快速解析）
+  await IsolateMetadataService.instance.initialize();
+  AppLogger.i('Isolate 元数据服务初始化完成', 'Main');
+
+  // 【修复】初始化搜索索引服务（全文搜索功能）
+  final searchIndexService = SearchIndexService();
+  await searchIndexService.init();
+  AppLogger.i('搜索索引服务初始化完成', 'Main');
+
+  // 【修复】初始化 Tag 缓存服务
+  final tagCacheService = TagCacheService();
+  await tagCacheService.init();
+  AppLogger.i('Tag 缓存服务初始化完成', 'Main');
 
   // 【修复】启动时清理嵌套缩略图（修复递归生成bug遗留问题）
   Future.microtask(() async {
     try {
       final rootPath = await GalleryFolderRepository.instance.getRootPath();
       if (rootPath != null) {
-        final cleanedCount = await thumbnailService.cleanupNestedThumbs(rootPath);
+        final cleanedCount =
+            await thumbnailService.cleanupNestedThumbs(rootPath);
         if (cleanedCount > 0) {
           AppLogger.i('启动清理完成: 删除了 $cleanedCount 个嵌套缩略图目录', 'Main');
         }
@@ -363,40 +393,7 @@ void main() async {
     }
   });
 
-  // 后台全量扫描元数据（不阻塞启动，用于搜索功能）
-  Future.microtask(() async {
-    try {
-      final rootPath = await GalleryFolderRepository.instance.getRootPath();
-      if (rootPath == null) {
-        AppLogger.w('未设置图库路径，跳过后台扫描', 'Main');
-        return;
-      }
-
-      // 步骤1：增量扫描（检测新文件和修改的文件）
-      AppLogger.i('启动后台元数据扫描: $rootPath', 'Main');
-      final scanService = GalleryScanService.instance;
-      final result = await scanService.incrementalScan(Directory(rootPath));
-      AppLogger.i(
-        '增量扫描完成: ${result.filesAdded} 新增, ${result.filesUpdated} 更新, ${result.filesSkipped} 跳过',
-        'Main',
-      );
-
-      // 步骤2：查漏补缺（为缺失元数据的图片重新解析）
-      // 这对从旧数据库迁移的图片特别有用
-      AppLogger.i('开始查漏补缺：检查缺失元数据的图片', 'Main');
-      final fillResult = await scanService.fillMissingMetadata(batchSize: 50);
-      if (fillResult.filesUpdated > 0 || fillResult.filesAdded > 0) {
-        AppLogger.i(
-          '查漏补缺完成: ${fillResult.filesUpdated} 张图片已补充元数据',
-          'Main',
-        );
-      } else {
-        AppLogger.i('所有图片元数据完整，无需补充', 'Main');
-      }
-    } catch (e) {
-      AppLogger.w('后台元数据扫描失败: $e', 'Main');
-    }
-  });
+  // 扫描已由 UnifiedGalleryService 处理，在打开本地画廊时自动执行
 
   // 初始化快捷键存储
   final shortcutStorage = ShortcutStorage();
@@ -433,7 +430,8 @@ void main() async {
   Future.delayed(const Duration(seconds: 5), () async {
     try {
       AppLogger.i('Checking artist tags sync...', 'Main');
-      final notifier = container.read(danbooruTagsCacheNotifierProvider.notifier);
+      final notifier =
+          container.read(danbooruTagsCacheNotifierProvider.notifier);
       await notifier.checkAndSyncArtists();
     } catch (e) {
       AppLogger.w('Artist tags auto-sync failed: $e', 'Main');
@@ -444,7 +442,7 @@ void main() async {
   // 桌面端窗口配置
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
-    
+
     // 设置 Windows 唤醒消息处理（单实例唤醒）
     if (Platform.isWindows) {
       setupWindowsWakeUpChannel();

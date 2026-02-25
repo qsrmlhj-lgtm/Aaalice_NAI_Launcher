@@ -10,7 +10,7 @@ import 'package:nai_launcher/l10n/app_localizations.dart';
 
 import '../../../../core/utils/app_logger.dart';
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../core/utils/nai_metadata_parser.dart';
+import '../../../../data/services/metadata/unified_metadata_parser.dart';
 import '../../../../data/models/character/character_prompt.dart';
 import '../../../../data/repositories/gallery_folder_repository.dart';
 import '../../../../data/services/alias_resolver_service.dart';
@@ -666,7 +666,7 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
         'Comment': jsonEncode(commentJson),
       };
 
-      final embeddedBytes = await NaiMetadataParser.embedMetadata(
+      final embeddedBytes = await UnifiedMetadataParser.embedMetadata(
         imageBytes,
         jsonEncode(metadata),
       );

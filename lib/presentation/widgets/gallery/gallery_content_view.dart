@@ -2,18 +2,18 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../data/models/gallery/local_image_record.dart';
 import '../../providers/local_gallery_provider.dart';
 import '../../providers/selection_mode_provider.dart';
 import '../../widgets/grouped_grid_view.dart';
+import '../../utils/image_detail_opener.dart';
 import 'local_image_card_3d.dart';
 import '../common/image_detail/image_detail_viewer.dart';
 import '../common/image_detail/image_detail_data.dart';
 import '../common/shimmer_skeleton.dart';
-import '../../utils/image_detail_opener.dart';
-import 'virtual_gallery_grid.dart';
+import 'gallery_grid.dart';
 import 'gallery_state_views.dart';
 
 /// 画廊项目构建函数类型
@@ -30,6 +30,7 @@ class GalleryItemConfig {
   final bool isSelected;
   final double itemWidth;
   final double aspectRatio;
+  final bool isVisible;
   final VoidCallback? onTap;
   final VoidCallback? onSelectionToggle;
   final VoidCallback? onLongPress;
@@ -39,6 +40,7 @@ class GalleryItemConfig {
     required this.isSelected,
     required this.itemWidth,
     required this.aspectRatio,
+    this.isVisible = false,
     this.onTap,
     this.onSelectionToggle,
     this.onLongPress,
@@ -72,7 +74,6 @@ class GenericGalleryContentView<T> extends ConsumerStatefulWidget {
   final SelectionState selectionState;
   final GalleryItemBuilder<T> itemBuilder;
   final String Function(T item) idExtractor;
-  final Future<double> Function(T item)? aspectRatioExtractor;
   final void Function(T item, int index)? onTap;
   final void Function(T item, int index)? onDoubleTap;
   final void Function(T item, int index)? onLongPress;
@@ -100,7 +101,6 @@ class GenericGalleryContentView<T> extends ConsumerStatefulWidget {
     required this.selectionState,
     required this.itemBuilder,
     required this.idExtractor,
-    this.aspectRatioExtractor,
     this.onTap,
     this.onDoubleTap,
     this.onLongPress,
@@ -137,43 +137,56 @@ class Gallery3DViewConfig<T> {
 }
 
 class _GenericGalleryContentViewState<T>
-    extends ConsumerState<GenericGalleryContentView<T>> {
-  /// Aspect ratio cache
-  /// 宽高比缓存
+    extends ConsumerState<GenericGalleryContentView<T>>
+    with TickerProviderStateMixin {
   final Map<String, double> _aspectRatioCache = {};
-
-  /// 延迟骨架屏显示 - 用于避免短暂加载时显示骨架屏
   bool _showSkeleton = false;
+  final Set<int> _visibleIndices = {};
+  late final AnimationController _emptyStateController;
+  late final Animation<double> _emptyStateAnimation;
 
   @override
   void initState() {
     super.initState();
     _initSkeletonDelay();
+    _initEmptyStateAnimation();
   }
 
   @override
   void didUpdateWidget(GenericGalleryContentView<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 当加载状态从 true 变为 false 时，重置骨架屏状态
     if (oldWidget.state.isPageLoading && !widget.state.isPageLoading) {
       _showSkeleton = false;
     }
-    // 当加载状态从 false 变为 true 时，重新启动延迟
     if (!oldWidget.state.isPageLoading && widget.state.isPageLoading) {
       _initSkeletonDelay();
     }
   }
 
-  /// 初始化骨架屏延迟显示
+  @override
+  void dispose() {
+    _emptyStateController.dispose();
+    super.dispose();
+  }
+
+  void _initEmptyStateAnimation() {
+    _emptyStateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _emptyStateAnimation = CurvedAnimation(
+      parent: _emptyStateController,
+      curve: Curves.easeOut,
+    );
+    _emptyStateController.forward();
+  }
+
   void _initSkeletonDelay() {
     _showSkeleton = false;
     if (widget.state.isPageLoading) {
-      // 延迟 300ms 后才显示骨架屏，避免短暂加载时闪烁
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted && widget.state.isPageLoading) {
-          setState(() {
-            _showSkeleton = true;
-          });
+          setState(() => _showSkeleton = true);
         }
       });
     }
@@ -183,105 +196,127 @@ class _GenericGalleryContentViewState<T>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Grouped view
     if (widget.state.isGroupedView) {
       return _buildGroupedView(widget.state, widget.selectionState, theme);
     }
 
-    // Check for filtered empty state
     if (widget.state.filteredFiles.isEmpty && widget.state.hasFilters) {
-      return GalleryNoResultsView(
-        onClearFilters: widget.onClearFilters,
-        title: widget.emptyTitle,
-        subtitle: widget.emptySubtitle,
-        icon: widget.emptyIcon,
+      return _buildAnimatedEmptyState(
+        GalleryNoResultsView(
+          onClearFilters: widget.onClearFilters,
+          title: widget.emptyTitle,
+          subtitle: widget.emptySubtitle,
+          icon: widget.emptyIcon,
+        ),
       );
     }
 
-    // Loading skeleton - 延迟显示，避免短暂加载时闪烁
     if (widget.state.isPageLoading && _showSkeleton) {
       return _buildLoadingSkeleton();
     }
 
-    // 3D card view mode
-    if (widget.use3DCardView) {
-      return _build3DCardView(widget.state, widget.selectionState);
-    }
-
-    // Classic masonry view
-    return _buildMasonryView(widget.state, widget.selectionState);
+    return _buildGalleryGrid(widget.state, widget.selectionState);
   }
 
-  /// Build grouped view
-  /// 构建分组视图
+  Widget _buildAnimatedEmptyState(Widget child) {
+    return FadeTransition(
+      opacity: _emptyStateAnimation,
+      child: AnimatedBuilder(
+        animation: _emptyStateAnimation,
+        builder: (context, child) {
+          return Transform.translate(
+            offset: Offset(0, 20 * (1 - _emptyStateAnimation.value)),
+            child: child,
+          );
+        },
+        child: child,
+      ),
+    );
+  }
+
   Widget _buildGroupedView(
     GalleryState<T> state,
     SelectionState selectionState,
     ThemeData theme,
   ) {
-    // Loading skeleton in grouped view
     if (state.isGroupedLoading) {
-      return const GalleryGroupedLoadingView();
+      return _buildGroupedLoadingSkeleton();
     }
 
-    // No results in grouped view
     if (state.groupedImages.isEmpty) {
-      return GalleryNoResultsView(
-        onClearFilters: widget.onClearFilters,
+      return _buildAnimatedEmptyState(
+        GalleryNoResultsView(onClearFilters: widget.onClearFilters),
       );
     }
 
-    // Show grouped view - 注意：分组视图仍然使用 LocalImageRecord
-    // 因为 GroupedGridView 目前只支持 LocalImageRecord
     return GroupedGridView(
       key: widget.groupedGridViewKey,
       images: state.groupedImages,
       columns: widget.columns,
       itemWidth: widget.itemWidth,
-      selectionMode: selectionState.isActive,
-      buildSelected: (path) => selectionState.selectedIds.contains(path),
       buildCard: (record) {
         final isSelected = selectionState.selectedIds.contains(record.path);
+        final aspectRatio = _getCachedAspectRatio(record);
+        final index = state.groupedImages.indexOf(record);
+        final isVisible = _visibleIndices.contains(index);
 
-        // Get or calculate aspect ratio for grouped view
-        final double aspectRatio = _aspectRatioCache[record.path] ?? 1.0;
+        return VisibilityDetector(
+          key: ValueKey('grouped_visibility_${record.path}_$index'),
+          onVisibilityChanged: (visibilityInfo) {
+            final isNowVisible = visibilityInfo.visibleFraction > 0.05;
+            final wasVisible = _visibleIndices.contains(index);
 
-        // Calculate and cache aspect ratio asynchronously if not cached
-        if (!_aspectRatioCache.containsKey(record.path)) {
-          _calculateAspectRatioForRecord(record).then((value) {
-            if (mounted && value != aspectRatio) {
+            if (isNowVisible != wasVisible && mounted) {
               setState(() {
-                _aspectRatioCache[record.path] = value;
+                if (isNowVisible) {
+                  _visibleIndices.add(index);
+                } else {
+                  _visibleIndices.remove(index);
+                }
               });
             }
-          });
-        }
-
-        // 使用 LocalImageCard3D 构建分组视图的卡片
-        return LocalImageCard3D(
-          record: record,
-          width: widget.itemWidth,
-          height: widget.itemWidth / aspectRatio,
-          isSelected: isSelected,
-          onTap: () {
-            if (selectionState.isActive) {
-              widget.onSelectionToggle?.call(record as T);
-            }
           },
-          onLongPress: () {
-            if (!selectionState.isActive) {
-              widget.onEnterSelection?.call(record as T);
-            }
-          },
-          onFavoriteToggle: () {
-            widget.onFavoriteToggle?.call(record as T);
-          },
-          onSendToHome: widget.onSendToHome != null
-              ? () => widget.onSendToHome!(record)
-              : null,
+          child: LocalImageCard3D(
+            record: record,
+            width: widget.itemWidth,
+            height: widget.itemWidth / aspectRatio,
+            isSelected: isSelected,
+            isVisible: isVisible,
+            priority: isVisible ? 1 : 5,
+            onTap: () {
+              if (selectionState.isActive) {
+                widget.onSelectionToggle?.call(record as T);
+              }
+            },
+            onLongPress: () {
+              if (!selectionState.isActive) {
+                widget.onEnterSelection?.call(record as T);
+              }
+            },
+            onFavoriteToggle: () {
+              widget.onFavoriteToggle?.call(record as T);
+            },
+            onSendToHome: widget.onSendToHome != null
+                ? () => widget.onSendToHome!(record)
+                : null,
+          ),
         );
       },
     );
+  }
+
+  double _getCachedAspectRatio(LocalImageRecord record) {
+    if (_aspectRatioCache.containsKey(record.path)) {
+      return _aspectRatioCache[record.path]!;
+    }
+
+    _calculateAspectRatioForRecord(record).then((value) {
+      if (mounted && value != _aspectRatioCache[record.path]) {
+        setState(() => _aspectRatioCache[record.path] = value);
+      }
+    });
+
+    return 1.0;
   }
 
   Future<double> _calculateAspectRatioForRecord(LocalImageRecord record) async {
@@ -303,29 +338,36 @@ class _GenericGalleryContentViewState<T>
     return 1.0;
   }
 
-  Future<double> _calculateAspectRatio(T item) async {
-    return await widget.aspectRatioExtractor?.call(item) ?? 1.0;
-  }
-
   Widget _buildLoadingSkeleton() {
-    return GridView.builder(
-      key: const PageStorageKey<String>('gallery_grid_loading'),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: widget.columns,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-      ),
-      itemCount: widget.state.currentImages.isNotEmpty
-          ? widget.state.currentImages.length
-          : 20,
-      itemBuilder: (_, __) => const Card(
-        clipBehavior: Clip.antiAlias,
-        child: ShimmerSkeleton(height: 250),
+    return AnimatedOpacity(
+      opacity: _showSkeleton ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 200),
+      child: GridView.builder(
+        key: const PageStorageKey<String>('gallery_grid_loading'),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: widget.columns,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+        ),
+        itemCount: widget.state.currentImages.isNotEmpty
+            ? widget.state.currentImages.length
+            : 20,
+        itemBuilder: (_, __) => const Card(
+          clipBehavior: Clip.antiAlias,
+          child: ShimmerSkeleton(height: 250),
+        ),
       ),
     );
   }
 
-  Widget _build3DCardView(GalleryState<T> state, SelectionState selectionState) {
+  Widget _buildGroupedLoadingSkeleton() {
+    return const GalleryGroupedLoadingView();
+  }
+
+  Widget _buildGalleryGrid(
+    GalleryState<T> state,
+    SelectionState selectionState,
+  ) {
     final selectedIndices = <int>{};
     for (int i = 0; i < state.currentImages.length; i++) {
       if (selectionState.selectedIds.contains(
@@ -335,10 +377,8 @@ class _GenericGalleryContentViewState<T>
       }
     }
 
-    return VirtualGalleryGrid(
-      key: PageStorageKey<String>(
-        'gallery_3d_grid_${state.currentPage}_${selectionState.isActive}',
-      ),
+    return GalleryGrid(
+      key: const PageStorageKey<String>('gallery_grid'),
       images: _convertToLocalImageRecords(state.currentImages),
       columns: widget.columns,
       spacing: 12,
@@ -346,18 +386,16 @@ class _GenericGalleryContentViewState<T>
       selectedIndices: selectionState.isActive ? selectedIndices : null,
       onTap: (record, index) {
         if (selectionState.isActive) {
-          // Selection mode: toggle selection
           widget.onSelectionToggle?.call(state.currentImages[index]);
-        } else {
-          // Normal mode: custom tap or default behavior
-          if (widget.onTap != null) {
-            widget.onTap!(state.currentImages[index], index);
-          } else if (widget.view3DConfig != null) {
-            widget.view3DConfig!.showDetailViewer(
-              widget.view3DConfig!.images,
-              index,
-            );
-          }
+          return;
+        }
+        if (widget.onTap != null) {
+          widget.onTap!(state.currentImages[index], index);
+        } else if (widget.view3DConfig != null) {
+          widget.view3DConfig!.showDetailViewer(
+            widget.view3DConfig!.images,
+            index,
+          );
         }
       },
       onDoubleTap: (record, index) {
@@ -387,78 +425,20 @@ class _GenericGalleryContentViewState<T>
         widget.onFavoriteToggle?.call(state.currentImages[index]);
       },
       onSendToHome: widget.onSendToHome != null
-          ? (record, index) {
-              widget.onSendToHome!(record);
-            }
+          ? (record, index) => widget.onSendToHome!(record)
           : null,
     );
   }
 
   List<LocalImageRecord> _convertToLocalImageRecords(List<T> items) {
-    // 如果 T 已经是 LocalImageRecord，直接返回
-    if (T == LocalImageRecord || items is List<LocalImageRecord>) {
-      return items as List<LocalImageRecord>;
-    }
-    return <LocalImageRecord>[];
-  }
-
-  Widget _buildMasonryView(GalleryState<T> state, SelectionState selectionState) {
-    return MasonryGridView.count(
-      key: const PageStorageKey<String>('gallery_grid'),
-      crossAxisCount: widget.columns,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      padding: const EdgeInsets.all(16),
-      cacheExtent: 1000,
-      itemCount: state.currentImages.length,
-      itemBuilder: (_, i) {
-        final item = state.currentImages[i];
-        final itemId = widget.idExtractor(item);
-        final isSelected = selectionState.selectedIds.contains(itemId);
-        final aspectRatio = _aspectRatioCache[itemId] ?? 1.0;
-
-        if (!_aspectRatioCache.containsKey(itemId)) {
-          _calculateAspectRatio(item).then((value) {
-            if (mounted && value != aspectRatio) {
-              setState(() => _aspectRatioCache[itemId] = value);
-            }
-          });
-        }
-
-        return widget.itemBuilder(
-          context,
-          item,
-          i,
-          GalleryItemConfig(
-            selectionMode: selectionState.isActive,
-            isSelected: isSelected,
-            itemWidth: widget.itemWidth,
-            aspectRatio: aspectRatio,
-            onTap: () {
-              if (widget.view3DConfig != null) {
-                widget.view3DConfig!.showDetailViewer(
-                  widget.view3DConfig!.images,
-                  i,
-                );
-              } else {
-                widget.onTap?.call(item, i);
-              }
-            },
-            onSelectionToggle: () => widget.onSelectionToggle?.call(item),
-            onLongPress: !selectionState.isActive
-                ? () => widget.onEnterSelection?.call(item)
-                : null,
-          ),
-        );
-      },
-    );
+    // ignore: avoid_as
+    return items as List<LocalImageRecord>;
   }
 }
 
-/// ============================================
-/// 向后兼容的 LocalImageRecord 专用版本
-/// Backward-compatible LocalImageRecord version
-/// ============================================
+// ============================================
+// 向后兼容的 LocalImageRecord 专用版本
+// ============================================
 
 /// 本地画廊状态适配器
 class _LocalGalleryStateAdapter implements GalleryState<LocalImageRecord> {
@@ -489,7 +469,7 @@ class _LocalGalleryStateAdapter implements GalleryState<LocalImageRecord> {
 
   @override
   List<LocalImageRecord> get filteredFiles =>
-      _state.filteredFiles.cast<LocalImageRecord>();
+      _state.hasFilters ? _state.currentImages : const [];
 }
 
 /// 本地选择状态适配器
@@ -561,23 +541,6 @@ class LocalGalleryContentView extends ConsumerWidget {
       );
     }
 
-    Future<double> getAspectRatio(LocalImageRecord record) async {
-      final metadata = record.metadata;
-      if (metadata?.width != null && metadata?.height != null) {
-        if (metadata!.width! > 0 && metadata.height! > 0) {
-          return metadata.width! / metadata.height!;
-        }
-      }
-      try {
-        final buffer = await ui.ImmutableBuffer.fromFilePath(record.path);
-        final descriptor = await ui.ImageDescriptor.encoded(buffer);
-        if (descriptor.width > 0 && descriptor.height > 0) {
-          return descriptor.width / descriptor.height;
-        }
-      } catch (_) {}
-      return 1.0;
-    }
-
     return GenericGalleryContentView<LocalImageRecord>(
       use3DCardView: use3DCardView,
       columns: columns,
@@ -585,12 +548,13 @@ class LocalGalleryContentView extends ConsumerWidget {
       state: _LocalGalleryStateAdapter(state),
       selectionState: _LocalSelectionStateAdapter(selectionState),
       idExtractor: (record) => record.path,
-      aspectRatioExtractor: getAspectRatio,
       itemBuilder: (context, record, index, config) => LocalImageCard3D(
         record: record,
         width: config.itemWidth,
         height: config.itemWidth / config.aspectRatio,
         isSelected: config.isSelected,
+        isVisible: config.isVisible,
+        priority: config.isVisible ? 1 : 5,
         onTap: config.selectionMode ? config.onSelectionToggle : config.onTap,
         onLongPress: config.onLongPress,
         onFavoriteToggle: () => ref
@@ -622,5 +586,5 @@ class LocalGalleryContentView extends ConsumerWidget {
   }
 }
 
-/// 向后兼容的类型别名
+// 向后兼容的类型别名
 typedef GalleryContentView = LocalGalleryContentView;

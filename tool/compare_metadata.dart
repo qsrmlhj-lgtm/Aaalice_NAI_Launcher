@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:png_chunks_extract/png_chunks_extract.dart' as png_extract;
+import 'package:image/image.dart' as img;
 
 // 我们应用支持的字段（来自 NaiImageMetadata）
 final Set<String> ourSupportedFields = {
@@ -226,98 +226,43 @@ void main(List<String> args) async {
   print('');
 }
 
+/// 从 PNG chunks 提取元数据（使用 image 包）
 Future<Map<String, dynamic>?> _extractFromChunks(Uint8List bytes) async {
   try {
-    final chunks = png_extract.extractChunks(bytes);
+    // 使用 image 包的 PngDecoder - 纯 Dart 实现
+    final decoder = img.PngDecoder();
+    final info = decoder.startDecode(bytes);
 
-    for (final chunk in chunks) {
-      final name = chunk['name'] as String?;
-      if (name == null) continue;
+    if (info == null) {
+      return null;
+    }
 
-      if (name == 'tEXt' || name == 'zTXt' || name == 'iTXt') {
-        final data = chunk['data'] as Uint8List?;
-        if (data == null) continue;
+    // 从 PngInfo 获取 textData
+    final pngInfo = info as img.PngInfo;
+    final textData = pngInfo.textData;
+    if (textData.isEmpty) {
+      return null;
+    }
 
-        final textData = _parseTextChunk(data, name);
-        if (textData != null) {
-          try {
-            final json = jsonDecode(textData) as Map<String, dynamic>;
-            if (json.containsKey('prompt') || json.containsKey('comment')) {
-              return json;
-            }
-          } catch (e) {
-            // 不是 JSON
+    // 查找 Comment 或 parameters
+    for (final keyword in ['Comment', 'parameters']) {
+      final text = textData[keyword];
+      if (text != null) {
+        try {
+          final json = jsonDecode(text) as Map<String, dynamic>;
+          // 检查是否是 NAI 元数据
+          if (json.containsKey('prompt') ||
+              json.containsKey('comment') ||
+              json.containsKey('Comment')) {
+            return json;
           }
+        } catch (e) {
+          // 不是 JSON，忽略
         }
       }
     }
+
     return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-String? _parseTextChunk(Uint8List data, String chunkType) {
-  try {
-    if (chunkType == 'tEXt') {
-      final nullIndex = data.indexOf(0);
-      if (nullIndex < 0) return null;
-      return latin1.decode(data.sublist(nullIndex + 1));
-    } else if (chunkType == 'zTXt') {
-      final firstNull = data.indexOf(0);
-      if (firstNull < 0 || firstNull + 1 >= data.length) return null;
-      final compressionMethod = data[firstNull + 1];
-      if (compressionMethod != 0) return null;
-      final compressedData = data.sublist(firstNull + 2);
-      return _inflateZlib(compressedData);
-    } else if (chunkType == 'iTXt') {
-      return _parseITXtChunk(data);
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-String? _parseITXtChunk(Uint8List data) {
-  try {
-    var offset = 0;
-    final keywordEnd = data.indexOf(0, offset);
-    if (keywordEnd < 0) return null;
-    offset = keywordEnd + 1;
-
-    if (offset >= data.length) return null;
-    final compressed = data[offset++];
-    if (offset >= data.length) return null;
-    final method = data[offset++];
-
-    final langEnd = data.indexOf(0, offset);
-    if (langEnd < 0) return null;
-    offset = langEnd + 1;
-
-    final transEnd = data.indexOf(0, offset);
-    if (transEnd < 0) return null;
-    offset = transEnd + 1;
-
-    if (offset >= data.length) return null;
-    final textData = data.sublist(offset);
-
-    if (compressed == 1) {
-      if (method != 0) return null;
-      return _inflateZlib(textData);
-    } else {
-      return utf8.decode(textData);
-    }
-  } catch (e) {
-    return null;
-  }
-}
-
-String? _inflateZlib(Uint8List data) {
-  try {
-    final codec = ZLibCodec();
-    final inflated = codec.decode(data);
-    return utf8.decode(inflated);
   } catch (e) {
     return null;
   }

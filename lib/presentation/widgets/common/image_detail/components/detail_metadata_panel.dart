@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
+import '../../../../../core/utils/app_logger.dart';
 import '../../../../../core/utils/localization_extension.dart';
 import '../../../../../data/models/gallery/nai_image_metadata.dart';
 import '../../add_to_library_dialog.dart';
@@ -77,30 +78,50 @@ class _DetailMetadataPanelState extends State<DetailMetadataPanel> {
   /// - [GeneratedImageDetailData]: 从内存字节解析（未保存的图像）
   void _startMetadataLoading() {
     final image = widget.currentImage;
-    if (image == null) return;
+    if (image == null) {
+      AppLogger.w('[MetadataFlow] _startMetadataLoading: image is null', 'DetailMetadataPanel');
+      return;
+    }
+
+    AppLogger.i('[MetadataFlow] _startMetadataLoading: identifier=${image.identifier}, type=${image.runtimeType}', 'DetailMetadataPanel');
 
     // 1. 先检查同步可用的元数据
     final syncMetadata = image.metadata;
+    AppLogger.d('[MetadataFlow] syncMetadata check: hasData=${syncMetadata?.hasData}, has prompt="${syncMetadata?.fullPrompt.isNotEmpty == true}"', 'DetailMetadataPanel');
+
     if (syncMetadata != null && syncMetadata.hasData) {
+      AppLogger.i('[MetadataFlow] Using sync metadata (cache hit)', 'DetailMetadataPanel');
       _loadedMetadata = syncMetadata;
       _metadataFuture = null;
       return;
     }
 
     // 2. 异步加载元数据（支持所有数据源）
+    AppLogger.i('[MetadataFlow] Cache miss, starting async load...', 'DetailMetadataPanel');
     Future<NaiImageMetadata?>? future;
     if (image is FileImageDetailData) {
+      AppLogger.d('[MetadataFlow] Using FileImageDetailData.getMetadataAsync()', 'DetailMetadataPanel');
       future = image.getMetadataAsync();
     } else if (image is GeneratedImageDetailData) {
+      AppLogger.d('[MetadataFlow] Using GeneratedImageDetailData.getMetadataAsync()', 'DetailMetadataPanel');
       future = image.getMetadataAsync();
+    } else if (image is LocalImageDetailData) {
+      AppLogger.d('[MetadataFlow] Using LocalImageDetailData.getMetadataAsync()', 'DetailMetadataPanel');
+      future = image.getMetadataAsync();
+    } else {
+      AppLogger.w('[MetadataFlow] Unknown image type: ${image.runtimeType}', 'DetailMetadataPanel');
     }
 
     if (future != null) {
       _metadataFuture = future.then((metadata) {
+        AppLogger.i('[MetadataFlow] Async load completed: hasData=${metadata?.hasData}, prompt length=${metadata?.fullPrompt.length ?? 0}', 'DetailMetadataPanel');
         if (mounted) {
           setState(() => _loadedMetadata = metadata);
         }
         return metadata;
+      }).catchError((e, stack) {
+        AppLogger.e('[MetadataFlow] Async load failed', e, stack, 'DetailMetadataPanel');
+        throw e;
       });
     } else {
       _metadataFuture = null;

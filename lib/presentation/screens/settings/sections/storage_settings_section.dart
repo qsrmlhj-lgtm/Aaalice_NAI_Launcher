@@ -13,7 +13,7 @@ import '../../../../core/utils/vibe_library_path_helper.dart';
 import '../../../providers/image_save_settings_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../widgets/cache_statistics_tile.dart';
-import '../widgets/clear_cache_button.dart';
+import '../widgets/gallery_cache_actions.dart';
 import '../widgets/settings_card.dart';
 
 /// 存储设置板块
@@ -134,8 +134,8 @@ class _StorageSettingsSectionState
           // 缓存统计
           const CacheStatisticsTile(),
           const Divider(height: 32),
-          // 清除画廊缓存按钮
-          const ClearGalleryCacheTile(),
+          // 画廊缓存操作（清除缓存 + 重建索引）
+          const GalleryCacheActions(),
         ],
       ),
     );

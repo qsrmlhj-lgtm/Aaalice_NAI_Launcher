@@ -9,7 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/shortcuts/default_shortcuts.dart';
 import '../../../core/utils/app_logger.dart';
-import '../../../core/utils/nai_metadata_parser.dart';
+import '../../../data/services/metadata/unified_metadata_parser.dart';
 import '../../../data/services/image_metadata_service.dart';
 import '../../../data/models/image/image_params.dart';
 import '../../../data/models/queue/replication_task.dart';
@@ -962,7 +962,7 @@ class _GenerationControlsState extends ConsumerState<GenerationControls> {
         'Comment': jsonEncode(commentJson),
       };
 
-      final embeddedBytes = await NaiMetadataParser.embedMetadata(
+      final embeddedBytes = await UnifiedMetadataParser.embedMetadata(
         image.bytes,
         jsonEncode(metadata),
       );

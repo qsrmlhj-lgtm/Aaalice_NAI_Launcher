@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
+import '../../../core/network/dio_client.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../models/tag/tag_suggestion.dart';
 
 part 'nai_tag_suggestion_api_service.g.dart';
@@ -22,28 +24,39 @@ class NAITagSuggestionApiService {
   }) async {
     if (input.trim().length < 2) return [];
 
-    final queryParams = <String, dynamic>{
-      'prompt': input.trim(),
-      if (model != null) 'model': model,
-    };
+    try {
+      final queryParams = <String, dynamic>{
+        'prompt': input.trim(),
+        if (model != null) 'model': model,
+      };
 
-    final response = await _dio.get(
-      '${ApiConstants.imageBaseUrl}${ApiConstants.suggestTagsEndpoint}',
-      queryParameters: queryParams,
-      options: Options(
-        receiveTimeout: _timeout,
-        sendTimeout: _timeout,
-      ),
-    );
+      final response = await _dio.get(
+        '${ApiConstants.imageBaseUrl}${ApiConstants.suggestTagsEndpoint}',
+        queryParameters: queryParams,
+        options: Options(
+          receiveTimeout: _timeout,
+          sendTimeout: _timeout,
+        ),
+      );
 
-    final data = response.data;
-    if (data is Map<String, dynamic> && data.containsKey('tags')) {
-      return (data['tags'] as List)
-          .map((t) => TagSuggestion.fromJson(t as Map<String, dynamic>))
-          .toList();
+      final data = response.data;
+      if (data is Map<String, dynamic> && data.containsKey('tags')) {
+        return (data['tags'] as List)
+            .map((t) => TagSuggestion.fromJson(t as Map<String, dynamic>))
+            .toList();
+      }
+
+      return [];
+    } on DioException catch (e) {
+      AppLogger.w(
+        'Tag suggestion request failed: ${e.message}',
+        'NAITagSuggestion',
+      );
+      return [];
+    } catch (e, stack) {
+      AppLogger.e('Tag suggestion error', e, stack, 'NAITagSuggestion');
+      return [];
     }
-
-    return [];
   }
 
   /// 根据当前提示词获取下一个标签建议
@@ -64,13 +77,6 @@ class NAITagSuggestionApiService {
 /// NAITagSuggestionApiService Provider
 @Riverpod(keepAlive: true)
 NAITagSuggestionApiService naiTagSuggestionApiService(Ref ref) {
-  final dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 5),
-      sendTimeout: const Duration(seconds: 5),
-    ),
-  );
-
+  final dio = ref.watch(dioClientProvider);
   return NAITagSuggestionApiService(dio);
 }

@@ -14,7 +14,20 @@ class CollectionRepository {
   CollectionRepository._();
   static final CollectionRepository instance = CollectionRepository._();
 
-  Box get _box => Hive.box(StorageKeys.collectionsBox);
+  Box? _box;
+  
+  Box get _safeBox {
+    _box ??= Hive.box(StorageKeys.collectionsBox);
+    return _box!;
+  }
+  
+  /// 初始化仓库（确保 Hive box 已打开）
+  Future<void> initialize() async {
+    if (!Hive.isBoxOpen(StorageKeys.collectionsBox)) {
+      await Hive.openBox(StorageKeys.collectionsBox);
+    }
+    _box = Hive.box(StorageKeys.collectionsBox);
+  }
 
   /// 创建新集合
   Future<ImageCollection> createCollection(String name, {String? description}) async {
@@ -26,7 +39,7 @@ class CollectionRepository {
       createdAt: DateTime.now(),
     );
 
-    await _box.put(collection.id, collection.toJson());
+    await _safeBox.put(collection.id, collection.toJson());
     AppLogger.i('Created collection: $name (${collection.imageCount} images)', 'CollectionRepo');
 
     return collection;
@@ -35,7 +48,7 @@ class CollectionRepository {
   /// 获取指定集合
   ImageCollection? getCollection(String id) {
     try {
-      final data = _box.get(id);
+      final data = _safeBox.get(id);
       if (data == null) return null;
       return ImageCollection.fromJson(Map<String, dynamic>.from(data as Map));
     } catch (e) {
@@ -47,7 +60,7 @@ class CollectionRepository {
   /// 获取所有集合
   List<ImageCollection> getAllCollections() {
     try {
-      final collections = _box.values
+      final collections = _safeBox.values
           .map((data) => ImageCollection.fromJson(Map<String, dynamic>.from(data as Map)))
           .toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -63,7 +76,7 @@ class CollectionRepository {
   /// 更新集合
   Future<bool> updateCollection(ImageCollection collection) async {
     try {
-      await _box.put(collection.id, collection.toJson());
+      await _safeBox.put(collection.id, collection.toJson());
       AppLogger.i('Updated collection: ${collection.name}', 'CollectionRepo');
       return true;
     } catch (e) {
@@ -75,7 +88,7 @@ class CollectionRepository {
   /// 删除集合
   Future<bool> deleteCollection(String id) async {
     try {
-      await _box.delete(id);
+      await _safeBox.delete(id);
       AppLogger.i('Deleted collection: $id', 'CollectionRepo');
       return true;
     } catch (e) {
@@ -150,7 +163,7 @@ class CollectionRepository {
 
   /// 清空所有集合
   Future<void> clearAllCollections() async {
-    await _box.clear();
+    await _safeBox.clear();
     AppLogger.i('Cleared all collections', 'CollectionRepo');
   }
 

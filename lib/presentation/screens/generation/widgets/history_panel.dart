@@ -12,7 +12,7 @@ import '../../../../core/utils/zip_utils.dart';
 import '../../../../data/services/alias_resolver_service.dart';
 import '../../../providers/layout_state_provider.dart';
 import '../../../providers/tag_library_page_provider.dart';
-import '../../../../core/utils/nai_metadata_parser.dart';
+import '../../../../data/services/metadata/unified_metadata_parser.dart';
 import '../../../../data/services/image_metadata_service.dart';
 
 import '../../../../data/repositories/gallery_folder_repository.dart';
@@ -668,7 +668,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
         'Comment': jsonEncode(commentJson),
       };
 
-      final embeddedBytes = await NaiMetadataParser.embedMetadata(
+      final embeddedBytes = await UnifiedMetadataParser.embedMetadata(
         imageBytes,
         jsonEncode(embeddedMetadata),
       );

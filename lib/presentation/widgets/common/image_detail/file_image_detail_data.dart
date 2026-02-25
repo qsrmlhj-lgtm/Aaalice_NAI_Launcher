@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../../core/utils/app_logger.dart';
 import '../../../../data/models/gallery/nai_image_metadata.dart';
 import '../../../../data/services/image_metadata_service.dart';
 import 'image_detail_data.dart';
@@ -73,23 +74,37 @@ class FileImageDetailData implements ImageDetailData {
 
   /// 同步获取元数据（优先使用初始传入的元数据，其次从缓存获取）
   @override
-  NaiImageMetadata? get metadata =>
-      _initialMetadata ?? ImageMetadataService().getCached(filePath);
+  NaiImageMetadata? get metadata {
+    final result = _initialMetadata ?? ImageMetadataService().getCached(filePath);
+    AppLogger.d('[MetadataFlow] FileImageDetailData.metadata sync: path=$filePath, hasInitial=${_initialMetadata != null}, result=${result?.hasData}', 'FileImageDetailData');
+    return result;
+  }
 
   /// 异步获取元数据（从文件解析）
   ///
   /// **前台高优先级调用** - 用户主动打开详情页时使用
   /// 不受后台预加载队列影响，立即开始解析
   Future<NaiImageMetadata?> getMetadataAsync() async {
+    AppLogger.i('[MetadataFlow] getMetadataAsync START: path=$filePath', 'FileImageDetailData');
+
     // 1. 先检查初始元数据
-    if (_initialMetadata != null) return _initialMetadata;
-    
+    if (_initialMetadata != null) {
+      AppLogger.i('[MetadataFlow] Returning initial metadata', 'FileImageDetailData');
+      return _initialMetadata;
+    }
+
     // 2. 检查缓存
     final cached = ImageMetadataService().getCached(filePath);
-    if (cached != null) return cached;
+    if (cached != null) {
+      AppLogger.i('[MetadataFlow] Returning cached metadata: hasData=${cached.hasData}', 'FileImageDetailData');
+      return cached;
+    }
 
     // 3. 前台立即解析（高优先级，不受后台队列影响）
-    return ImageMetadataService().getMetadataImmediate(filePath);
+    AppLogger.i('[MetadataFlow] No cache, calling getMetadataImmediate...', 'FileImageDetailData');
+    final result = await ImageMetadataService().getMetadataImmediate(filePath);
+    AppLogger.i('[MetadataFlow] getMetadataImmediate returned: hasData=${result?.hasData}', 'FileImageDetailData');
+    return result;
   }
 
   /// 预加载元数据（后台使用）

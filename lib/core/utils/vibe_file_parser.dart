@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:png_chunks_extract/png_chunks_extract.dart' as png_extract;
+import 'package:image/image.dart' as img;
 
 import '../../data/models/vibe/vibe_reference.dart';
 import 'app_logger.dart';
+
+// 注意：已移除 png_chunks_extract 依赖，使用 image 包替代
+// image 包的 PngDecoder.startDecode() 提供纯 Dart 的 PNG chunks 解析
 
 /// Vibe 文件解析器
 ///
@@ -222,80 +225,88 @@ class VibeFileParser {
     final results = <VibeReference>[];
 
     try {
-      final chunks = png_extract.extractChunks(params.bytes);
+      // 使用 image 包的 PngDecoder - 纯 Dart 实现
+      final decoder = img.PngDecoder();
+      final info = decoder.startDecode(params.bytes);
 
-      // 查找 iTXt chunk
-      for (final chunk in chunks) {
-        if (chunk['name'] == 'iTXt') {
-          final iTXtData = chunk['data'] as Uint8List;
-          final result = _parseITXtChunkWithKeyword(iTXtData);
+      if (info == null) {
+        return results;
+      }
 
-          if (result != null && result.keyword == _naiDataKeyword) {
-            // naidata 格式：Base64 编码的 JSON bundle
-            try {
-              final jsonBytes = base64.decode(result.content);
-              final jsonData = jsonDecode(utf8.decode(jsonBytes))
-                  as Map<String, dynamic>;
+      // 从 PngInfo 获取 textData
+      final pngInfo = info as img.PngInfo;
+      final textData = pngInfo.textData;
 
-              final vibes = jsonData['vibes'] as List<dynamic>?;
-              if (vibes != null && vibes.isNotEmpty) {
-                for (var i = 0; i < vibes.length; i++) {
-                  final vibeJson = vibes[i] as Map<String, dynamic>;
-                  final extractedEncoding =
-                      _extractEncodingFromNaiVibe(vibeJson);
+      // 查找 iTXt chunk（NovelAI_Vibe_Encoding_Base64 或 naidata）
+      for (final entry in textData.entries) {
+        final keyword = entry.key;
+        final content = entry.value;
 
-                  if (extractedEncoding != null &&
-                      extractedEncoding.isNotEmpty) {
-                    final name = vibeJson['name'] as String? ??
-                        '${params.fileName}#$i';
-                    double strength = params.defaultStrength;
-                    final importInfo =
-                        vibeJson['importInfo'] as Map<String, dynamic>?;
-                    if (importInfo != null &&
-                        importInfo['strength'] != null) {
-                      strength = (importInfo['strength'] as num).toDouble();
-                    }
+        if (keyword == _naiDataKeyword) {
+          // naidata 格式：Base64 编码的 JSON bundle
+          try {
+            final jsonBytes = base64.decode(content);
+            final jsonData = jsonDecode(utf8.decode(jsonBytes))
+                as Map<String, dynamic>;
 
-                    // 提取 vibe 自己的缩略图，如果没有则使用原图
-                    final thumbnail = _extractThumbnailFromJson(vibeJson) ??
-                        params.bytes;
+            final vibes = jsonData['vibes'] as List<dynamic>?;
+            if (vibes != null && vibes.isNotEmpty) {
+              for (var i = 0; i < vibes.length; i++) {
+                final vibeJson = vibes[i] as Map<String, dynamic>;
+                final extractedEncoding =
+                    _extractEncodingFromNaiVibe(vibeJson);
 
-                    results.add(
-                      VibeReference(
-                        displayName: name,
-                        vibeEncoding: extractedEncoding,
-                        thumbnail: thumbnail,
-                        strength: strength.clamp(0.0, 1.0),
-                        sourceType: VibeSourceType.png,
-                      ),
-                    );
+                if (extractedEncoding != null &&
+                    extractedEncoding.isNotEmpty) {
+                  final name = vibeJson['name'] as String? ??
+                      '${params.fileName}#$i';
+                  double strength = params.defaultStrength;
+                  final importInfo =
+                      vibeJson['importInfo'] as Map<String, dynamic>?;
+                  if (importInfo != null &&
+                      importInfo['strength'] != null) {
+                    strength = (importInfo['strength'] as num).toDouble();
                   }
+
+                  // 提取 vibe 自己的缩略图，如果没有则使用原图
+                  final thumbnail = _extractThumbnailFromJson(vibeJson) ??
+                      params.bytes;
+
+                  results.add(
+                    VibeReference(
+                      displayName: name,
+                      vibeEncoding: extractedEncoding,
+                      thumbnail: thumbnail,
+                      strength: strength.clamp(0.0, 1.0),
+                      sourceType: VibeSourceType.png,
+                    ),
+                  );
                 }
-                return results;
               }
-            } catch (e) {
-              AppLogger.w('Failed to parse naidata bundle: $e', 'VibeParser');
-            }
-          } else if (result != null) {
-            // NovelAI_Vibe_Encoding_Base64 格式：单个 encoding
-            if (result.content.isNotEmpty) {
-              results.add(
-                VibeReference(
-                  displayName: params.fileName,
-                  vibeEncoding: result.content,
-                  thumbnail: params.bytes,
-                  strength: params.defaultStrength,
-                  sourceType: VibeSourceType.png,
-                ),
-              );
               return results;
             }
+          } catch (e) {
+            AppLogger.w('Failed to parse naidata bundle: $e', 'VibeParser');
+          }
+        } else if (keyword == _iTXtKeyword) {
+          // NovelAI_Vibe_Encoding_Base64 格式：单个 encoding
+          if (content.isNotEmpty) {
+            results.add(
+              VibeReference(
+                displayName: params.fileName,
+                vibeEncoding: content,
+                thumbnail: params.bytes,
+                strength: params.defaultStrength,
+                sourceType: VibeSourceType.png,
+              ),
+            );
+            return results;
           }
         }
       }
 
       // 没有找到 iTXt 数据，尝试检测 PNG 中是否包含 JSON 文本
-      final embeddedJson = _extractEmbeddedJsonFromPng(chunks);
+      final embeddedJson = _extractEmbeddedJsonFromTextData(textData);
       if (embeddedJson != null) {
         try {
           final jsonData = jsonDecode(embeddedJson) as Map<String, dynamic>;
@@ -337,18 +348,34 @@ class VibeFileParser {
     String? foundKeyword;
 
     try {
-      final chunks = png_extract.extractChunks(params.bytes);
+      // 使用 image 包的 PngDecoder - 纯 Dart 实现
+      final decoder = img.PngDecoder();
+      final info = decoder.startDecode(params.bytes);
 
-      for (final chunk in chunks) {
-        if (chunk['name'] == 'iTXt') {
-          final iTXtData = chunk['data'] as Uint8List;
-          // 尝试解析 iTXt，同时获取内容和 keyword
-          final result = _parseITXtChunkWithKeyword(iTXtData);
-          if (result != null) {
-            iTxtContent = result.content;
-            foundKeyword = result.keyword;
-            break;
-          }
+      if (info == null) {
+        return VibeReference(
+          displayName: params.fileName,
+          vibeEncoding: '',
+          thumbnail: params.bytes,
+          rawImageData: params.bytes,
+          strength: params.defaultStrength,
+          sourceType: VibeSourceType.rawImage,
+        );
+      }
+
+      // 从 PngInfo 获取 textData
+      final pngInfo = info as img.PngInfo;
+      final textData = pngInfo.textData;
+
+      for (final entry in textData.entries) {
+        final keyword = entry.key;
+        final content = entry.value;
+
+        // 只处理我们关心的关键字
+        if (keyword == _iTXtKeyword || keyword == _naiDataKeyword) {
+          iTxtContent = content;
+          foundKeyword = keyword;
+          break;
         }
       }
 
@@ -359,13 +386,13 @@ class VibeFileParser {
           try {
             final jsonBytes = base64.decode(iTxtContent);
             final jsonData = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
-            
+
             // 从 bundle 中提取第一个 vibe
             final vibes = jsonData['vibes'] as List<dynamic>?;
             if (vibes != null && vibes.isNotEmpty) {
               final firstVibe = vibes.first as Map<String, dynamic>;
               final extractedEncoding = _extractEncodingFromNaiVibe(firstVibe);
-              
+
               if (extractedEncoding != null && extractedEncoding.isNotEmpty) {
                 final name = firstVibe['name'] as String? ?? params.fileName;
                 double strength = params.defaultStrength;
@@ -399,7 +426,7 @@ class VibeFileParser {
       }
 
       // 没有找到 iTXt 数据，尝试检测 PNG 中是否包含 JSON 文本
-      final embeddedJson = _extractEmbeddedJsonFromPng(chunks);
+      final embeddedJson = _extractEmbeddedJsonFromTextData(textData);
       if (embeddedJson != null) {
         try {
           final jsonData = jsonDecode(embeddedJson) as Map<String, dynamic>;
@@ -449,101 +476,31 @@ class VibeFileParser {
     }
   }
 
-  /// 从 PNG chunks 中提取嵌入的 JSON 数据
-  /// 
-  /// 检查 tEXt 和 zTXt chunks 中是否包含 JSON 数据
-  static String? _extractEmbeddedJsonFromPng(List<dynamic> chunks) {
-    for (final chunk in chunks) {
-      final chunkName = chunk['name'] as String?;
-      
-      if (chunkName == 'tEXt' || chunkName == 'zTXt') {
-        try {
-          final data = chunk['data'] as Uint8List;
-          final text = utf8.decode(data);
-          
-          // 检查是否包含 JSON 特征
-          if (text.contains('"identifier"') || 
-              text.contains('"novelai-vibe-transfer"') ||
-              text.contains('"encodings"')) {
-            // 尝试找到 JSON 开始位置
-            final jsonStart = text.indexOf('{');
-            if (jsonStart != -1) {
-              final jsonText = text.substring(jsonStart);
-              // 验证是否为有效 JSON
-              jsonDecode(jsonText);
-              return jsonText;
-            }
-          }
-        } catch (e) {
-          // 不是有效的 JSON，继续检查下一个 chunk
-          continue;
-        }
-      }
-    }
-    return null;
-  }
-
-  /// 解析 PNG iTXt 块（带 keyword 返回）
+  /// 从 textData 中提取嵌入的 JSON 数据
   ///
-  /// iTXt 块格式:
-  /// - Keyword (null-terminated)
-  /// - Compression flag (1 byte)
-  /// - Compression method (1 byte)
-  /// - Language tag (null-terminated)
-  /// - Translated keyword (null-terminated)
-  /// - Text
-  /// 
-  /// 支持两种关键字:
-  /// - NovelAI_Vibe_Encoding_Base64 (官方格式)
-  /// - naidata (嵌入图片使用)
-  /// 返回 ({String keyword, String content})? 的 Record 类型
-  static ({String keyword, String content})? _parseITXtChunkWithKeyword(Uint8List data) {
-    try {
-      // 查找关键字结束位置
-      final int keywordEndIndex = data.indexOf(0);
-      if (keywordEndIndex == -1) return null;
-
-      final keyword = utf8.decode(data.sublist(0, keywordEndIndex));
-      // 支持两种关键字格式
-      if (keyword != _iTXtKeyword && keyword != _naiDataKeyword) return null;
-
-      int currentIndex = keywordEndIndex + 1;
-
-      // 检查压缩标志
-      if (currentIndex >= data.length) return null;
-      final compressionFlag = data[currentIndex++];
-      if (compressionFlag != 0) {
-        // 不支持压缩
-        throw FormatException(
-          'Unsupported iTXt compression flag: $compressionFlag',
-        );
-      }
-
-      // 跳过压缩方法
-      if (currentIndex >= data.length) return null;
-      currentIndex++;
-
-      // 跳过语言标签
-      final int langTagEndIndex = data.indexOf(0, currentIndex);
-      if (langTagEndIndex == -1) return null;
-      currentIndex = langTagEndIndex + 1;
-
-      // 跳过翻译后的关键字
-      final int translatedKeywordEndIndex = data.indexOf(0, currentIndex);
-      if (translatedKeywordEndIndex == -1) return null;
-      currentIndex = translatedKeywordEndIndex + 1;
-
-      // 提取文本内容
-      if (currentIndex < data.length) {
-        final content = utf8.decode(data.sublist(currentIndex));
-        return (keyword: keyword, content: content);
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        AppLogger.d('Error parsing iTXt chunk: $e', 'VibeParser');
+  /// 检查 textData 中是否包含 JSON 数据
+  static String? _extractEmbeddedJsonFromTextData(Map<String, String> textData) {
+    for (final entry in textData.entries) {
+      final text = entry.value;
+      try {
+        // 检查是否包含 JSON 特征
+        if (text.contains('"identifier"') ||
+            text.contains('"novelai-vibe-transfer"') ||
+            text.contains('"encodings"')) {
+          // 尝试找到 JSON 开始位置
+          final jsonStart = text.indexOf('{');
+          if (jsonStart != -1) {
+            final jsonText = text.substring(jsonStart);
+            // 验证是否为有效 JSON
+            jsonDecode(jsonText);
+            return jsonText;
+          }
+        }
+      } catch (e) {
+        // 不是有效的 JSON，继续检查下一个 entry
+        continue;
       }
     }
-
     return null;
   }
 

@@ -150,111 +150,17 @@ class ProxyService {
     }
   }
 
-  /// 测试代理连接
-  ///
-  /// 尝试通过指定代理访问测试 URL，验证代理可用性
-  static Future<ProxyTestResult> testProxyConnection(String proxyAddress) async {
-    final stopwatch = Stopwatch()..start();
-
-    // 创建临时 Dio 实例用于测试
+  /// 创建测试用的 Dio 实例
+  static Dio _createTestDio({String? proxyAddress, Duration? timeout}) {
     final dio = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
-      ),
-    );
-
-    // 配置代理
-    dio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: () {
-        final client = HttpClient();
-        client.findProxy = (uri) => 'PROXY $proxyAddress';
-        // 允许自签名证书（某些代理工具可能需要）
-        client.badCertificateCallback = (cert, host, port) => true;
-        return client;
-      },
-    );
-
-    try {
-      // 使用多个测试 URL，提高成功率
-      final testUrls = [
-        'https://www.google.com/generate_204', // Google 204 测试
-        'https://www.gstatic.com/generate_204', // Google CDN 204 测试
-        'https://api.github.com', // GitHub API
-      ];
-
-      for (final url in testUrls) {
-        try {
-          final response = await dio.get(url);
-          stopwatch.stop();
-
-          if (response.statusCode == 200 || response.statusCode == 204) {
-            AppLogger.i(
-              'Proxy test successful: $proxyAddress -> $url (${stopwatch.elapsedMilliseconds}ms)',
-              'PROXY',
-            );
-            return ProxyTestResult.success(stopwatch.elapsedMilliseconds);
-          }
-        } catch (e) {
-          // 继续尝试下一个 URL
-          AppLogger.d('Proxy test failed for $url: $e', 'PROXY');
-        }
-      }
-
-      // 所有 URL 都失败
-      return ProxyTestResult.failure('无法连接到测试服务器');
-    } on DioException catch (e) {
-      stopwatch.stop();
-      String errorMsg;
-      switch (e.type) {
-        case DioExceptionType.connectionTimeout:
-          errorMsg = '连接超时';
-          break;
-        case DioExceptionType.connectionError:
-          errorMsg = '无法连接到代理服务器';
-          break;
-        default:
-          errorMsg = e.message ?? '连接失败';
-      }
-      AppLogger.w('Proxy test failed: $errorMsg', 'PROXY');
-      return ProxyTestResult.failure(errorMsg);
-    } catch (e) {
-      stopwatch.stop();
-      AppLogger.e('Proxy test error: $e', 'PROXY');
-      return ProxyTestResult.failure('测试失败: $e');
-    } finally {
-      dio.close();
-    }
-  }
-
-  /// 获取代理字符串（用于 HttpClient.findProxy）
-  ///
-  /// 返回格式: "PROXY host:port" 或 "DIRECT"
-  static String getProxyString(String? proxyAddress) {
-    if (proxyAddress == null || proxyAddress.isEmpty) {
-      return 'DIRECT';
-    }
-    return 'PROXY $proxyAddress';
-  }
-
-  /// 测试 NovelAI 连接
-  ///
-  /// 尝试直接访问 NovelAI 官网，验证网络可用性
-  /// 返回结果包含是否成功和延迟
-  static Future<ProxyTestResult> testNovelAIConnection({String? proxyAddress}) async {
-    final stopwatch = Stopwatch()..start();
-
-    // 创建临时 Dio 实例用于测试
-    final dio = Dio(
-      BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
+        connectTimeout: timeout ?? const Duration(seconds: 10),
+        receiveTimeout: timeout ?? const Duration(seconds: 10),
         followRedirects: true,
         validateStatus: (status) => status != null && status < 500,
       ),
     );
 
-    // 如果提供了代理地址，配置代理
     if (proxyAddress != null && proxyAddress.isNotEmpty) {
       dio.httpClientAdapter = IOHttpClientAdapter(
         createHttpClient: () {
@@ -266,37 +172,69 @@ class ProxyService {
       );
     }
 
-    try {
-      // 尝试访问 NovelAI 官网
-      final response = await dio.get('https://novelai.net');
-      stopwatch.stop();
+    return dio;
+  }
 
+  static String _getErrorMessage(DioException e) {
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout => '连接超时',
+      DioExceptionType.connectionError => '无法连接到服务器',
+      _ => e.message ?? '连接失败',
+    };
+  }
+
+  /// 获取代理字符串（用于 HttpClient.findProxy）
+  static String getProxyString(String? proxyAddress) {
+    if (proxyAddress == null || proxyAddress.isEmpty) {
+      return 'DIRECT';
+    }
+    return 'PROXY $proxyAddress';
+  }
+
+  /// 测试代理连接
+  static Future<ProxyTestResult> testProxyConnection(String proxyAddress) async {
+    final stopwatch = Stopwatch()..start();
+    final dio = _createTestDio(proxyAddress: proxyAddress);
+
+    try {
+      final testUrls = [
+        'https://www.google.com/generate_204',
+        'https://www.gstatic.com/generate_204',
+        'https://api.github.com',
+      ];
+
+      for (final url in testUrls) {
+        try {
+          final response = await dio.get(url);
+          if (response.statusCode == 200 || response.statusCode == 204) {
+            return ProxyTestResult.success(stopwatch.elapsedMilliseconds);
+          }
+        } catch (_) {}
+      }
+      return ProxyTestResult.failure('无法连接到测试服务器');
+    } on DioException catch (e) {
+      return ProxyTestResult.failure(_getErrorMessage(e));
+    } catch (e) {
+      return ProxyTestResult.failure('测试失败: $e');
+    } finally {
+      dio.close();
+    }
+  }
+
+  /// 测试 NovelAI 连接
+  static Future<ProxyTestResult> testNovelAIConnection({String? proxyAddress, Duration? timeout}) async {
+    final stopwatch = Stopwatch()..start();
+    final dio = _createTestDio(proxyAddress: proxyAddress, timeout: timeout ?? const Duration(seconds: 5));
+
+    try {
+      final response = await dio.get('https://novelai.net');
       if (response.statusCode == 200 || response.statusCode == 307 || response.statusCode == 302) {
-        AppLogger.i(
-          'NovelAI connection test successful${proxyAddress != null ? ' via proxy: $proxyAddress' : ' (direct)'} (${stopwatch.elapsedMilliseconds}ms)',
-          'PROXY',
-        );
         return ProxyTestResult.success(stopwatch.elapsedMilliseconds);
       }
       return ProxyTestResult.failure('HTTP ${response.statusCode}');
     } on DioException catch (e) {
-      stopwatch.stop();
-      String errorMsg;
-      switch (e.type) {
-        case DioExceptionType.connectionTimeout:
-          errorMsg = '连接超时';
-          break;
-        case DioExceptionType.connectionError:
-          errorMsg = '无法连接到服务器';
-          break;
-        default:
-          errorMsg = e.message ?? '连接失败';
-      }
-      AppLogger.w('NovelAI connection test failed: $errorMsg', 'PROXY');
-      return ProxyTestResult.failure(errorMsg);
+      return ProxyTestResult.failure(_getErrorMessage(e));
     } catch (e) {
-      stopwatch.stop();
-      AppLogger.e('NovelAI connection test error: $e', 'PROXY');
       return ProxyTestResult.failure('测试失败: $e');
     } finally {
       dio.close();

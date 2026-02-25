@@ -232,11 +232,11 @@ abstract class EnhancedBaseDataSource extends ds.BaseDataSource {
   }
 
   void _logOperationDuration(String operationId, int durationMs) {
+    // 【优化】只在慢操作时记录，减少日志量
     if (durationMs > 1000) {
       AppLogger.w('Slow operation: $operationId took ${durationMs}ms', 'DataSource');
-    } else {
-      AppLogger.d('Operation: $operationId, duration: ${durationMs}ms', 'DataSource');
     }
+    // 正常操作不记录，避免日志刷屏
   }
 
   List<List<T>> chunk<T>(List<T> list, int chunkSize) {

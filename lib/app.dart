@@ -8,6 +8,7 @@ import 'presentation/router/app_router.dart';
 import 'presentation/providers/theme_provider.dart';
 import 'presentation/providers/font_provider.dart';
 import 'presentation/providers/locale_provider.dart';
+import 'presentation/providers/background_refresh_provider.dart';
 import 'presentation/providers/queue_execution_provider.dart';
 import 'presentation/providers/subscription_provider.dart' hide anlasBalanceProvider;
 import 'presentation/themes/app_theme.dart';
@@ -28,6 +29,9 @@ class NAILauncherApp extends ConsumerWidget {
 
     // 初始化余额变化监听器（自动记录点数消耗）
     ref.watch(anlasBalanceWatcherProvider);
+
+    // 【修复】初始化后台刷新服务（确保 Danbooru 标签等数据自动同步）
+    ref.watch(backgroundRefreshNotifierProvider);
 
     // 定义全局快捷键映射
     final globalShortcuts = <String, VoidCallback>{

@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/storage_keys.dart';
 import '../../../core/shortcuts/default_shortcuts.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/nai_prompt_formatter.dart';
 import '../../../core/utils/permission_utils.dart';
 import '../../../core/utils/sd_to_nai_converter.dart';
@@ -27,6 +28,7 @@ import '../../providers/gallery_category_provider.dart';
 import '../../providers/gallery_folder_provider.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/local_gallery_provider.dart';
+import '../../providers/gallery_scan_progress_provider.dart';
 import '../../providers/selection_mode_provider.dart';
 import '../../widgets/bulk_metadata_edit_dialog.dart';
 import '../../widgets/collection_select_dialog.dart';
@@ -45,7 +47,6 @@ import '../../widgets/grouped_grid_view.dart'
 import '../../widgets/shortcuts/shortcut_aware_widget.dart';
 
 /// 本地画廊屏幕
-/// Local gallery screen
 class LocalGalleryScreen extends ConsumerStatefulWidget {
   const LocalGalleryScreen({super.key});
 
@@ -54,24 +55,14 @@ class LocalGalleryScreen extends ConsumerStatefulWidget {
 }
 
 class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
-  /// Key for accessing GroupedGridView's scrollToGroup method
-  /// 用于访问 GroupedGridView 的 scrollToGroup 方法的键
   final GlobalKey<GroupedGridViewState> _groupedGridViewKey =
       GlobalKey<GroupedGridViewState>();
-
-  /// Focus node for keyboard shortcuts
-  /// 用于键盘快捷键的焦点节点
   final FocusNode _shortcutsFocusNode = FocusNode();
 
-  /// 是否使用3D卡片视图
-  /// Whether to use 3D card view mode
   final bool _use3DCardView = true;
-
-  /// 是否显示分类面板
-  /// Whether to show category panel
   bool _showCategoryPanel = true;
+  AppLifecycleListener? _lifecycleListener;
 
-  /// 缓存的快捷方式映射
   late final Map<String, VoidCallback> _shortcuts = {
     ShortcutIds.previousPage: _goToPreviousPage,
     ShortcutIds.nextPage: _goToNextPage,
@@ -85,31 +76,28 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     ShortcutIds.openFolder: _openGalleryFolder,
   };
 
-  /// 应用生命周期状态监听
-  AppLifecycleListener? _lifecycleListener;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _checkPermissionsAndScan();
       await _showFirstTimeTip();
-      // 页面加载完成后自动执行增量扫描
       await _autoRefresh();
     });
 
-    // 监听应用生命周期，当应用从后台恢复时自动刷新
     _lifecycleListener = AppLifecycleListener(
       onResume: () {
-        // 延迟执行，等待应用完全恢复
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
-            _autoRefresh();
+            _autoRefresh().catchError((e, stack) {
+              AppLogger.e('Auto refresh on resume failed', e, stack, 'LocalGalleryScreen');
+            });
           }
         });
       },
     );
   }
+
 
   @override
   void dispose() {
@@ -164,9 +152,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final theme = Theme.of(context);
 
-    final contentWidth = _showCategoryPanel && screenWidth > 800
-        ? screenWidth - 250
-        : screenWidth;
+    final contentWidth =
+        _showCategoryPanel && screenWidth > 800 ? screenWidth - 250 : screenWidth;
     final columns = (contentWidth / 200).floor().clamp(2, 8);
     final itemWidth = contentWidth / columns;
 
@@ -186,9 +173,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
                 child: Column(
                   children: [
                     _buildToolbarOrSelectionBar(state, bulkOpState),
-                    Expanded(
-                      child: _buildBody(state, columns, itemWidth),
-                    ),
+                    Expanded(child: _buildBody(state, columns, itemWidth)),
                     if (!state.isIndexing &&
                         state.filteredFiles.isNotEmpty &&
                         state.totalPages > 0)
@@ -251,22 +236,22 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
                   totalImageCount: state.allFiles.length,
                   favoriteCount: snapshot.data ?? 0,
                   selectedCategoryId: categoryState.selectedCategoryId,
-              onCategorySelected: _handleCategorySelected,
-              onCategoryRename: (id, newName) => ref
-                  .read(galleryCategoryNotifierProvider.notifier)
-                  .renameCategory(id, newName),
-              onCategoryDelete: _handleCategoryDelete,
-              onAddSubCategory: _handleAddSubCategory,
-              onCategoryMove: (categoryId, newParentId) => ref
-                  .read(galleryCategoryNotifierProvider.notifier)
-                  .moveCategory(categoryId, newParentId),
-              onCategoryReorder: (parentId, oldIndex, newIndex) => ref
-                  .read(galleryCategoryNotifierProvider.notifier)
-                  .reorderCategories(parentId, oldIndex, newIndex),
-              onImageDrop: (imagePath, categoryId) =>
-                  _handleImageDrop(imagePath, categoryId!),
-              onSyncWithFileSystem: _handleSyncWithFileSystem,
-            );
+                  onCategorySelected: _handleCategorySelected,
+                  onCategoryRename: (id, newName) => ref
+                      .read(galleryCategoryNotifierProvider.notifier)
+                      .renameCategory(id, newName),
+                  onCategoryDelete: _handleCategoryDelete,
+                  onAddSubCategory: _handleAddSubCategory,
+                  onCategoryMove: (categoryId, newParentId) => ref
+                      .read(galleryCategoryNotifierProvider.notifier)
+                      .moveCategory(categoryId, newParentId),
+                  onCategoryReorder: (parentId, oldIndex, newIndex) => ref
+                      .read(galleryCategoryNotifierProvider.notifier)
+                      .reorderCategories(parentId, oldIndex, newIndex),
+                  onImageDrop: (imagePath, categoryId) =>
+                      _handleImageDrop(imagePath, categoryId!),
+                  onSyncWithFileSystem: _handleSyncWithFileSystem,
+                );
               },
             ),
           ),
@@ -368,9 +353,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         .moveImageToCategory(imagePath, categoryId);
     if (newPath != null) {
       ref.read(localGalleryNotifierProvider.notifier).refresh();
-      if (mounted) {
-        AppToast.success(context, '图片已移动到分类');
-      }
+      if (mounted) AppToast.success(context, '图片已移动到分类');
     }
   }
 
@@ -378,33 +361,27 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     await ref
         .read(galleryCategoryNotifierProvider.notifier)
         .syncWithFileSystem();
-    if (mounted) {
-      AppToast.success(context, '分类已与文件夹同步');
-    }
+    if (mounted) AppToast.success(context, '分类已与文件夹同步');
   }
 
-  /// 后台自动刷新（增量扫描）
-  /// 在页面获得焦点时自动触发
   Future<void> _autoRefresh() async {
-    final notifier = ref.read(localGalleryNotifierProvider.notifier);
-    await notifier.refresh();
+    final scanState = ref.read(galleryScanProgressProvider);
+    if (scanState.isScanning) {
+      return;
+    }
 
-    // 【修复】自动同步文件系统文件夹到分类系统
-    // 这样嵌套文件夹（如 test_batch）会显示在左侧导航栏
-    final categoryNotifier = ref.read(galleryCategoryNotifierProvider.notifier);
-    await categoryNotifier.syncWithFileSystem();
+    await ref.read(localGalleryNotifierProvider.notifier).refresh();
+    await ref.read(galleryCategoryNotifierProvider.notifier).syncWithFileSystem();
   }
 
-  /// 构建工具栏或选择栏
+  // 元数据在扫描新文件时已自动提取，如需手动补全旧文件元数据，请使用设置页面的"补全元数据"功能
+
   Widget _buildToolbarOrSelectionBar(
     LocalGalleryState state,
     BulkOperationState bulkOpState,
   ) {
-    // 使用独立的美化工具栏组件
     return LocalGalleryToolbar(
-      use3DCardView: _use3DCardView,
-      onRefresh: () =>
-          ref.read(localGalleryNotifierProvider.notifier).refresh(),
+      onRefresh: () => ref.read(localGalleryNotifierProvider.notifier).refresh(),
       onEnterSelectionMode: () =>
           ref.read(localGallerySelectionNotifierProvider.notifier).enter(),
       canUndo: bulkOpState.canUndo,
@@ -426,19 +403,14 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     );
   }
 
-  /// Build main body content
-  /// 构建主体内容
   Widget _buildBody(LocalGalleryState state, int columns, double itemWidth) {
     if (state.error != null) {
       return GalleryErrorView(
         error: state.error,
-        onRetry: () =>
-            ref.read(localGalleryNotifierProvider.notifier).refresh(),
+        onRetry: () => ref.read(localGalleryNotifierProvider.notifier).refresh(),
       );
     }
 
-    // 只有在真正加载中且没有文件时才显示加载视图
-    // 后台索引时不应阻止用户浏览已加载的文件
     if (state.isLoading && state.allFiles.isEmpty) {
       return const GalleryLoadingView();
     }
@@ -454,41 +426,27 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       groupedGridViewKey: _groupedGridViewKey,
       onReuseMetadata: _reuseMetadata,
       onSendToImg2Img: _sendToImg2Img,
-      onContextMenu: (record, position) {
-        _showImageContextMenu(record, position);
-      },
+      onContextMenu: (record, position) => _showImageContextMenu(record, position),
     );
   }
 
-  /// Handle keyboard events for undo/redo
-  /// 处理撤销/重做的键盘事件
   void _handleKeyEvent(KeyEvent event, BulkOperationState bulkOpState) {
-    if (event is KeyDownEvent) {
-      final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
+    if (event is! KeyDownEvent) return;
 
-      if (isCtrlPressed) {
-        if (event.logicalKey == LogicalKeyboardKey.keyZ) {
-          if (HardwareKeyboard.instance.isShiftPressed) {
-            // Ctrl+Shift+Z for redo
-            if (bulkOpState.canRedo) _redo();
-          } else {
-            // Ctrl+Z for undo
-            if (bulkOpState.canUndo) _undo();
-          }
-        } else if (event.logicalKey == LogicalKeyboardKey.keyY) {
-          // Ctrl+Y for redo
-          if (bulkOpState.canRedo) _redo();
-        }
+    final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
+    if (!isCtrlPressed) return;
+
+    if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        if (bulkOpState.canRedo) _redo();
+      } else {
+        if (bulkOpState.canUndo) _undo();
       }
+    } else if (event.logicalKey == LogicalKeyboardKey.keyY && bulkOpState.canRedo) {
+      _redo();
     }
   }
 
-  // ============================================================
-  // Permission and initialization methods
-  // 权限和初始化方法
-  // ============================================================
-
-  /// 检查权限并扫描图片
   Future<void> _checkPermissionsAndScan() async {
     final hasPermission = await PermissionUtils.checkGalleryPermission();
 
@@ -502,24 +460,20 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     if (mounted) {
       await ref.read(localGalleryNotifierProvider.notifier).initialize();
+      await ref.read(collectionNotifierProvider.notifier).initialize();
       _showFirstTimeIndexTipIfNeeded();
     }
   }
 
-  /// 显示首次大量索引提示
   void _showFirstTimeIndexTipIfNeeded() {
     final state = ref.read(localGalleryNotifierProvider);
     if (state.firstTimeIndexMessage != null && mounted) {
-      // 延迟显示，让用户先看到页面
       Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) {
-          AppToast.info(context, state.firstTimeIndexMessage!);
-        }
+        if (mounted) AppToast.info(context, state.firstTimeIndexMessage!);
       });
     }
   }
 
-  /// 显示权限被拒绝对话框
   void _showPermissionDeniedDialog() async {
     final confirmed = await ThemedConfirmDialog.show(
       context: context,
@@ -531,12 +485,9 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       icon: Icons.folder_off_outlined,
     );
 
-    if (confirmed) {
-      PermissionUtils.openAppSettings();
-    }
+    if (confirmed) PermissionUtils.openAppSettings();
   }
 
-  /// 显示首次使用提示
   Future<void> _showFirstTimeTip() async {
     final prefs = await SharedPreferences.getInstance();
     final hasSeenTip =
@@ -558,32 +509,21 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     );
   }
 
-  // ============================================================
-  // Folder operations
-  // 文件夹操作
-  // ============================================================
-
-  /// 打开画廊文件夹
   Future<void> _openGalleryFolder() async {
     try {
       final rootPath = await GalleryFolderRepository.instance.getRootPath();
       if (rootPath == null || rootPath.isEmpty) {
-        if (mounted) {
-          AppToast.info(context, '未设置保存目录');
-        }
+        if (mounted) AppToast.info(context, '未设置保存目录');
         return;
       }
 
       final dir = Directory(rootPath);
       if (!await dir.exists()) {
-        if (mounted) {
-          AppToast.info(context, '文件夹不存在');
-        }
+        if (mounted) AppToast.info(context, '文件夹不存在');
         return;
       }
 
       if (Platform.isWindows) {
-        // 使用 Process.start 避免等待进程完成导致的延迟
         await Process.start('explorer', [rootPath]);
       } else if (Platform.isMacOS) {
         await Process.start('open', [rootPath]);
@@ -591,43 +531,22 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         await Process.start('xdg-open', [rootPath]);
       }
     } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '打开文件夹失败: $e');
-      }
+      if (mounted) AppToast.error(context, '打开文件夹失败: $e');
     }
   }
 
-  // ============================================================
-  // Undo/Redo operations
-  // 撤销/重做操作
-  // ============================================================
-
-  /// 撤销上一步操作
   Future<void> _undo() async {
     await ref.read(bulkOperationNotifierProvider.notifier).undo();
     await ref.read(localGalleryNotifierProvider.notifier).refresh();
-
-    if (mounted) {
-      AppToast.info(context, context.l10n.localGallery_undone);
-    }
+    if (mounted) AppToast.info(context, context.l10n.localGallery_undone);
   }
 
-  /// 重做上一步撤销的操作
   Future<void> _redo() async {
     await ref.read(bulkOperationNotifierProvider.notifier).redo();
     await ref.read(localGalleryNotifierProvider.notifier).refresh();
-
-    if (mounted) {
-      AppToast.info(context, context.l10n.localGallery_redone);
-    }
+    if (mounted) AppToast.info(context, context.l10n.localGallery_redone);
   }
 
-  // ============================================================
-  // Bulk operations
-  // 批量操作
-  // ============================================================
-
-  /// 批量删除选中的图片
   Future<void> _deleteSelectedImages() async {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
     final galleryState = ref.read(localGalleryNotifierProvider);
@@ -675,7 +594,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  /// 批量打包选中的图片成压缩包
   Future<void> _packSelectedImages() async {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
     final galleryState = ref.read(localGalleryNotifierProvider);
@@ -686,7 +604,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     if (selectedImages.isEmpty || !mounted) return;
 
-    // 直接使用保存文件对话框，用户可以选择路径并输入文件名
     final defaultName = 'images_${DateTime.now().millisecondsSinceEpoch}';
     final outputPath = await FilePicker.platform.saveFile(
       dialogTitle: '保存压缩包',
@@ -697,19 +614,13 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     if (outputPath == null || !mounted) return;
 
-    // 确保文件名以 .zip 结尾
     final finalPath =
         outputPath.endsWith('.zip') ? outputPath : '$outputPath.zip';
 
-    // 显示打包进度
     AppToast.info(context, '正在打包 ${selectedImages.length} 张图片...');
 
-    // 执行打包
     final imagePaths = selectedImages.map((img) => img.path).toList();
-    final success = await ZipUtils.createZipFromImages(
-      imagePaths,
-      finalPath,
-    );
+    final success = await ZipUtils.createZipFromImages(imagePaths, finalPath);
 
     if (mounted) {
       if (success) {
@@ -721,14 +632,12 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  /// 批量编辑选中的图片元数据
   Future<void> _editSelectedMetadata() async {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
     if (selectionState.selectedIds.isEmpty || !mounted) return;
     showBulkMetadataEditDialog(context);
   }
 
-  /// 批量移动选中的图片到文件夹
   Future<void> _moveSelectedToFolder() async {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
     final galleryState = ref.read(localGalleryNotifierProvider);
@@ -742,9 +651,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     final folders = folderState.folders;
     if (folders.isEmpty) {
-      if (mounted) {
-        AppToast.info(context, context.l10n.localGallery_noFoldersAvailable);
-      }
+      if (mounted) AppToast.info(context, context.l10n.localGallery_noFoldersAvailable);
       return;
     }
 
@@ -782,18 +689,14 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     if (selectedFolder == null || !mounted) return;
 
     final imagePaths = selectedImages.map((img) => img.path).toList();
-    final movedCount =
-        await GalleryFolderRepository.instance.moveImagesToFolder(
+    final movedCount = await GalleryFolderRepository.instance.moveImagesToFolder(
       imagePaths,
       selectedFolder,
     );
 
     if (mounted) {
       if (movedCount > 0) {
-        AppToast.info(
-          context,
-          context.l10n.localGallery_movedImages(movedCount),
-        );
+        AppToast.info(context, context.l10n.localGallery_movedImages(movedCount));
         ref.read(localGallerySelectionNotifierProvider.notifier).exit();
         ref.read(localGalleryNotifierProvider.notifier).refresh();
         ref.read(galleryFolderNotifierProvider.notifier).refresh();
@@ -803,7 +706,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  /// 批量添加选中的图片到集合
   Future<void> _addSelectedToCollection() async {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
     final galleryState = ref.read(localGalleryNotifierProvider);
@@ -842,35 +744,19 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  // ============================================================
-  // Image operations (reuse metadata, send to img2img)
-  // 图片操作（复用元数据、发送到图生图）
-  // ============================================================
-
-  /// 复用图片的元数据参数到主界面
   Future<void> _reuseMetadata(LocalImageRecord record) async {
     final metadata = record.metadata;
     if (metadata == null || !metadata.hasData) return;
 
-    // 显示参数选择对话框
-    final options = await MetadataImportDialog.show(
-      context,
-      metadata: metadata,
-    );
-
-    if (options == null || !mounted) return; // 用户取消
+    final options = await MetadataImportDialog.show(context, metadata: metadata);
+    if (options == null || !mounted) return;
 
     final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
 
-    // 只有在勾选导入多角色提示词时才清空
-    if (options.importCharacterPrompts &&
-        metadata.characterPrompts.isNotEmpty) {
-      final characterNotifier =
-          ref.read(characterPromptNotifierProvider.notifier);
-      characterNotifier.clearAllCharacters();
+    if (options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty) {
+      ref.read(characterPromptNotifierProvider.notifier).clearAllCharacters();
     }
 
-    // 根据选项应用参数
     var appliedCount = 0;
 
     if (options.importPrompt && metadata.prompt.isNotEmpty) {
@@ -879,69 +765,28 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
 
     if (options.importNegativePrompt && metadata.negativePrompt.isNotEmpty) {
-      paramsNotifier
-          .updateNegativePrompt(_formatPrompt(metadata.negativePrompt));
+      paramsNotifier.updateNegativePrompt(_formatPrompt(metadata.negativePrompt));
       appliedCount++;
     }
 
-    if (options.importCharacterPrompts &&
-        metadata.characterPrompts.isNotEmpty) {
+    if (options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty) {
       _applyCharacterPrompts(metadata);
       appliedCount++;
     }
 
-    // 应用单个参数
     _applyParam(options.importSeed, metadata.seed, paramsNotifier.updateSeed);
-    _applyParam(
-      options.importSteps,
-      metadata.steps,
-      paramsNotifier.updateSteps,
-    );
-    _applyParam(
-      options.importScale,
-      metadata.scale,
-      paramsNotifier.updateScale,
-    );
-    _applyParam(
-      options.importSampler,
-      metadata.sampler,
-      paramsNotifier.updateSampler,
-    );
-    _applyParam(
-      options.importModel,
-      metadata.model,
-      paramsNotifier.updateModel,
-    );
+    _applyParam(options.importSteps, metadata.steps, paramsNotifier.updateSteps);
+    _applyParam(options.importScale, metadata.scale, paramsNotifier.updateScale);
+    _applyParam(options.importSampler, metadata.sampler, paramsNotifier.updateSampler);
+    _applyParam(options.importModel, metadata.model, paramsNotifier.updateModel);
     _applyParam(options.importSmea, metadata.smea, paramsNotifier.updateSmea);
-    _applyParam(
-      options.importSmeaDyn,
-      metadata.smeaDyn,
-      paramsNotifier.updateSmeaDyn,
-    );
-    _applyParam(
-      options.importNoiseSchedule,
-      metadata.noiseSchedule,
-      paramsNotifier.updateNoiseSchedule,
-    );
-    _applyParam(
-      options.importCfgRescale,
-      metadata.cfgRescale,
-      paramsNotifier.updateCfgRescale,
-    );
-    _applyParam(
-      options.importQualityToggle,
-      metadata.qualityToggle,
-      paramsNotifier.updateQualityToggle,
-    );
-    _applyParam(
-      options.importUcPreset,
-      metadata.ucPreset,
-      paramsNotifier.updateUcPreset,
-    );
+    _applyParam(options.importSmeaDyn, metadata.smeaDyn, paramsNotifier.updateSmeaDyn);
+    _applyParam(options.importNoiseSchedule, metadata.noiseSchedule, paramsNotifier.updateNoiseSchedule);
+    _applyParam(options.importCfgRescale, metadata.cfgRescale, paramsNotifier.updateCfgRescale);
+    _applyParam(options.importQualityToggle, metadata.qualityToggle, paramsNotifier.updateQualityToggle);
+    _applyParam(options.importUcPreset, metadata.ucPreset, paramsNotifier.updateUcPreset);
 
-    if (options.importSize &&
-        metadata.width != null &&
-        metadata.height != null) {
+    if (options.importSize && metadata.width != null && metadata.height != null) {
       paramsNotifier.updateSize(metadata.width!, metadata.height!);
       appliedCount++;
     }
@@ -949,31 +794,22 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     if (!mounted) return;
 
     if (appliedCount > 0) {
-      AppToast.info(
-        context,
-        context.l10n.metadataImport_appliedToMain(appliedCount),
-      );
+      AppToast.info(context, context.l10n.metadataImport_appliedToMain(appliedCount));
     } else {
       AppToast.warning(context, context.l10n.metadataImport_noParamsSelected);
     }
   }
 
-  /// 格式化提示词（SD→NAI + 格式化）
   String _formatPrompt(String prompt) {
     return NaiPromptFormatter.format(SdToNaiConverter.convert(prompt));
   }
 
-  /// 应用单个参数（如果条件满足）
   void _applyParam<T>(bool shouldApply, T? value, void Function(T) updater) {
-    if (shouldApply && value != null) {
-      updater(value);
-    }
+    if (shouldApply && value != null) updater(value);
   }
 
-  /// 应用多角色提示词
   void _applyCharacterPrompts(dynamic metadata) {
-    final characterNotifier =
-        ref.read(characterPromptNotifierProvider.notifier);
+    final characterNotifier = ref.read(characterPromptNotifierProvider.notifier);
     final characters = <char.CharacterPrompt>[];
 
     for (var i = 0; i < metadata.characterPrompts.length; i++) {
@@ -981,9 +817,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       var negPrompt = i < metadata.characterNegativePrompts.length
           ? metadata.characterNegativePrompts[i]
           : '';
-      if (negPrompt.isNotEmpty) {
-        negPrompt = _formatPrompt(negPrompt);
-      }
+      if (negPrompt.isNotEmpty) negPrompt = _formatPrompt(negPrompt);
 
       characters.add(
         char.CharacterPrompt.create(
@@ -997,7 +831,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     characterNotifier.replaceAll(characters);
   }
 
-  /// 从提示词推断角色性别
   char.CharacterGender _inferGenderFromPrompt(String prompt) {
     final lowerPrompt = prompt.toLowerCase();
     if (lowerPrompt.contains('1girl') ||
@@ -1012,70 +845,47 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     return char.CharacterGender.other;
   }
 
-  /// 发送图片到图生图
   Future<void> _sendToImg2Img(LocalImageRecord record) async {
     try {
       final file = File(record.path);
       if (!await file.exists()) {
-        if (mounted) {
-          AppToast.info(context, '图片文件不存在');
-        }
+        if (mounted) AppToast.info(context, '图片文件不存在');
         return;
       }
 
       final imageBytes = await file.readAsBytes();
-      final paramsNotifier =
-          ref.read(generationParamsNotifierProvider.notifier);
+      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
 
       paramsNotifier.setSourceImage(imageBytes);
       paramsNotifier.updateAction(ImageGenerationAction.img2img);
 
-      if (mounted) {
-        AppToast.success(context, '图片已发送到图生图，请切换到生成页面');
-      }
+      if (mounted) AppToast.success(context, '图片已发送到图生图，请切换到生成页面');
     } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '发送失败: $e');
-      }
+      if (mounted) AppToast.error(context, '发送失败: $e');
     }
   }
 
-  /// 发送图片到 Vibe Transfer
-  /// 提取图片中的 vibe 数据并添加到生成参数
   Future<void> _sendToVibeTransfer(LocalImageRecord record) async {
     try {
-      // 检查是否有 vibe 数据
       final vibeData = record.vibeData;
       if (vibeData == null) {
-        if (mounted) {
-          AppToast.warning(context, '此图片不包含 Vibe 数据');
-        }
+        if (mounted) AppToast.warning(context, '此图片不包含 Vibe 数据');
         return;
       }
 
-      final paramsNotifier =
-          ref.read(generationParamsNotifierProvider.notifier);
-
-      // 添加 vibe 到生成参数
+      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
       paramsNotifier.addVibeReferences([vibeData]);
 
       if (mounted) {
-        AppToast.success(
-          context,
-          'Vibe "${vibeData.displayName}" 已添加到生成参数',
-        );
+        AppToast.success(context, 'Vibe "${vibeData.displayName}" 已添加到生成参数');
       }
     } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '添加 Vibe 失败: $e');
-      }
+      if (mounted) AppToast.error(context, '添加 Vibe 失败: $e');
     }
   }
 
-  /// 显示发送目标选择对话框
   Future<void> _showSendDestinationDialog(LocalImageRecord record) async {
     final destination = await ImageSendDestinationDialog.show(context, record);
-
     if (destination == null || !mounted) return;
 
     switch (destination) {
@@ -1086,7 +896,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  /// 显示图片右键上下文菜单
   Future<void> _showImageContextMenu(
     LocalImageRecord record,
     Offset position,
@@ -1102,7 +911,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         position.dy + 1,
       ),
       items: [
-        // 发送到选项
         const PopupMenuItem(
           value: 'send_to',
           child: Row(
@@ -1167,18 +975,12 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       case 'copy_prompt':
         if (metadata?.fullPrompt.isNotEmpty == true) {
           await Clipboard.setData(ClipboardData(text: metadata!.fullPrompt));
-          if (mounted) {
-            AppToast.success(context, 'Prompt 已复制');
-          }
+          if (mounted) AppToast.success(context, 'Prompt 已复制');
         }
       case 'copy_seed':
         if (metadata?.seed != null) {
-          await Clipboard.setData(
-            ClipboardData(text: metadata!.seed.toString()),
-          );
-          if (mounted) {
-            AppToast.success(context, 'Seed 已复制');
-          }
+          await Clipboard.setData(ClipboardData(text: metadata!.seed.toString()));
+          if (mounted) AppToast.success(context, 'Seed 已复制');
         }
       case 'open_folder':
         await _openFileInFolder(record.path);
@@ -1187,7 +989,6 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
-  /// 在文件夹中打开文件
   Future<void> _openFileInFolder(String filePath) async {
     try {
       if (Platform.isWindows) {
@@ -1198,13 +999,10 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         await Process.start('xdg-open', [path.dirname(filePath)]);
       }
     } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '无法打开文件夹: $e');
-      }
+      if (mounted) AppToast.error(context, '无法打开文件夹: $e');
     }
   }
 
-  /// 确认删除图片
   Future<void> _confirmDeleteImage(LocalImageRecord record) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1236,98 +1034,64 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         if (await file.exists()) {
           await file.delete();
           await ref.read(localGalleryNotifierProvider.notifier).refresh();
-          if (mounted) {
-            AppToast.success(context, '图片已删除');
-          }
+          if (mounted) AppToast.success(context, '图片已删除');
         }
       } catch (e) {
-        if (mounted) {
-          AppToast.error(context, '删除失败: $e');
-        }
+        if (mounted) AppToast.error(context, '删除失败: $e');
       }
     }
   }
 
-  /// 切换分类面板显示状态
   void _toggleCategoryPanel() {
-    setState(() {
-      _showCategoryPanel = !_showCategoryPanel;
-    });
+    setState(() => _showCategoryPanel = !_showCategoryPanel);
   }
 
-  /// 跳转到日期
   Future<void> _jumpToDate() async {
     final now = DateTime.now();
-
     final picked = await showDatePicker(
       context: context,
       initialDate: now,
       firstDate: DateTime(2020),
       lastDate: now,
-      builder: (pickerContext, child) {
-        return Theme(
-          data: Theme.of(pickerContext).copyWith(
-            dialogTheme: DialogTheme(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+      builder: (pickerContext, child) => Theme(
+        data: Theme.of(pickerContext).copyWith(
+          dialogTheme: DialogTheme(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
-          child: child!,
-        );
-      },
+        ),
+        child: child!,
+      ),
     );
 
-    if (picked != null && mounted) {
-      // 确保分组视图已激活
-      final currentState = ref.read(localGalleryNotifierProvider);
-      final notifier = ref.read(localGalleryNotifierProvider.notifier);
-      if (!currentState.isGroupedView) {
-        await notifier.setGroupedView(true);
-      }
+    if (picked == null || !mounted) return;
 
-      // 等待分组数据加载
-      await Future.delayed(const Duration(milliseconds: 300));
+    final notifier = ref.read(localGalleryNotifierProvider.notifier);
+    final currentState = ref.read(localGalleryNotifierProvider);
+    if (!currentState.isGroupedView) await notifier.setGroupedView(true);
 
-      if (!mounted) return;
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
 
-      // 计算所选日期属于哪个分组
-      final today = DateTime(now.year, now.month, now.day);
-      final yesterday = today.subtract(const Duration(days: 1));
-      final thisWeekStart = today.subtract(Duration(days: today.weekday - 1));
-      final selectedDate = DateTime(picked.year, picked.month, picked.day);
+    // Calculate date differences for grouping
+    final today = DateTime(now.year, now.month, now.day);
+    final selectedDate = DateTime(picked.year, picked.month, picked.day);
+    final daysDiff = today.difference(selectedDate).inDays;
 
-      // ignore: undefined_enum_constant
-      dynamic targetGroup;
+    late final ImageDateGroup targetGroup;
+    if (daysDiff == 0) {
+      targetGroup = ImageDateGroup.today;
+    } else if (daysDiff == 1) {
+      targetGroup = ImageDateGroup.yesterday;
+    } else if (daysDiff < today.weekday) {
+      targetGroup = ImageDateGroup.thisWeek;
+    } else {
+      targetGroup = ImageDateGroup.earlier;
+    }
 
-      // ignore: undefined_enum_constant
-      if (selectedDate == today) {
-        targetGroup = ImageDateGroup.today;
-        // ignore: undefined_enum_constant
-      } else if (selectedDate == yesterday) {
-        targetGroup = ImageDateGroup.yesterday;
-        // ignore: undefined_enum_constant
-      } else if (selectedDate.isAfter(thisWeekStart) &&
-          selectedDate.isBefore(today)) {
-        targetGroup = ImageDateGroup.thisWeek;
-        // ignore: undefined_enum_constant
-      } else {
-        targetGroup = ImageDateGroup.earlier;
-      }
+    _groupedGridViewKey.currentState?.scrollToGroup(targetGroup);
 
-      // 使用 key 跳转到对应分组
-      if (_groupedGridViewKey.currentState != null) {
-        (_groupedGridViewKey.currentState as dynamic)
-            .scrollToGroup(targetGroup);
-      }
-
-      // 显示提示
-      if (context.mounted) {
-        AppToast.info(
-          context,
-          '已跳转到 ${picked.year}-${picked.month.toString().padLeft(2, '0')}',
-        );
-      }
+    if (context.mounted) {
+      AppToast.info(context, '已跳转到 ${picked.year}-${picked.month.toString().padLeft(2, '0')}');
     }
   }
 }

@@ -7,6 +7,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/zip_utils.dart';
 
 part 'nai_image_enhancement_api_service.g.dart';
@@ -36,14 +37,19 @@ class NAIImageEnhancementApiService {
     int scale = 2,
     void Function(int, int)? onProgress,
   }) async {
-    final response = await _dio.post(
-      '${ApiConstants.imageBaseUrl}${ApiConstants.upscaleEndpoint}',
-      data: {'image': base64Encode(image), 'scale': scale},
-      onReceiveProgress: onProgress,
-      options: Options(responseType: ResponseType.bytes),
-    );
+    try {
+      final response = await _dio.post(
+        '${ApiConstants.imageBaseUrl}${ApiConstants.upscaleEndpoint}',
+        data: {'image': base64Encode(image), 'scale': scale},
+        onReceiveProgress: onProgress,
+        options: Options(responseType: ResponseType.bytes),
+      );
 
-    return response.data as Uint8List;
+      return response.data as Uint8List;
+    } on DioException catch (e) {
+      AppLogger.w('Upscale failed: ${e.message}', 'NAIEnhancement');
+      throw Exception('图像放大失败: ${_mapDioError(e)}');
+    }
   }
 
   // ==================== Vibe Transfer API ====================
@@ -52,17 +58,22 @@ class NAIImageEnhancementApiService {
     required String model,
     double informationExtracted = 1.0,
   }) async {
-    final response = await _dio.post(
-      '${ApiConstants.imageBaseUrl}${ApiConstants.encodeVibeEndpoint}',
-      data: {
-        'image': base64Encode(image),
-        'model': model,
-        'informationExtracted': informationExtracted,
-      },
-      options: Options(responseType: ResponseType.bytes),
-    );
+    try {
+      final response = await _dio.post(
+        '${ApiConstants.imageBaseUrl}${ApiConstants.encodeVibeEndpoint}',
+        data: {
+          'image': base64Encode(image),
+          'model': model,
+          'informationExtracted': informationExtracted,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
 
-    return base64Encode(response.data as Uint8List);
+      return base64Encode(response.data as Uint8List);
+    } on DioException catch (e) {
+      AppLogger.w('Encode vibe failed: ${e.message}', 'NAIEnhancement');
+      throw Exception('Vibe编码失败: ${_mapDioError(e)}');
+    }
   }
 
   // ==================== 图像增强 API ====================
@@ -72,26 +83,33 @@ class NAIImageEnhancementApiService {
     String? prompt,
     int defry = 0,
   }) async {
-    final requestData = <String, dynamic>{
-      'image': base64Encode(image),
-      'req_type': reqType,
-      'defry': defry.clamp(0, 5),
-      if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
-    };
+    try {
+      final requestData = <String, dynamic>{
+        'image': base64Encode(image),
+        'req_type': reqType,
+        'defry': defry.clamp(0, 5),
+        if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
+      };
 
-    final response = await _dio.post(
-      '${ApiConstants.imageBaseUrl}${ApiConstants.augmentImageEndpoint}',
-      data: requestData,
-      options: Options(
-        responseType: ResponseType.bytes,
-        headers: {'Accept': 'application/x-zip-compressed'},
-      ),
-    );
+      final response = await _dio.post(
+        '${ApiConstants.imageBaseUrl}${ApiConstants.augmentImageEndpoint}',
+        data: requestData,
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Accept': 'application/x-zip-compressed'},
+        ),
+      );
 
-    final images = ZipUtils.extractAllImages(response.data as Uint8List);
-    if (images.isEmpty) throw Exception('No images found in augment response');
+      final images = ZipUtils.extractAllImages(response.data as Uint8List);
+      if (images.isEmpty) {
+        throw Exception('No images found in augment response');
+      }
 
-    return images.first;
+      return images.first;
+    } on DioException catch (e) {
+      AppLogger.w('Augment image failed: ${e.message}', 'NAIEnhancement');
+      throw Exception('图像增强失败: ${_mapDioError(e)}');
+    }
   }
 
   Future<Uint8List> fixEmotion(
@@ -135,22 +153,42 @@ class NAIImageEnhancementApiService {
     Uint8List image, {
     required String annotateType,
   }) async {
-    final response = await _dio.post(
-      '${ApiConstants.imageBaseUrl}${ApiConstants.annotateImageEndpoint}',
-      data: {
-        'image': base64Encode(image),
-        'req_type': annotateType,
-      },
-      options: Options(
-        responseType: annotateType == _annotateTypeWd
-            ? ResponseType.json
-            : ResponseType.bytes,
-      ),
-    );
+    try {
+      final response = await _dio.post(
+        '${ApiConstants.imageBaseUrl}${ApiConstants.annotateImageEndpoint}',
+        data: {
+          'image': base64Encode(image),
+          'req_type': annotateType,
+        },
+        options: Options(
+          responseType: annotateType == _annotateTypeWd
+              ? ResponseType.json
+              : ResponseType.bytes,
+        ),
+      );
 
-    return annotateType == _annotateTypeWd
-        ? response.data
-        : response.data as Uint8List;
+      return annotateType == _annotateTypeWd
+          ? response.data
+          : response.data as Uint8List;
+    } on DioException catch (e) {
+      AppLogger.w('Annotate image failed: ${e.message}', 'NAIEnhancement');
+      throw Exception('图像标注失败: ${_mapDioError(e)}');
+    }
+  }
+
+  String _mapDioError(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+        return '请求超时';
+      case DioExceptionType.connectionError:
+        return '网络连接错误';
+      case DioExceptionType.badResponse:
+        return '服务器返回错误: ${e.response?.statusCode}';
+      default:
+        return e.message ?? '未知错误';
+    }
   }
 
   Future<Map<String, dynamic>> getImageTags(Uint8List image) async =>

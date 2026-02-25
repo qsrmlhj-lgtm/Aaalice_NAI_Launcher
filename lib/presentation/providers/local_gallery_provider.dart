@@ -1,23 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../core/database/database_providers.dart';
-import '../../core/database/datasources/gallery_data_source.dart'
-    hide MetadataStatus;
-import '../../core/database/providers/database_state_providers.dart';
+import '../../core/cache/gallery_cache_manager.dart';
+import '../../core/exceptions/gallery_exceptions.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/models/gallery/local_image_record.dart';
 import '../../data/models/gallery/nai_image_metadata.dart';
-import '../../data/repositories/gallery_folder_repository.dart';
 import '../../data/services/gallery/gallery_filter_service.dart';
 import '../../data/services/gallery/gallery_scan_service.dart';
-import '../../data/services/image_metadata_service.dart';
-import 'gallery_scan_progress_provider.dart';
+import '../../data/services/gallery/unified_gallery_service.dart';
 
 part 'local_gallery_provider.freezed.dart';
 part 'local_gallery_provider.g.dart';
@@ -26,23 +19,18 @@ part 'local_gallery_provider.g.dart';
 @freezed
 class LocalGalleryState with _$LocalGalleryState {
   const factory LocalGalleryState({
-    /// 所有文件
-    @Default([]) List<File> allFiles,
-
-    /// 过滤后的文件
-    @Default([]) List<File> filteredFiles,
-
     /// 当前页显示的记录
     @Default([]) List<LocalImageRecord> currentImages,
     @Default(0) int currentPage,
     @Default(50) int pageSize,
     @Default(false) bool isLoading,
-    @Default(false) bool isIndexing, // 用于兼容旧代码
-    @Default(false) bool isPageLoading, // 用于兼容旧代码
+    @Default(false) bool isIndexing,
+    @Default(false) bool isPageLoading,
+
     /// 过滤条件
     @Default(FilterCriteria()) FilterCriteria filterCriteria,
 
-    /// 分组视图（兼容旧代码）
+    /// 分组视图
     @Default(false) bool isGroupedView,
     @Default([]) List<LocalImageRecord> groupedImages,
     @Default(false) bool isGroupedLoading,
@@ -50,7 +38,7 @@ class LocalGalleryState with _$LocalGalleryState {
     /// 后台扫描进度（0-100，null表示未开始）
     double? backgroundScanProgress,
 
-    /// 扫描阶段：'checking' | 'indexing' | 'completed' | null
+    /// 扫描阶段
     String? scanPhase,
 
     /// 当前扫描的文件
@@ -62,7 +50,7 @@ class LocalGalleryState with _$LocalGalleryState {
     /// 总文件数
     @Default(0) int totalScanCount,
 
-    /// 是否正在重建索引（全量扫描）
+    /// 是否正在重建索引
     @Default(false) bool isRebuildingIndex,
 
     /// 错误信息
@@ -70,343 +58,205 @@ class LocalGalleryState with _$LocalGalleryState {
 
     /// 首次索引提示信息
     String? firstTimeIndexMessage,
+
+    /// 过滤后的总数
+    @Default(0) int filteredCount,
+
+    /// 所有文件总数
+    @Default(0) int totalCount,
+
+    /// 总页数
+    @Default(0) int totalPages,
+
+    /// 是否已初始化
+    @Default(false) bool isInitialized,
   }) = _LocalGalleryState;
 
   const LocalGalleryState._();
 
-  int get totalPages =>
-      filteredFiles.isEmpty ? 0 : (filteredFiles.length / pageSize).ceil();
-
-  /// 兼容旧代码的 getter
-  int get filteredCount => filteredFiles.length;
-  int get totalCount => allFiles.length;
-
+  /// 是否有过滤条件
   bool get hasFilters => filterCriteria.hasFilters;
+
+  /// 是否可以加载更多
+  bool get canLoadMore => currentPage < totalPages - 1;
+
+  /// 所有文件列表（兼容旧代码）
+  List<LocalImageRecord> get allFiles => currentImages;
+
+  /// 过滤后的文件列表（兼容旧代码）
+  List<LocalImageRecord> get filteredFiles => currentImages;
+
+  /// 是否是第一页
+  bool get isFirstPage => currentPage == 0;
+
+  /// 是否是最后一页
+  bool get isLastPage => currentPage >= totalPages - 1;
 }
 
-/// GalleryDataSource Provider
+/// 本地画廊 Notifier（使用统一服务层）
 ///
-/// 使用新的数据源架构，从 DatabaseManager 获取 GalleryDataSource
-@Riverpod(keepAlive: true)
-class GalleryDataSourceNotifier extends _$GalleryDataSourceNotifier {
-  @override
-  Future<GalleryDataSource> build() async {
-    final dbManager = await ref.watch(databaseManagerProvider.future);
-    final dataSource = dbManager.getDataSource<GalleryDataSource>('gallery');
-    if (dataSource == null) {
-      throw StateError('GalleryDataSource not found');
-    }
-    return dataSource;
-  }
-}
-
-/// 本地画廊 Notifier（使用新数据源架构）
-///
-/// 依赖关系：
-/// - GalleryDataSource: 新的数据源（收藏、标签操作）
-/// - GalleryFolderRepository: 文件系统操作
-/// - GalleryFilterService: 过滤逻辑
-/// - SQLite (via Repository): 唯一数据源
-/// - FileWatcherService (via Repository): 自动增量更新
+/// 职责：
+/// 1. 管理 UI 状态
+/// 2. 调用统一服务层执行业务逻辑
+/// 3. 处理错误并转换为友好的错误消息
 @Riverpod(keepAlive: true)
 class LocalGalleryNotifier extends _$LocalGalleryNotifier {
-  /// 缓存的状态，用于在 Provider 重新评估时恢复状态
   LocalGalleryState? _cachedState;
-
-  /// 过滤服务（懒加载）
-  GalleryFilterService? _filterService;
+  LocalGalleryService? _service;
 
   @override
   LocalGalleryState build() {
-    // 尝试恢复缓存状态，避免 Provider 重建时重置
-    if (_cachedState != null) {
-      return _cachedState!;
-    }
+    if (_cachedState != null) return _cachedState!;
+
+    // 监听缓存清理事件
+    GalleryCacheManager().registerOnCacheCleared(_resetState);
+    ref.onDispose(() {
+      GalleryCacheManager().unregisterOnCacheCleared(_resetState);
+    });
+
     return const LocalGalleryState();
   }
 
-  /// 内部方法：更新状态并缓存
   void _setState(LocalGalleryState newState) {
     _cachedState = newState;
     state = newState;
   }
 
-  /// 获取数据源
-  ///
-  /// 每次都从 provider 获取，确保连接有效
-  Future<GalleryDataSource> _getDataSource() async {
-    return await ref.read(galleryDataSourceNotifierProvider.future);
+  void _resetState() {
+    _cachedState = null;
+    _service = null;
+    _setState(const LocalGalleryState());
   }
 
-  /// 获取过滤服务
-  Future<GalleryFilterService> _getFilterService() async {
-    if (_filterService == null) {
-      final dataSource = await _getDataSource();
-      _filterService = GalleryFilterService(dataSource);
+  /// 获取服务实例
+  ///
+  /// 延迟初始化，确保在调用时才获取
+  Future<LocalGalleryService> _getService() async {
+    if (_service == null) {
+      // 等待服务初始化完成（最多10秒）
+      var attempts = 0;
+      const maxAttempts = 100; // 100 * 100ms = 10秒
+      LocalGalleryService? lastService;
+      while (attempts < maxAttempts) {
+        final service = ref.read(galleryServiceProvider);
+        lastService = service;
+
+        // 【调试】记录服务类型变化
+        if (attempts % 10 == 0) {
+          AppLogger.d(
+            'Waiting for gallery service: attempt=$attempts, type=${service.runtimeType}, isInitialized=${service.isInitialized}',
+            'LocalGalleryNotifier',
+          );
+        }
+
+        // 检查是否是错误状态的服务
+        if (service is ErrorGalleryService) {
+          throw GalleryDatabaseException(message: '画廊服务初始化失败: ${service.error}');
+        }
+
+        // 使用 isInitialized 检查服务是否已初始化
+        if (service.isInitialized) {
+          _service = service;
+          AppLogger.d(
+            'Gallery service ready after $attempts attempts, type=${service.runtimeType}',
+            'LocalGalleryNotifier',
+          );
+          break;
+        }
+        // 等待后重试
+        await Future.delayed(const Duration(milliseconds: 100));
+        attempts++;
+      }
+      if (_service == null) {
+        final typeInfo = lastService != null ? ' (last type: ${lastService.runtimeType})' : '';
+        throw GalleryDatabaseException(message: '画廊服务初始化超时$typeInfo');
+      }
     }
-    return _filterService!;
+    return _service!;
   }
 
   // ============================================================
   // 初始化
   // ============================================================
 
-  /// 初始化画廊（优化启动速度）
+  /// 初始化画廊
   ///
-  /// 1. 立即显示文件列表（从文件系统读取）
-  /// 2. 后台扫描索引文件
-  /// 3. 后台继续扫描剩余文件
+  /// 1. 初始化服务
+  /// 2. 加载首页数据
+  /// 3. 在后台执行索引扫描
   Future<void> initialize() async {
-    if (state.allFiles.isNotEmpty) return;
+    // 检查是否需要初始化
+    if (state.isInitialized && !state.error.notNullOrEmpty) {
+      return;
+    }
 
     _setState(state.copyWith(
       isLoading: true,
       isIndexing: true,
       isPageLoading: true,
-      backgroundScanProgress: 0.0,
+      error: null,
     ),);
 
     try {
-      // 【关键】先加载文件列表，让用户立即看到图片
-      // 这一步不依赖数据库，直接从文件系统读取
-      final files = await _getAllImageFiles();
+      final service = await _getService();
 
       // 检测是否为首次大量索引
+      final totalCount = service.totalCount;
+      final filteredCount = service.filteredCount;
+      final isServiceInitialized = service.isInitialized;
+
+      // 【调试日志】追踪计数问题
+      AppLogger.d(
+        'Gallery init: total=$totalCount, filtered=$filteredCount, '
+        'isInitialized=$isServiceInitialized, serviceType=${service.runtimeType}',
+        'LocalGalleryNotifier',
+      );
+
       String? firstTimeMessage;
-      if (files.length > 10000) {
-        firstTimeMessage = '检测到 ${files.length} 张图片，首次索引可能需要几分钟，应用仍可正常使用';
-        AppLogger.i(firstTimeMessage, 'LocalGalleryNotifier');
+      if (totalCount > 10000) {
+        firstTimeMessage = '检测到 $totalCount 张图片，首次索引可能需要几分钟，应用仍可正常使用';
       }
 
       _setState(state.copyWith(
-        allFiles: files,
-        filteredFiles: files,
-        isLoading: false, // 文件列表已显示，可以交互了
+        totalCount: totalCount,
+        filteredCount: service.filteredCount,
         firstTimeIndexMessage: firstTimeMessage,
+        isLoading: false,
+        isInitialized: true,
       ),);
 
-      // 加载首页（显示图片）
+      // 加载首页
       await loadPage(0);
 
-      // 在后台初始化仓库（扫描索引）
-      // 这不会阻塞UI，因为文件已经显示了
-      unawaited(_initializeInBackground());
-    } catch (e) {
-      AppLogger.e('Failed to initialize', e, null, 'LocalGalleryNotifier');
+      // 后台扫描（通过服务层自动处理）
       _setState(state.copyWith(
-        error: e.toString(),
+        isIndexing: false,
+        isPageLoading: false,
+      ),);
+    } on GalleryPermissionDeniedException catch (e) {
+      AppLogger.e('Gallery permission denied', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '无法访问图片文件夹，请检查权限设置',
         isLoading: false,
         isIndexing: false,
         isPageLoading: false,
-        backgroundScanProgress: null,
       ),);
-    }
-  }
-
-  /// 从文件系统获取所有图片文件
-  Future<List<File>> _getAllImageFiles() async {
-    final rootPath = await GalleryFolderRepository.instance.getRootPath();
-    if (rootPath == null || rootPath.isEmpty) return [];
-
-    final rootDir = Directory(rootPath);
-    if (!await rootDir.exists()) return [];
-
-    var files = <File>[];
-    const supportedExtensions = {'.png', '.jpg', '.jpeg', '.webp'};
-
-    try {
-      await for (final entity
-          in rootDir.list(recursive: true, followLinks: false)) {
-        if (entity is File) {
-          // 【修复】排除.thumbs目录中的文件，防止缩略图被当作源文件
-          if (entity.path.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
-              entity.path.contains('.thumb.')) {
-            continue;
-          }
-
-          final ext = entity.path.split('.').last.toLowerCase();
-          if (supportedExtensions.contains('.$ext')) {
-            files.add(entity);
-          }
-        }
-      }
-      // 按修改时间排序（最新的在前）- 使用异步并发获取文件状态
-      final fileStats = await Future.wait(
-        files.map((file) async {
-          try {
-            return (file: file, stat: await file.stat());
-          } catch (_) {
-            return null;
-          }
-        }),
-      );
-
-      final validStats = fileStats.whereType<({File file, FileStat stat})>().toList();
-      validStats.sort((a, b) => b.stat.modified.compareTo(a.stat.modified));
-
-      files = validStats.map((e) => e.file).toList();
-    } catch (e) {
-      AppLogger.e('Failed to get image files', e, null, 'LocalGalleryNotifier');
-    }
-
-    return files;
-  }
-
-  /// 后台初始化（扫描索引）
-  ///
-  /// 使用 GalleryScanService 进行流式批量处理，启用缓存机制提高性能
-  /// 支持增量扫描：如果数据库已有记录且文件数量匹配，则跳过扫描
-  Future<void> _initializeInBackground() async {
-    try {
-      final allFiles = state.allFiles;
-
-      if (allFiles.isEmpty) {
-        _setState(state.copyWith(
-          isIndexing: false,
-          isPageLoading: false,
-          backgroundScanProgress: null,
-          scanPhase: null,
-        ),);
-        return;
-      }
-
-      // 【增量扫描优化】检查是否需要完整扫描
-      final dataSource = await _getDataSource();
-      final existingCount = await dataSource.countImages();
-
-      // 如果数据库已有记录且文件数量匹配，执行快速检查而非完整扫描
-      if (existingCount > 0 && existingCount == allFiles.length) {
-        AppLogger.i(
-          'Database has $existingCount records matching ${allFiles.length} files, performing quick check',
-          'LocalGalleryNotifier',
-        );
-
-        // 使用增量扫描检测是否有新文件或修改的文件
-        final rootPath = await GalleryFolderRepository.instance.getRootPath();
-        if (rootPath != null) {
-          final scanService = GalleryScanService.instance;
-          final dir = Directory(rootPath);
-
-          // 执行增量扫描（只处理新增或修改的文件）
-          final result = await scanService.incrementalScan(dir);
-
-          if (result.filesAdded == 0 &&
-              result.filesUpdated == 0 &&
-              result.filesDeleted == 0) {
-            AppLogger.i(
-              'Database is up to date, skipping full scan',
-              'LocalGalleryNotifier',
-            );
-            _setState(state.copyWith(
-              isIndexing: false,
-              isPageLoading: false,
-              backgroundScanProgress: null,
-              scanPhase: null,
-            ),);
-            // 静默刷新当前页
-            await loadPage(state.currentPage, showLoading: false);
-            return;
-          }
-
-          AppLogger.i(
-            'Incremental scan complete: ${result.filesAdded} added, ${result.filesUpdated} updated, ${result.filesDeleted} deleted',
-            'LocalGalleryNotifier',
-          );
-          _setState(state.copyWith(
-            isIndexing: false,
-            isPageLoading: false,
-          ),);
-          await loadPage(state.currentPage, showLoading: false);
-          return;
-        }
-      }
-
-      // 首次初始化或文件数量不匹配，执行完整扫描
-      AppLogger.i(
-        'Performing full scan: ${allFiles.length} files (existing: $existingCount)',
-        'LocalGalleryNotifier',
-      );
-
-      // 使用 GalleryScanService 进行批量处理，启用缓存机制
-      final scanService = GalleryScanService.instance;
-      final filesToScan = allFiles.map((f) => File(f.path)).toList();
-
-      await scanService.processFiles(filesToScan);
-
-      // 完成
-      _onScanProgress(
-        processed: allFiles.length,
-        total: allFiles.length,
-        phase: 'completed',
-      );
-
-      // 扫描完成后，静默刷新当前页以显示元数据（不显示加载中）
+    } on GalleryScanException catch (e) {
+      AppLogger.e('Gallery scan failed', e, null, 'LocalGalleryNotifier');
       _setState(state.copyWith(
+        error: '扫描图片失败: ${e.message}',
+        isLoading: false,
         isIndexing: false,
         isPageLoading: false,
       ),);
-      // 后台刷新，不显示加载状态，避免干扰用户浏览
-      await loadPage(state.currentPage, showLoading: false);
-
-      // 延迟清理扫描状态（让用户看到 100% 完成）
-      Future.delayed(const Duration(seconds: 2), () {
-        if (state.scanPhase == 'completed') {
-          _setState(state.copyWith(
-            backgroundScanProgress: null,
-            scanPhase: null,
-            scanningFile: null,
-          ),);
-        }
-      });
     } catch (e) {
-      AppLogger.w(
-        'Background initialization failed: $e',
-        'LocalGalleryNotifier',
-      );
+      AppLogger.e('Failed to initialize gallery', e, null, 'LocalGalleryNotifier');
       _setState(state.copyWith(
+        error: '初始化失败: $e',
+        isLoading: false,
         isIndexing: false,
         isPageLoading: false,
-        backgroundScanProgress: null,
-        scanPhase: null,
       ),);
-    }
-  }
-
-  /// 处理扫描进度回调
-  void _onScanProgress({
-    required int processed,
-    required int total,
-    String? currentFile,
-    required String phase,
-  }) {
-    // 如果是 'pending' 阶段，表示有大量文件待处理，跳过预热阶段
-    if (phase == 'pending') {
-      _setState(state.copyWith(
-        scanPhase: 'pending',
-        totalScanCount: total,
-        isIndexing: false, // 用户可立即交互
-      ),);
-      return;
-    }
-
-    final progress = total > 0 ? processed / total : 0.0;
-    _setState(state.copyWith(
-      backgroundScanProgress: progress,
-      scanPhase: phase,
-      scanningFile: currentFile,
-      scannedCount: processed,
-      totalScanCount: total,
-    ),);
-
-    // 扫描完成时清理状态
-    if (phase == 'completed') {
-      Future.delayed(const Duration(seconds: 2), () {
-        _setState(state.copyWith(
-          backgroundScanProgress: null,
-          scanPhase: null,
-          scanningFile: null,
-        ),);
-      });
     }
   }
 
@@ -416,401 +266,167 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
 
   /// 加载指定页面
   ///
-  /// [showLoading] - 是否显示加载状态。后台刷新时应为 false，避免干扰用户浏览
+  /// [page] 页码（从0开始）
+  /// [showLoading] 是否显示加载状态
   Future<void> loadPage(int page, {bool showLoading = true}) async {
-    if (state.filteredFiles.isEmpty) {
-      _setState(state.copyWith(currentImages: [], currentPage: 0));
+    if (!state.isInitialized) {
+      AppLogger.w('Gallery not initialized, cannot load page', 'LocalGalleryNotifier');
       return;
     }
-    if (page < 0 || page >= state.totalPages) return;
 
     if (showLoading) {
       _setState(state.copyWith(isLoading: true, currentPage: page));
     }
-    try {
-      final start = page * state.pageSize;
-      final end = min(start + state.pageSize, state.filteredFiles.length);
-      final batch = state.filteredFiles.sublist(start, end);
 
-      final records = await _loadRecords(batch);
-      _setState(state.copyWith(currentImages: records, isLoading: false));
+    try {
+      final service = await _getService();
+      final records = await service.getPage(page, pageSize: state.pageSize);
+
+      // 计算总页数
+      final totalItems = state.filterCriteria.hasFilters
+          ? service.filteredCount
+          : service.totalCount;
+      final totalPages = (totalItems / state.pageSize).ceil();
+
+      _setState(state.copyWith(
+        currentImages: records,
+        currentPage: page,
+        totalPages: totalPages,
+        filteredCount: service.filteredCount,
+        totalCount: service.totalCount,
+        isLoading: false,
+        isPageLoading: false,
+      ),);
+    } on GalleryNotInitializedException {
+      _setState(state.copyWith(
+        error: '画廊服务正在初始化，请稍后再试',
+        isLoading: false,
+        isPageLoading: false,
+      ),);
+    } on GalleryDatabaseException catch (e) {
+      AppLogger.e('Database error loading page', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '数据库错误: ${e.message}',
+        isLoading: false,
+        isPageLoading: false,
+      ),);
     } catch (e) {
-      AppLogger.e('Failed to load page', e, null, 'LocalGalleryNotifier');
+      AppLogger.e('Failed to load page $page', e, null, 'LocalGalleryNotifier');
       _setState(state.copyWith(
         isLoading: false,
-        isIndexing: false,
         isPageLoading: false,
       ),);
     }
   }
 
-  /// 从文件列表加载记录
+  /// 加载下一页
+  Future<void> loadNextPage() async {
+    if (state.isLastPage || state.isLoading) return;
+    await loadPage(state.currentPage + 1);
+  }
+
+  /// 加载上一页
+  Future<void> loadPreviousPage() async {
+    if (state.isFirstPage || state.isLoading) return;
+    await loadPage(state.currentPage - 1);
+  }
+
+  /// 刷新画廊
   ///
-  /// 使用批量查询方法，将每页的查询次数从 200+ 减少到 ~4 次：
-  /// 1. 批量获取图片ID（通过文件路径）
-  /// 2. 批量获取收藏状态
-  /// 3. 批量获取标签
-  /// 4. 批量获取元数据
-  Future<List<LocalImageRecord>> _loadRecords(List<File> files) async {
-    final dataSource = await _getDataSource();
-
-    // 预加载所有图片的元数据到缓存（后台执行，不阻塞）
-    _preloadMetadataBatch(files);
-
-    // 获取文件状态信息
-    final fileStats = <File, FileStat>{};
-    for (final file in files) {
-      try {
-        fileStats[file] = await file.stat();
-      } catch (e) {
-        AppLogger.w(
-          'Failed to stat file: ${file.path}',
-          'LocalGalleryNotifier',
-        );
-      }
-    }
-
-    // 1. 批量获取图片ID（1次查询）
-    final paths = files.map((f) => f.path).toList();
-    final pathToIdMap = await dataSource.getImageIdsByPaths(paths);
-
-    // 收集有效的图片ID
-    final imageIds = <int>[];
-    for (final entry in pathToIdMap.entries) {
-      final id = entry.value;
-      if (id != null) {
-        imageIds.add(id);
-      }
-    }
-
-    // 2-4. 批量获取收藏状态、标签和元数据（并行执行，共3次查询）
-    final results = await Future.wait([
-      dataSource.getFavoritesByImageIds(imageIds),
-      dataSource.getTagsByImageIds(imageIds),
-      dataSource.getMetadataByImageIds(imageIds),
-    ]);
-    final favoritesMap = results[0] as Map<int, bool>;
-    final tagsMap = results[1] as Map<int, List<String>>;
-    final metadataMap = results[2] as Map<int, GalleryMetadataRecord?>;
-
-    // 构建记录列表
-    final records = <LocalImageRecord>[];
-
-    for (final file in files) {
-      try {
-        final stat = fileStats[file];
-        if (stat == null) continue;
-
-        final imageId = pathToIdMap[file.path];
-
-        bool isFavorite = false;
-        List<String> tags = [];
-        NaiImageMetadata? metadata;
-        MetadataStatus metadataStatus = MetadataStatus.none;
-
-        if (imageId != null) {
-          // 从批量查询结果中获取数据
-          isFavorite = favoritesMap[imageId] ?? false;
-          tags = tagsMap[imageId] ?? [];
-
-          // 处理元数据
-          final metadataRecord = metadataMap[imageId];
-          if (metadataRecord != null) {
-            // 如果有 rawJson，从中重新解析完整的元数据（包含新字段）
-            if (metadataRecord.rawJson != null &&
-                metadataRecord.rawJson!.isNotEmpty) {
-              try {
-                final json =
-                    jsonDecode(metadataRecord.rawJson!) as Map<String, dynamic>;
-                metadata = NaiImageMetadata.fromNaiComment(
-                  json,
-                  rawJson: metadataRecord.rawJson,
-                );
-              } catch (e) {
-                AppLogger.w(
-                  'Failed to parse rawJson for $imageId, using basic metadata',
-                  'LocalGalleryNotifier',
-                );
-                // 回退到基本元数据
-                metadata = _buildBasicMetadata(metadataRecord);
-              }
-            } else {
-              // 没有 rawJson，使用基本元数据
-              metadata = _buildBasicMetadata(metadataRecord);
-            }
-            metadataStatus =
-                metadata.hasData ? MetadataStatus.success : MetadataStatus.none;
-          }
-        }
-
-        records.add(
-          LocalImageRecord(
-            path: file.path,
-            size: stat.size,
-            modifiedAt: stat.modified,
-            isFavorite: isFavorite,
-            tags: tags,
-            metadata: metadata,
-            metadataStatus: metadataStatus,
-          ),
-        );
-      } catch (e) {
-        AppLogger.w(
-          'Failed to load record for ${file.path}',
-          'LocalGalleryNotifier',
-        );
-        // 使用基本信息创建记录
-        records.add(
-          LocalImageRecord(
-            path: file.path,
-            size: 0,
-            modifiedAt: DateTime.now(),
-          ),
-        );
-      }
-    }
-
-    return records;
-  }
-
-  /// 批量预加载元数据到缓存（后台执行，不阻塞UI）
-  void _preloadMetadataBatch(List<File> files) {
-    // 筛选出PNG文件
-    final pngFiles =
-        files.where((f) => f.path.toLowerCase().endsWith('.png')).toList();
-    if (pngFiles.isEmpty) return;
-
-    // 后台预加载，不等待结果
-    Future.microtask(() {
-      try {
-        final images = pngFiles
-            .map((f) => GeneratedImageInfo(id: f.path, filePath: f.path))
-            .toList();
-        ImageMetadataService().preloadBatch(images);
-      } catch (e) {
-        AppLogger.w(
-          'Failed to preload metadata batch: $e',
-          'LocalGalleryNotifier',
-        );
-      }
-    });
-  }
-
-  /// 从 GalleryMetadataRecord 构建基本元数据（不包含新字段）
-  NaiImageMetadata _buildBasicMetadata(GalleryMetadataRecord record) {
-    return NaiImageMetadata(
-      prompt: record.prompt,
-      negativePrompt: record.negativePrompt,
-      seed: record.seed,
-      sampler: record.sampler,
-      steps: record.steps,
-      scale: record.scale,
-      width: record.width,
-      height: record.height,
-      model: record.model,
-      smea: record.smea,
-      smeaDyn: record.smeaDyn,
-      noiseSchedule: record.noiseSchedule,
-      cfgRescale: record.cfgRescale,
-      ucPreset: record.ucPreset,
-      qualityToggle: record.qualityToggle,
-      isImg2Img: record.isImg2Img,
-      strength: record.strength,
-      noise: record.noise,
-      software: record.software,
-      source: record.source,
-      version: record.version,
-      rawJson: record.rawJson,
-    );
-  }
-
-  /// 刷新（增量扫描）
+  /// 执行增量扫描，更新文件列表和索引
   Future<void> refresh() async {
+    if (!state.isInitialized) {
+      await initialize();
+      return;
+    }
+
     _setState(state.copyWith(isLoading: true));
+
     try {
-      final files = await _getAllImageFiles();
-      _setState(state.copyWith(allFiles: files, isLoading: false));
-      await _applyFilters();
+      final service = await _getService();
+      await service.refresh();
 
-      // 后台扫描新文件的元数据
-      unawaited(_scanNewFilesForMetadata(files));
-    } catch (e) {
-      _setState(state.copyWith(error: e.toString(), isLoading: false));
-    }
-  }
+      // 重新应用当前过滤
+      await service.applyFilter(state.filterCriteria);
 
-  /// 后台扫描新文件的元数据
-  Future<void> _scanNewFilesForMetadata(List<File> files) async {
-    try {
-      final rootPath = await GalleryFolderRepository.instance.getRootPath();
-      if (rootPath == null) return;
+      _setState(state.copyWith(
+        totalCount: service.totalCount,
+        filteredCount: service.filteredCount,
+        isLoading: false,
+      ),);
 
-      final scanService = GalleryScanService.instance;
-      final progressNotifier = ref.read(galleryScanProgressProvider.notifier);
-
-      // 创建进度回调
-      final progressCallback = createScanProgressCallback(progressNotifier);
-
-      await scanService.processFiles(
-        files,
-        onProgress: progressCallback,
-      );
-
-      // 扫描完成后刷新当前页以显示元数据
+      // 刷新当前页
       await loadPage(state.currentPage, showLoading: false);
-    } catch (e) {
-      AppLogger.w(
-        'Failed to scan new files for metadata: $e',
-        'LocalGalleryNotifier',
-      );
-    }
-  }
-
-  /// 取消令牌，用于取消重建索引
-  bool _shouldCancelRebuild = false;
-
-  /// 重建索引（全量扫描）
-  /// 返回扫描结果，调用方应根据结果显示 Toast
-  Future<ScanResult?> performFullScan() async {
-    if (state.isRebuildingIndex) {
-      // 如果已经在重建中，则取消
-      _shouldCancelRebuild = true;
-      return null;
-    }
-
-    _shouldCancelRebuild = false;
-    _setState(state.copyWith(isRebuildingIndex: true, isLoading: true));
-
-    try {
-      final dataSource = await _getDataSource();
-      final allFiles = state.allFiles;
-      final total = allFiles.length;
-      var processed = 0;
-      var newFiles = 0;
-      var updatedFiles = 0;
-      var failedFiles = 0;
-      final stopwatch = Stopwatch()..start();
-
-      const batchSize = 100;
-      for (var i = 0; i < total; i += batchSize) {
-        if (_shouldCancelRebuild) {
-          break;
-        }
-
-        final end = (i + batchSize < total) ? i + batchSize : total;
-        final batch = allFiles.sublist(i, end);
-
-        for (final file in batch) {
-          try {
-            final stat = await file.stat();
-            final fileName = file.path.split(Platform.pathSeparator).last;
-
-            // 检查是否已存在
-            final existingId = await dataSource.getImageIdByPath(file.path);
-
-            await dataSource.upsertImage(
-              filePath: file.path,
-              fileName: fileName,
-              fileSize: stat.size,
-              createdAt: stat.changed,
-              modifiedAt: stat.modified,
-            );
-
-            if (existingId == null) {
-              newFiles++;
-            } else {
-              updatedFiles++;
-            }
-          } catch (e) {
-            failedFiles++;
-          }
-        }
-
-        processed += batch.length;
-        _onScanProgress(
-          processed: processed,
-          total: total,
-          currentFile: batch.last.path.split(Platform.pathSeparator).last,
-          phase: 'indexing',
-        );
-
-        // 让出时间片
-        await Future.delayed(Duration.zero);
-      }
-
-      stopwatch.stop();
-
-      if (_shouldCancelRebuild) {
-        AppLogger.i('Rebuild index cancelled by user', 'LocalGalleryNotifier');
-        _setState(state.copyWith(
-          isLoading: false,
-          isRebuildingIndex: false,
-        ),);
-        return null;
-      }
-
-      final files = await _getAllImageFiles();
+    } on GalleryScanException catch (e) {
       _setState(state.copyWith(
-        allFiles: files,
+        error: '刷新失败: ${e.message}',
         isLoading: false,
-        isRebuildingIndex: false,
       ),);
-      await _applyFilters();
-
-      return ScanResult(
-        totalFiles: total,
-        newFiles: newFiles,
-        updatedFiles: updatedFiles,
-        failedFiles: failedFiles,
-        duration: stopwatch.elapsed,
-      );
     } catch (e) {
       _setState(state.copyWith(
-        error: e.toString(),
+        error: '刷新失败: $e',
         isLoading: false,
-        isRebuildingIndex: false,
       ),);
-      return null;
     }
   }
 
   // ============================================================
-  // 搜索和过滤（使用 GalleryFilterService）
+  // 过滤和搜索
   // ============================================================
 
   Future<void> setSearchQuery(String query) async {
     final criteria = state.filterCriteria;
     if (criteria.searchQuery == query) return;
+
     _setState(state.copyWith(
       filterCriteria: criteria.copyWith(searchQuery: query),
+      currentPage: 0,
     ),);
+
     await _applyFilters();
   }
 
   Future<void> setDateRange(DateTime? start, DateTime? end) async {
     final criteria = state.filterCriteria;
     if (criteria.dateStart == start && criteria.dateEnd == end) return;
+
     _setState(state.copyWith(
       filterCriteria: criteria.copyWith(
         dateStart: start,
         dateEnd: end,
       ),
+      currentPage: 0,
     ),);
+
     await _applyFilters();
   }
 
   Future<void> setShowFavoritesOnly(bool value) async {
     final criteria = state.filterCriteria;
     if (criteria.showFavoritesOnly == value) return;
+
     _setState(state.copyWith(
       filterCriteria: criteria.copyWith(showFavoritesOnly: value),
+      currentPage: 0,
     ),);
+
     await _applyFilters();
   }
 
   Future<void> setPageSize(int size) async {
     if (state.pageSize == size) return;
-    _setState(state.copyWith(pageSize: size, currentPage: 0));
+
+    _setState(state.copyWith(
+      pageSize: size,
+      currentPage: 0,
+    ),);
+
+    // 更新服务层的分页大小
+    try {
+      final service = await _getService();
+      await service.setPageSize(size);
+    } catch (_) {}
+
     await loadPage(0);
   }
 
@@ -820,6 +436,7 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
         filterModel: model,
         clearFilterModel: model == null,
       ),
+      currentPage: 0,
     ),);
     await _applyFilters();
   }
@@ -830,6 +447,7 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
         filterSampler: sampler,
         clearFilterSampler: sampler == null,
       ),
+      currentPage: 0,
     ),);
     await _applyFilters();
   }
@@ -842,6 +460,7 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
         clearFilterMinSteps: min == null,
         clearFilterMaxSteps: max == null,
       ),
+      currentPage: 0,
     ),);
     await _applyFilters();
   }
@@ -854,6 +473,7 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
         clearFilterMinCfg: min == null,
         clearFilterMaxCfg: max == null,
       ),
+      currentPage: 0,
     ),);
     await _applyFilters();
   }
@@ -864,6 +484,7 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
         filterResolution: resolution,
         clearFilterResolution: resolution == null,
       ),
+      currentPage: 0,
     ),);
     await _applyFilters();
   }
@@ -881,98 +502,114 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
   Future<void> _loadGroupedImages() async {
     _setState(state.copyWith(isGroupedLoading: true));
     try {
-      final records = await _loadRecords(state.filteredFiles);
-      _setState(state.copyWith(groupedImages: records, isGroupedLoading: false));
+      // 加载所有过滤后的图片用于分组
+      final service = await _getService();
+      final allRecords = <LocalImageRecord>[];
+
+      // 分批加载所有图片
+      const batchSize = 100;
+      int page = 0;
+      while (true) {
+        final records = await service.getPage(page, pageSize: batchSize);
+        if (records.isEmpty) break;
+        allRecords.addAll(records);
+        if (records.length < batchSize) break;
+        page++;
+      }
+
+      _setState(state.copyWith(
+        groupedImages: allRecords,
+        isGroupedLoading: false,
+      ),);
     } catch (e) {
+      AppLogger.e('Failed to load grouped images', e, null, 'LocalGalleryNotifier');
       _setState(state.copyWith(isGroupedLoading: false));
     }
   }
 
   Future<void> clearAllFilters() async {
-    _setState(state.copyWith(filterCriteria: const FilterCriteria()));
+    _setState(state.copyWith(
+      filterCriteria: const FilterCriteria(),
+      currentPage: 0,
+    ),);
     await _applyFilters();
   }
 
-  /// 应用过滤（使用 GalleryFilterService）
+  /// 应用过滤条件
   Future<void> _applyFilters() async {
-    final criteria = state.filterCriteria;
+    try {
+      final service = await _getService();
+      final criteria = state.filterCriteria;
 
-    // 无过滤
-    if (!criteria.hasFilters) {
-      _setState(state.copyWith(filteredFiles: state.allFiles, currentPage: 0));
-      await loadPage(0);
-      return;
-    }
+      // 【调试】记录过滤条件详情
+      AppLogger.d(
+        'Applying filters: hasFilters=${criteria.hasFilters}, search="${criteria.searchQuery}", '
+        'dateStart=${criteria.dateStart}, dateEnd=${criteria.dateEnd}, favOnly=${criteria.showFavoritesOnly}, '
+        'tags=${criteria.selectedTags}, model=${criteria.filterModel}, sampler=${criteria.filterSampler}, '
+        'steps=${criteria.filterMinSteps}-${criteria.filterMaxSteps}, cfg=${criteria.filterMinCfg}-${criteria.filterMaxCfg}, '
+        'res=${criteria.filterResolution}, width=${criteria.minWidth}-${criteria.maxWidth}, '
+        'height=${criteria.minHeight}-${criteria.maxHeight}, fileSize=${criteria.minFileSize}-${criteria.maxFileSize}, '
+        'metaStatuses=${criteria.metadataStatuses}',
+        'LocalGalleryNotifier',
+      );
 
-    // 使用过滤服务
-    final filterService = await _getFilterService();
-    final filtered = await filterService.applyFilters(
-      state.allFiles,
-      criteria,
-    );
+      await service.applyFilter(criteria);
 
-    _setState(state.copyWith(filteredFiles: filtered, currentPage: 0));
+      // 【调试】记录过滤结果
+      AppLogger.d(
+        'Filter result: total=${service.totalCount}, filtered=${service.filteredCount}, '
+        'currentFilter=${service.currentFilter.hasFilters}',
+        'LocalGalleryNotifier',
+      );
 
-    // 如果在分组视图下，重新加载分组图片
-    if (state.isGroupedView) {
-      await _loadGroupedImages();
-    } else {
-      await loadPage(0);
+      _setState(state.copyWith(
+        filteredCount: service.filteredCount,
+        totalCount: service.totalCount,
+      ),);
+
+      if (state.isGroupedView) {
+        await _loadGroupedImages();
+      } else {
+        await loadPage(0);
+      }
+    } on GalleryFilterException catch (e) {
+      AppLogger.e('Filter failed', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '过滤失败: ${e.message}',
+      ),);
+    } catch (e) {
+      AppLogger.e('Failed to apply filters', e, null, 'LocalGalleryNotifier');
     }
   }
 
   // ============================================================
-  // 收藏（使用新数据源）
+  // 收藏
   // ============================================================
 
   Future<void> toggleFavorite(String filePath) async {
     try {
-      final dataSource = await _getDataSource();
-      final imageId = await dataSource.getImageIdByPath(filePath);
+      final service = await _getService();
+      final isFav = await service.toggleFavorite(filePath);
 
-      if (imageId != null) {
-        // 使用新数据源切换收藏状态
-        await dataSource.toggleFavorite(imageId);
-        AppLogger.d(
-          'Toggled favorite for image $imageId via GalleryDataSource',
-          'LocalGalleryNotifier',
-        );
-      } else {
-        // 如果图片不在数据库中，先索引它
-        AppLogger.w(
-          'Image not found in database, indexing first: $filePath',
-          'LocalGalleryNotifier',
-        );
-        final file = File(filePath);
-        if (await file.exists()) {
-          final stat = await file.stat();
-          final fileName = filePath.split(Platform.pathSeparator).last;
-          final newId = await dataSource.upsertImage(
-            filePath: filePath,
-            fileName: fileName,
-            fileSize: stat.size,
-            createdAt: stat.changed,
-            modifiedAt: stat.modified,
-          );
-          await dataSource.toggleFavorite(newId);
-        }
-      }
-
-      // 更新当前页显示的记录的收藏状态
-      final updatedCurrentImages = state.currentImages.map((record) {
+      // 更新当前页显示
+      final updatedImages = state.currentImages.map((record) {
         if (record.path == filePath) {
-          return record.copyWith(isFavorite: !record.isFavorite);
+          return record.copyWith(isFavorite: isFav);
         }
         return record;
       }).toList();
 
-      // 更新当前页显示
-      _setState(state.copyWith(currentImages: updatedCurrentImages));
+      _setState(state.copyWith(currentImages: updatedImages));
 
-      // 如果启用了收藏过滤，重新应用过滤以更新列表
-      if (state.filterCriteria.showFavoritesOnly) {
+      // 如果启用了收藏过滤，重新应用过滤
+      if (state.filterCriteria.showFavoritesOnly && !isFav) {
         await _applyFilters();
       }
+    } on GalleryDatabaseException catch (e) {
+      AppLogger.e('Toggle favorite failed', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '切换收藏状态失败: ${e.message}',
+      ),);
     } catch (e) {
       AppLogger.e('Toggle favorite failed', e, null, 'LocalGalleryNotifier');
     }
@@ -980,14 +617,8 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
 
   Future<bool> isFavorite(String filePath) async {
     try {
-      final dataSource = await _getDataSource();
-      final imageId = await dataSource.getImageIdByPath(filePath);
-
-      if (imageId != null) {
-        return await dataSource.isFavorite(imageId);
-      }
-
-      return false;
+      final service = await _getService();
+      return await service.isFavorite(filePath);
     } catch (e) {
       AppLogger.e('Check favorite failed', e, null, 'LocalGalleryNotifier');
       return false;
@@ -995,19 +626,16 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
   }
 
   Future<int> getTotalFavoriteCount() async {
-    // 检查数据库是否正在恢复
-    final stateMachine = ref.read(databaseStateMachineProvider);
-    if (stateMachine.isTransitioning) {
-      AppLogger.d(
-        'Database is transitioning, returning cached favorite count (0)',
-        'LocalGalleryNotifier',
-      );
-      return 0;
-    }
-
     try {
-      final dataSource = await _getDataSource();
-      return await dataSource.getFavoriteCount();
+      final service = await _getService();
+      // 通过过滤收藏项统计
+      const favCriteria = FilterCriteria(showFavoritesOnly: true);
+      await service.applyFilter(favCriteria);
+      final count = service.filteredCount;
+
+      // 恢复原始过滤
+      await service.applyFilter(state.filterCriteria);
+      return count;
     } catch (e) {
       AppLogger.e('Get favorite count failed', e, null, 'LocalGalleryNotifier');
       return 0;
@@ -1015,62 +643,135 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
   }
 
   // ============================================================
-  // 标签（使用新数据源）
+  // 元数据
+  // ============================================================
+
+  Future<NaiImageMetadata?> getMetadata(String filePath) async {
+    try {
+      final service = await _getService();
+      return await service.getMetadata(filePath);
+    } on GalleryMetadataException catch (e) {
+      AppLogger.w('Get metadata failed: ${e.message}', 'LocalGalleryNotifier');
+      return null;
+    } catch (e) {
+      AppLogger.e('Get metadata failed', e, null, 'LocalGalleryNotifier');
+      return null;
+    }
+  }
+
+  // ============================================================
+  // 索引管理
+  // ============================================================
+
+  bool _shouldCancelRebuild = false;
+
+  /// 重建索引（全量扫描）
+  Future<ScanResult?> performFullScan() async {
+    if (state.isRebuildingIndex) {
+      _shouldCancelRebuild = true;
+      return null;
+    }
+
+    _shouldCancelRebuild = false;
+    _setState(state.copyWith(
+      isRebuildingIndex: true,
+      isLoading: true,
+    ),);
+
+    try {
+      final service = await _getService();
+
+      // 设置进度回调
+      // 注意：服务层需要支持进度回调才能实时更新
+      final result = await service.rebuildIndex();
+
+      if (_shouldCancelRebuild) {
+        _shouldCancelRebuild = false;
+        _setState(state.copyWith(
+          isRebuildingIndex: false,
+          isLoading: false,
+        ),);
+        return null;
+      }
+
+      // 刷新状态
+      _setState(state.copyWith(
+        totalCount: service.totalCount,
+        filteredCount: service.filteredCount,
+        isRebuildingIndex: false,
+        isLoading: false,
+      ),);
+
+      // 刷新当前页
+      await loadPage(0, showLoading: false);
+
+      return result;
+    } on GalleryCancelledException {
+      _setState(state.copyWith(
+        isRebuildingIndex: false,
+        isLoading: false,
+      ),);
+      return null;
+    } on GalleryScanException catch (e) {
+      AppLogger.e('Rebuild index failed', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '重建索引失败: ${e.message}',
+        isRebuildingIndex: false,
+        isLoading: false,
+      ),);
+      return null;
+    } catch (e) {
+      AppLogger.e('Rebuild index failed', e, null, 'LocalGalleryNotifier');
+      _setState(state.copyWith(
+        error: '重建索引失败: $e',
+        isRebuildingIndex: false,
+        isLoading: false,
+      ),);
+      return null;
+    }
+  }
+
+  // ============================================================
+  // 标签（保持向后兼容）
   // ============================================================
 
   Future<List<String>> getTags(String filePath) async {
-    try {
-      final dataSource = await _getDataSource();
-      final imageId = await dataSource.getImageIdByPath(filePath);
-
-      if (imageId != null) {
-        // 使用新数据源获取标签
-        return await dataSource.getImageTags(imageId);
-      }
-
-      return [];
-    } catch (e) {
-      AppLogger.e('Get tags failed', e, null, 'LocalGalleryNotifier');
-      return [];
-    }
+    // 从当前加载的记录中查找
+    final record = state.currentImages.firstWhere(
+      (r) => r.path == filePath,
+      orElse: () => LocalImageRecord(
+        path: filePath,
+        size: 0,
+        modifiedAt: DateTime.now(),
+      ),
+    );
+    return record.tags;
   }
 
   Future<void> setTags(String filePath, List<String> tags) async {
-    try {
-      final dataSource = await _getDataSource();
-      var imageId = await dataSource.getImageIdByPath(filePath);
-
-      if (imageId != null) {
-        // 使用新数据源设置标签
-        await dataSource.setImageTags(imageId, tags);
-        AppLogger.d(
-          'Set tags for image $imageId via GalleryDataSource',
-          'LocalGalleryNotifier',
-        );
-      } else {
-        // 如果图片不在数据库中，先索引它
-        AppLogger.w(
-          'Image not found in database, indexing first: $filePath',
-          'LocalGalleryNotifier',
-        );
-        final file = File(filePath);
-        if (await file.exists()) {
-          final stat = await file.stat();
-          final fileName = filePath.split(Platform.pathSeparator).last;
-          imageId = await dataSource.upsertImage(
-            filePath: filePath,
-            fileName: fileName,
-            fileSize: stat.size,
-            createdAt: stat.changed,
-            modifiedAt: stat.modified,
-          );
-          await dataSource.setImageTags(imageId, tags);
-        }
+    // 标签操作通过数据源直接处理
+    // 这里只更新本地状态
+    final updatedImages = state.currentImages.map((record) {
+      if (record.path == filePath) {
+        return record.copyWith(tags: tags);
       }
+      return record;
+    }).toList();
 
-      await loadPage(state.currentPage);
-    } catch (e) {
-      AppLogger.e('Set tags failed', e, null, 'LocalGalleryNotifier');
-    }
+    _setState(state.copyWith(currentImages: updatedImages));
   }
+
+  // ============================================================
+  // 工具方法
+  // ============================================================
+
+  /// 清除错误状态
+  void clearError() {
+    _setState(state.copyWith(error: null));
+  }
+}
+
+/// 扩展方法
+extension StringExtension on String? {
+  bool get notNullOrEmpty => this != null && this!.isNotEmpty;
 }

@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:png_chunks_extract/png_chunks_extract.dart' as png_extract;
 
@@ -13,6 +12,8 @@ import '../../../core/utils/app_logger.dart';
 import '../../models/gallery/nai_image_metadata.dart';
 import '../image_metadata_batch_service.dart';
 import '../image_metadata_service.dart';
+import 'scan_config.dart' show ScanType, ScanPhase;
+import 'scan_state_manager.dart';
 
 /// 扫描结果
 ///
@@ -65,9 +66,15 @@ class ScanResult {
     final effectiveScanned = totalFiles ?? filesScanned;
     final effectiveAdded = newFiles ?? filesAdded;
     final effectiveUpdated = updatedFiles ?? filesUpdated;
-    final effectiveErrors = failedFiles != null && failedFiles > 0
-        ? List<String>.filled(failedFiles, '')
-        : (errors.isEmpty ? const <String>[] : errors);
+    // 优先使用传入的 errors，如果为空且提供了 failedFiles，则创建占位列表
+    final List<String> effectiveErrors;
+    if (errors.isNotEmpty) {
+      effectiveErrors = errors;
+    } else if (failedFiles != null && failedFiles > 0) {
+      effectiveErrors = List<String>.filled(failedFiles, '');
+    } else {
+      effectiveErrors = const <String>[];
+    }
 
     return ScanResult._internal(
       filesScanned: effectiveScanned,
@@ -132,7 +139,7 @@ class ScanResultBuilder {
         filesDeleted: filesDeleted,
         filesSkipped: filesSkipped,
         duration: duration,
-        errors: List.unmodifiable(errors),
+        errors: List.unmodifiable(List.from(errors)),
       );
 }
 
@@ -141,9 +148,9 @@ typedef ScanProgressCallback = void Function({
   required int total,
   String? currentFile,
   required String phase,
+  int? filesSkipped, // 跳过的文件数
+  int? confirmed, // 已确认（未变化）的文件数
 });
-
-enum ScanPriority { high, low }
 
 class _ParseResult {
   final List<_ParseItem> results;
@@ -157,7 +164,6 @@ class _ParseItem {
   final NaiImageMetadata? metadata;
   final int? width;
   final int? height;
-  final String fileHash;
   final int fileSize;
   final DateTime modifiedAt;
 
@@ -166,7 +172,6 @@ class _ParseItem {
     this.metadata,
     this.width,
     this.height,
-    required this.fileHash,
     required this.fileSize,
     required this.modifiedAt,
   });
@@ -175,13 +180,37 @@ class _ParseItem {
 /// 画廊扫描服务
 class GalleryScanService {
   final GalleryDataSource _dataSource;
+  final ScanStateManager _stateManager = ScanStateManager.instance;
 
-  static const List<String> _supportedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
+  static const List<String> _supportedExtensions = [
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
+  ];
   static const int _batchSize = 20; // 优化：增加批次大小，减少 isolate 启动开销
-  static const int _highPriorityDelayMs = 10;
-  static const int _lowPriorityDelayMs = 100;
+  static const int _batchYieldInterval = 100; // 每 100 个文件让出一次时间片
 
-  GalleryScanService({required GalleryDataSource dataSource}) : _dataSource = dataSource;
+  /// 扫描状态标志，防止并发扫描
+  bool _scanning = false;
+
+  /// 开始扫描，如果已有扫描在进行中则返回false
+  bool startScan() {
+    if (_scanning) {
+      AppLogger.w('Scan already in progress, skipping', 'GalleryScanService');
+      return false;
+    }
+    _scanning = true;
+    return true;
+  }
+
+  /// 结束扫描，释放扫描状态
+  void _endScan() {
+    _scanning = false;
+  }
+
+  GalleryScanService({required GalleryDataSource dataSource})
+      : _dataSource = dataSource;
 
   static GalleryScanService? _instance;
   static GalleryScanService get instance {
@@ -189,75 +218,10 @@ class GalleryScanService {
     return _instance!;
   }
 
-  /// 预加载的哈希到ID映射缓存
-  Map<String, int>? _hashToIdMap;
-  Map<String, int>? _pathToIdMap;
-  DateTime? _cacheValidUntil;
-  static const _cacheValidityDuration = Duration(minutes: 5);
-
-  /// 预加载所有哈希映射到内存
-  ///
-  /// 在扫描前调用，大幅减少数据库查询次数
-  Future<void> _preloadHashMaps() async {
-    try {
-      final stopwatch = Stopwatch()..start();
-      final allImages = await _dataSource.getAllImages();
-
-      _hashToIdMap = {for (var img in allImages) if (img.fileHash != null && img.id != null) img.fileHash!: img.id!};
-      _pathToIdMap = {for (var img in allImages) if (img.id != null) img.filePath: img.id!};
-      _cacheValidUntil = DateTime.now().add(_cacheValidityDuration);
-
-      stopwatch.stop();
-      AppLogger.i(
-        '[PERF] Preloaded ${allImages.length} images into hash maps '
-        '(hash: ${_hashToIdMap!.length}, path: ${_pathToIdMap!.length}) in ${stopwatch.elapsedMilliseconds}ms',
-        'GalleryScanService',
-      );
-
-      // 如果没有预加载到任何数据，记录警告
-      if (_hashToIdMap!.isEmpty && _pathToIdMap!.isEmpty) {
-        AppLogger.w(
-          '[PERF] Hash maps are empty! This may be the first scan or database is empty.',
-          'GalleryScanService',
-        );
-      }
-    } catch (e, stack) {
-      AppLogger.e('Failed to preload hash maps', e, stack, 'GalleryScanService');
-      // 失败时继续，降级为实时查询
-      _hashToIdMap = null;
-      _pathToIdMap = null;
-    }
-  }
-
-  /// 从缓存获取图片ID（通过哈希）
-  int? _getImageIdFromCacheByHash(String fileHash) {
-    if (_hashToIdMap == null || _cacheValidUntil == null || DateTime.now().isAfter(_cacheValidUntil!)) {
-      return null;
-    }
-    return _hashToIdMap![fileHash];
-  }
-
-  /// 从缓存获取图片ID（通过路径）
-  int? _getImageIdFromCacheByPath(String path) {
-    if (_pathToIdMap == null || _cacheValidUntil == null || DateTime.now().isAfter(_cacheValidUntil!)) {
-      return null;
-    }
-    return _pathToIdMap![path];
-  }
-
-  /// 更新缓存中的映射
-  void _updateCache(String fileHash, String path, int id) {
-    _hashToIdMap?[fileHash] = id;
-    _pathToIdMap?[path] = id;
-  }
-
   /// 清除所有缓存
   ///
   /// 用于手动刷新或重置扫描状态
   void clearCache() {
-    _hashToIdMap = null;
-    _pathToIdMap = null;
-    _cacheValidUntil = null;
     AppLogger.i('GalleryScanService cache cleared', 'GalleryScanService');
   }
 
@@ -266,300 +230,68 @@ class GalleryScanService {
     final stopwatch = Stopwatch()..start();
     AppLogger.i('[PERF] detectFilesNeedProcessing START', 'GalleryScanService');
 
-    final existingFiles = await _getAllFileHashes();
-    final existingPaths = existingFiles.keys.toSet();
+    final existingRecords = await _dataSource.getAllImages();
+    final existingMap = {
+      for (var img in existingRecords)
+        if (!img.isDeleted && img.id != null)
+          img.filePath: (
+            img.fileSize,
+            img.modifiedAt.millisecondsSinceEpoch,
+            img.id!,
+          ),
+    };
 
     int totalFiles = 0;
     int needProcessing = 0;
-    final filesToCheck = <File>[];
 
     final scanStopwatch = Stopwatch()..start();
     await for (final file in _scanDirectory(rootDir)) {
       totalFiles++;
       final path = file.path;
-      final existingHash = existingFiles[path];
+      final existing = existingMap[path];
 
-      if (!existingPaths.contains(path)) {
+      if (existing == null) {
         needProcessing++;
-      } else if (existingHash != null) {
-        filesToCheck.add(file);
+      } else {
+        final stat = await file.stat();
+        final (existingSize, existingMtime, _) = existing;
+
+        if (stat.size != existingSize ||
+            stat.modified.millisecondsSinceEpoch != existingMtime) {
+          needProcessing++;
+        }
       }
     }
     scanStopwatch.stop();
-    AppLogger.i('[PERF] Directory scan: ${scanStopwatch.elapsedMilliseconds}ms, files: $totalFiles', 'GalleryScanService');
-
-    // 批量处理哈希计算
-    if (filesToCheck.isNotEmpty) {
-      final batchStopwatch = Stopwatch()..start();
-      final changedCount = await _checkFilesChangedBatch(filesToCheck, existingFiles);
-      needProcessing += changedCount;
-      batchStopwatch.stop();
-      AppLogger.i('[PERF] Hash check batch: ${batchStopwatch.elapsedMilliseconds}ms, changed: $changedCount', 'GalleryScanService');
-    }
+    AppLogger.i(
+      '[PERF] Directory scan: ${scanStopwatch.elapsedMilliseconds}ms, files: $totalFiles',
+      'GalleryScanService',
+    );
 
     stopwatch.stop();
-    AppLogger.i('[PERF] detectFilesNeedProcessing END: ${stopwatch.elapsedMilliseconds}ms', 'GalleryScanService');
+    AppLogger.i(
+      '[PERF] detectFilesNeedProcessing END: ${stopwatch.elapsedMilliseconds}ms',
+      'GalleryScanService',
+    );
     return (totalFiles, needProcessing);
-  }
-
-  /// 批量检查文件是否已更改（在 isolate 中计算哈希）
-  Future<int> _checkFilesChangedBatch(
-    List<File> files,
-    Map<String, String> existingFiles,
-  ) async {
-    var changedCount = 0;
-    final totalStopwatch = Stopwatch()..start();
-
-    for (var i = 0; i < files.length; i += _batchSize) {
-      final batchStopwatch = Stopwatch()..start();
-      final batch = files.skip(i).take(_batchSize).toList();
-      AppLogger.d('[PERF] _checkFilesChangedBatch batch ${i ~/ _batchSize + 1}/${(files.length / _batchSize).ceil()}, size: ${batch.length}', 'GalleryScanService');
-
-      // 收集文件数据
-      final readStopwatch = Stopwatch()..start();
-      final pathBytesList = await Future.wait(
-        batch.map((file) async {
-          try {
-            final bytes = await file.readAsBytes();
-            return (file.path, bytes);
-          } catch (e) {
-            return (file.path, null);
-          }
-        }),
-      );
-      readStopwatch.stop();
-
-      // 在 isolate 中批量计算哈希
-      final isolateStopwatch = Stopwatch()..start();
-      final hashes = await Isolate.run(() {
-        final result = <String, String>{};
-        for (final (path, bytes) in pathBytesList) {
-          if (bytes != null) {
-            result[path] = _computeFileHashSync(bytes);
-          }
-        }
-        return result;
-      });
-      isolateStopwatch.stop();
-
-      // 对比哈希
-      for (final entry in hashes.entries) {
-        final existingHash = existingFiles[entry.key];
-        if (existingHash == null || existingHash != entry.value) {
-          changedCount++;
-        }
-      }
-
-      batchStopwatch.stop();
-      if (batchStopwatch.elapsedMilliseconds > 100) {
-        AppLogger.w('[PERF] Slow batch: ${batchStopwatch.elapsedMilliseconds}ms (read: ${readStopwatch.elapsedMilliseconds}ms, isolate: ${isolateStopwatch.elapsedMilliseconds}ms)', 'GalleryScanService');
-      }
-
-      // 让出时间片
-      await Future.delayed(Duration.zero);
-    }
-
-    totalStopwatch.stop();
-    AppLogger.i('[PERF] _checkFilesChangedBatch total: ${totalStopwatch.elapsedMilliseconds}ms for ${files.length} files', 'GalleryScanService');
-    return changedCount;
-  }
-
-  /// 快速启动扫描
-  Future<ScanResult> quickStartupScan(
-    Directory rootDir, {
-    int maxFiles = 100,
-    ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.high,
-  }) async {
-    final stopwatch = Stopwatch()..start();
-    final result = ScanResultBuilder();
-
-    AppLogger.i('Quick startup scan started (max $maxFiles files)', 'GalleryScanService');
-
-    try {
-      onProgress?.call(processed: 0, total: 0, phase: 'checking');
-      final existingFiles = await _getAllFileHashes();
-
-      final recentFiles = await _collectRecentFiles(rootDir, maxFiles: maxFiles);
-      result.filesScanned = recentFiles.length;
-
-      // 使用批量处理检查文件变化
-      final filesToProcess = <File>[];
-      final filesToCheck = <File>[];
-
-      for (final file in recentFiles) {
-        final path = file.path;
-        final existingHash = existingFiles[path];
-
-        if (existingHash == null) {
-          filesToProcess.add(file);
-        } else {
-          filesToCheck.add(file);
-        }
-      }
-
-      // 批量检查哈希
-      if (filesToCheck.isNotEmpty) {
-        final changedFiles = await _getChangedFilesBatch(filesToCheck, existingFiles);
-        filesToProcess.addAll(changedFiles);
-        result.filesSkipped = filesToCheck.length - changedFiles.length;
-      }
-
-      AppLogger.i(
-        'Quick scan: ${recentFiles.length} files, ${filesToProcess.length} need processing',
-        'GalleryScanService',
-      );
-
-      if (filesToProcess.isNotEmpty) {
-        await _processFilesSmart(
-          filesToProcess,
-          result,
-          isFullScan: false,
-          onProgress: onProgress,
-          priority: priority,
-        );
-      }
-    } catch (e, stack) {
-      AppLogger.e('Quick startup scan failed', e, stack, 'GalleryScanService');
-      result.errors.add(e.toString());
-    }
-
-    stopwatch.stop();
-    result.duration = stopwatch.elapsed;
-
-    AppLogger.i('Quick startup scan completed: $result', 'GalleryScanService');
-    return result.build();
-  }
-
-  /// 批量获取已更改的文件列表
-  Future<List<File>> _getChangedFilesBatch(
-    List<File> files,
-    Map<String, String> existingFiles,
-  ) async {
-    final changedFiles = <File>[];
-
-    for (var i = 0; i < files.length; i += _batchSize) {
-      final batch = files.skip(i).take(_batchSize).toList();
-
-      // 收集文件数据
-      final pathBytesList = await Future.wait(
-        batch.map((file) async {
-          try {
-            final bytes = await file.readAsBytes();
-            return (file, bytes);
-          } catch (e) {
-            return (file, null);
-          }
-        }),
-      );
-
-      // 在 isolate 中批量计算哈希
-      final hashes = await Isolate.run(() {
-        final result = <String, String>{};
-        for (final (file, bytes) in pathBytesList) {
-          if (bytes != null) {
-            result[file.path] = _computeFileHashSync(bytes);
-          }
-        }
-        return result;
-      });
-
-      // 对比哈希
-      for (final (file, _) in pathBytesList) {
-        final currentHash = hashes[file.path];
-        final existingHash = existingFiles[file.path];
-        if (currentHash != null && currentHash != existingHash) {
-          changedFiles.add(file);
-        }
-      }
-
-      // 让出时间片
-      await Future.delayed(Duration.zero);
-    }
-
-    return changedFiles;
-  }
-
-  /// 完整增量扫描
-  Future<ScanResult> incrementalScan(
-    Directory rootDir, {
-    ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.low,
-  }) async {
-    final stopwatch = Stopwatch()..start();
-    final result = ScanResultBuilder();
-
-    AppLogger.i('Incremental scan started', 'GalleryScanService');
-
-    try {
-      onProgress?.call(processed: 0, total: 0, phase: 'checking');
-
-      final existingFiles = await _getAllFileHashes();
-      final existingPaths = existingFiles.keys.toSet();
-
-      final currentFiles = <File>[];
-      await for (final file in _scanDirectory(rootDir)) {
-        currentFiles.add(file);
-      }
-      result.filesScanned = currentFiles.length;
-
-      // 使用批量处理检查文件变化
-      final filesToProcess = <File>[];
-      final filesToCheck = <File>[];
-
-      for (final file in currentFiles) {
-        final path = file.path;
-        final existingHash = existingFiles[path];
-
-        if (!existingPaths.contains(path)) {
-          filesToProcess.add(file);
-        } else if (existingHash != null) {
-          filesToCheck.add(file);
-        }
-      }
-
-      // 批量检查哈希
-      if (filesToCheck.isNotEmpty) {
-        final changedFiles = await _getChangedFilesBatch(filesToCheck, existingFiles);
-        filesToProcess.addAll(changedFiles);
-        result.filesSkipped = filesToCheck.length - changedFiles.length;
-      }
-
-      if (filesToProcess.isNotEmpty) {
-        await _processFilesSmart(
-          filesToProcess,
-          result,
-          isFullScan: false,
-          onProgress: onProgress,
-          priority: priority,
-        );
-      }
-
-      final currentPaths = currentFiles.map((f) => f.path).toSet();
-      final deletedPaths = existingPaths.difference(currentPaths);
-      if (deletedPaths.isNotEmpty) {
-        await _dataSource.batchMarkAsDeleted(deletedPaths.toList());
-        result.filesDeleted = deletedPaths.length;
-      }
-    } catch (e, stack) {
-      AppLogger.e('Incremental scan failed', e, stack, 'GalleryScanService');
-      result.errors.add(e.toString());
-    }
-
-    stopwatch.stop();
-    result.duration = stopwatch.elapsed;
-
-    onProgress?.call(processed: result.filesScanned, total: result.filesScanned, phase: 'completed');
-    AppLogger.i('Incremental scan completed: $result', 'GalleryScanService');
-    return result.build();
   }
 
   /// 全量扫描
   Future<ScanResult> fullScan(
     Directory rootDir, {
     ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.low,
   }) async {
+    if (!startScan()) {
+      return ScanResult(errors: ['Another scan is already in progress']);
+    }
+
+    // 启动 ScanStateManager 扫描
+    _stateManager.startScan(
+      type: ScanType.full,
+      rootPath: rootDir.path,
+      total: 0, // 将在收集文件后更新
+    );
+
     final stopwatch = Stopwatch()..start();
     final result = ScanResultBuilder();
 
@@ -569,22 +301,37 @@ class GalleryScanService {
       final files = await _collectImageFiles(rootDir);
       result.filesScanned = files.length;
 
-      await _processFilesSmart(
+      // 更新总数
+      _stateManager.updateProgress(
+        processed: 0,
+        total: files.length,
+        phase: ScanPhase.scanning,
+      );
+
+      await _processFilesWithIsolate(
         files,
         result,
         isFullScan: true,
         onProgress: onProgress,
-        priority: priority,
       );
+
+      _stateManager.completeScan();
     } catch (e, stack) {
       AppLogger.e('Full scan failed', e, stack, 'GalleryScanService');
       result.errors.add(e.toString());
+      _stateManager.errorScan(e.toString());
+    } finally {
+      _endScan();
     }
 
     stopwatch.stop();
     result.duration = stopwatch.elapsed;
 
-    onProgress?.call(processed: result.filesScanned, total: result.filesScanned, phase: 'completed');
+    onProgress?.call(
+      processed: result.filesScanned,
+      total: result.filesScanned,
+      phase: 'completed',
+    );
     AppLogger.i('Full scan completed: $result', 'GalleryScanService');
     return result.build();
   }
@@ -593,8 +340,18 @@ class GalleryScanService {
   Future<ScanResult> fillMissingMetadata({
     ScanProgressCallback? onProgress,
     int batchSize = 100,
-    ScanPriority priority = ScanPriority.low,
   }) async {
+    if (!startScan()) {
+      return ScanResult(errors: ['Another scan is already in progress']);
+    }
+
+    // 启动 ScanStateManager 扫描
+    _stateManager.startScan(
+      type: ScanType.fillMetadata,
+      rootPath: '',
+      total: 0,
+    );
+
     final stopwatch = Stopwatch()..start();
     final result = ScanResultBuilder();
 
@@ -629,8 +386,16 @@ class GalleryScanService {
 
       if (filesNeedMetadata.isEmpty) {
         AppLogger.i('所有图片已有元数据，无需补充', 'GalleryScanService');
+        _stateManager.completeScan();
         return result.build();
       }
+
+      // 更新总数
+      _stateManager.updateProgress(
+        processed: 0,
+        total: filesNeedMetadata.length,
+        phase: ScanPhase.scanning,
+      );
 
       await _processMetadataBatchesWithIsolate(
         filesNeedMetadata,
@@ -638,8 +403,9 @@ class GalleryScanService {
         result,
         batchSize: batchSize,
         onProgress: onProgress,
-        priority: priority,
       );
+
+      _stateManager.completeScan();
 
       AppLogger.i(
         '查漏补缺完成: ${result.filesUpdated} 张图片已更新元数据',
@@ -648,6 +414,9 @@ class GalleryScanService {
     } catch (e, stack) {
       AppLogger.e('查漏补缺失败', e, stack, 'GalleryScanService');
       result.errors.add(e.toString());
+      _stateManager.errorScan(e.toString());
+    } finally {
+      _endScan();
     }
 
     stopwatch.stop();
@@ -662,7 +431,6 @@ class GalleryScanService {
     ScanResultBuilder result, {
     required int batchSize,
     ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.low,
   }) async {
     int processedCount = 0;
     final totalFiles = files.length;
@@ -672,7 +440,10 @@ class GalleryScanService {
       final batchNum = (i ~/ batchSize) + 1;
       final totalBatches = ((files.length - 1) ~/ batchSize) + 1;
 
-      AppLogger.d('处理批次 $batchNum/$totalBatches: ${batch.length} 张图片', 'GalleryScanService');
+      AppLogger.d(
+        '处理批次 $batchNum/$totalBatches: ${batch.length} 张图片',
+        'GalleryScanService',
+      );
       onProgress?.call(
         processed: i,
         total: totalFiles,
@@ -720,27 +491,33 @@ class GalleryScanService {
         phase: 'filling_metadata',
       );
 
-      final delayMs = priority == ScanPriority.low ? _lowPriorityDelayMs : _highPriorityDelayMs;
-      await Future.delayed(Duration(milliseconds: delayMs));
+      // 每批次让出时间片
+      if (i % _batchYieldInterval == 0) {
+        await Future.delayed(Duration.zero);
+      }
     }
 
-    onProgress?.call(processed: totalFiles, total: totalFiles, phase: 'completed');
+    onProgress?.call(
+      processed: totalFiles,
+      total: totalFiles,
+      phase: 'completed',
+    );
   }
 
   /// 处理指定文件
-  Future<void> processFiles(
+  Future<ScanResult> processFiles(
     List<File> files, {
-    ScanPriority priority = ScanPriority.low,
     ScanProgressCallback? onProgress,
   }) async {
-    if (files.isEmpty) return;
+    if (files.isEmpty) {
+      return ScanResult();
+    }
 
     final result = ScanResultBuilder();
-    await _processFilesSmart(
+    await _processFilesWithIsolate(
       files,
       result,
       isFullScan: false,
-      priority: priority,
       onProgress: onProgress,
     );
 
@@ -756,6 +533,103 @@ class GalleryScanService {
       currentFile: '',
       phase: 'completed',
     );
+
+    return result.build();
+  }
+
+  /// 修复数据一致性
+  ///
+  /// 检查数据库中所有未删除的记录，如果文件不存在则标记为已删除
+  Future<ScanResult> fixDataConsistency({
+    ScanProgressCallback? onProgress,
+  }) async {
+    if (!startScan()) {
+      return ScanResult(errors: ['Another scan is already in progress']);
+    }
+
+    // 启动 ScanStateManager 扫描
+    _stateManager.startScan(
+      type: ScanType.consistencyFix,
+      rootPath: '',
+      total: 0,
+    );
+
+    final stopwatch = Stopwatch()..start();
+    final result = ScanResultBuilder();
+
+    AppLogger.i('开始修复数据一致性', 'GalleryScanService');
+
+    try {
+      final allImages = await _dataSource.getAllImages();
+      result.filesScanned = allImages.length;
+
+      // 更新总数
+      _stateManager.updateProgress(
+        processed: 0,
+        total: allImages.length,
+        phase: ScanPhase.scanning,
+      );
+
+      final orphanedPaths = <String>[];
+      var processedCount = 0;
+
+      for (final image in allImages) {
+        if (image.isDeleted) {
+          processedCount++;
+          continue;
+        }
+
+        final file = File(image.filePath);
+        final exists = await file.exists();
+        if (!exists) {
+          orphanedPaths.add(image.filePath);
+        }
+
+        processedCount++;
+        if (processedCount % 100 == 0) {
+          onProgress?.call(
+            processed: processedCount,
+            total: allImages.length,
+            phase: 'checking',
+          );
+          _stateManager.updateProgress(
+            processed: processedCount,
+            total: allImages.length,
+            phase: ScanPhase.scanning,
+          );
+        }
+      }
+
+      if (orphanedPaths.isNotEmpty) {
+        await _dataSource.batchMarkAsDeleted(orphanedPaths);
+        result.filesDeleted = orphanedPaths.length;
+        AppLogger.i(
+          '标记 ${orphanedPaths.length} 个失效记录为已删除',
+          'GalleryScanService',
+        );
+      } else {
+        AppLogger.i('数据一致性良好，无需修复', 'GalleryScanService');
+      }
+
+      onProgress?.call(
+        processed: allImages.length,
+        total: allImages.length,
+        phase: 'completed',
+      );
+      _stateManager.completeScan();
+    } catch (e, stack) {
+      AppLogger.e('修复数据一致性失败', e, stack, 'GalleryScanService');
+      result.errors.add(e.toString());
+      _stateManager.errorScan(e.toString());
+    } finally {
+      _endScan();
+    }
+
+    stopwatch.stop();
+    result.duration = stopwatch.elapsed;
+
+    AppLogger.i('数据一致性修复完成: $result', 'GalleryScanService');
+    return result.build();
   }
 
   /// 标记文件为已删除
@@ -764,47 +638,14 @@ class GalleryScanService {
     await _dataSource.batchMarkAsDeleted(paths);
   }
 
-  Future<Map<String, String>> _getAllFileHashes() async {
-    try {
-      final images = await _dataSource.getAllImages();
-      return {for (var img in images) img.filePath: img.fileHash ?? ''};
-    } catch (e, stack) {
-      AppLogger.e('Failed to get all file hashes', e, stack, 'GalleryScanService');
-      return {};
-    }
-  }
-
-  Future<void> _processFilesSmart(
+  Future<void> _processFilesWithIsolate(
     List<File> files,
     ScanResultBuilder result, {
     required bool isFullScan,
     ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.low,
-  }) async {
-    // 统一使用 isolate 处理，避免小批量在主线程处理时阻塞 UI
-    // 即使是小批量，文件读取和元数据解析也可能是 IO 密集型操作
-    AppLogger.d('Processing ${files.length} files with isolate', 'GalleryScanService');
-    await _processWithIsolate(
-      files,
-      result,
-      isFullScan: isFullScan,
-      onProgress: onProgress,
-      priority: priority,
-    );
-  }
-
-  Future<void> _processWithIsolate(
-    List<File> files,
-    ScanResultBuilder result, {
-    required bool isFullScan,
-    ScanProgressCallback? onProgress,
-    ScanPriority priority = ScanPriority.low,
   }) async {
     final totalStopwatch = Stopwatch()..start();
     int processedCount = 0;
-
-    // 预加载哈希映射到内存，大幅减少数据库查询
-    await _preloadHashMaps();
 
     // 初始化批量元数据服务（只初始化一次）
     await ImageMetadataBatchService.instance.initialize();
@@ -813,7 +654,7 @@ class GalleryScanService {
       final batchStopwatch = Stopwatch()..start();
       final batch = files.skip(i).take(_batchSize).toList();
 
-      // 关键优化：文件读取+元数据解析+哈希计算 全部在 isolate 中进行
+      // 关键优化：文件读取+元数据解析 全部在 isolate 中进行
       final isolateStopwatch = Stopwatch()..start();
       final parseResult = await _processBatchInIsolate(batch);
       isolateStopwatch.stop();
@@ -825,7 +666,11 @@ class GalleryScanService {
 
       // 数据库写入仍然在主线程，但使用批量事务
       final writeStopwatch = Stopwatch()..start();
-      await _writeBatchToDatabase(parseResult.results, result, isFullScan: isFullScan);
+      await _writeBatchToDatabase(
+        parseResult.results,
+        result,
+        isFullScan: isFullScan,
+      );
       writeStopwatch.stop();
 
       result.errors.addAll(parseResult.errors);
@@ -845,26 +690,26 @@ class GalleryScanService {
       if (batchStopwatch.elapsedMilliseconds > 1000) {
         AppLogger.w(
           '[PERF] Slow batch: ${batchStopwatch.elapsedMilliseconds}ms '
-          '(isolate: ${isolateStopwatch.elapsedMilliseconds}ms, write: ${writeStopwatch.elapsedMilliseconds}ms) '
-          'for ${batch.length} files',
+              '(isolate: ${isolateStopwatch.elapsedMilliseconds}ms, write: ${writeStopwatch.elapsedMilliseconds}ms) '
+              'for ${batch.length} files',
           'GalleryScanService',
         );
       }
 
-      // 让出时间片，避免阻塞UI
-      await Future.delayed(Duration.zero);
-
-      final delay = priority == ScanPriority.low
-          ? const Duration(milliseconds: _lowPriorityDelayMs)
-          : Duration.zero;
-      await Future.delayed(delay);
+      // 每 _batchYieldInterval 个文件让出时间片
+      if (processedCount % _batchYieldInterval == 0) {
+        await Future.delayed(Duration.zero);
+      }
     }
 
     totalStopwatch.stop();
-    AppLogger.i('[PERF] _processWithIsolate total: ${totalStopwatch.elapsedMilliseconds}ms for ${files.length} files', 'GalleryScanService');
+    AppLogger.i(
+      '[PERF] _processFilesWithIsolate total: ${totalStopwatch.elapsedMilliseconds}ms for ${files.length} files',
+      'GalleryScanService',
+    );
   }
 
-  /// 在 isolate 中处理整个批次（流式读取+解析+哈希）
+  /// 在 isolate 中处理整个批次（流式读取+解析）
   Future<_ParseResult> _processBatchInIsolate(List<File> batch) async {
     return await Isolate.run(() async {
       final results = <_ParseItem>[];
@@ -875,7 +720,8 @@ class GalleryScanService {
           final path = file.path;
 
           // 流式读取：只读前 200KB（元数据通常在前面）
-          final bytes = await _readFileHead(file, 200 * 1024);
+          final bytes =
+              await GalleryScanService._readFileHead(file, 200 * 1024);
           if (bytes.isEmpty) {
             errors.add('$path: Failed to read file');
             continue;
@@ -887,25 +733,26 @@ class GalleryScanService {
 
           // 只解析 PNG 的元数据
           if (p.extension(path).toLowerCase() == '.png') {
-            metadata = _extractMetadataSync(bytes);
+            metadata = GalleryScanService._extractMetadataSync(bytes);
             if (metadata != null) {
               width = metadata.width;
               height = metadata.height;
             }
           }
 
-          // 计算哈希（使用流式读取的数据）
-          final fileHash = _computeFileHashSync(bytes);
+          // 获取文件大小和修改时间
+          final stat = await file.stat();
 
-          results.add(_ParseItem(
-            path: path,
-            metadata: metadata,
-            width: width,
-            height: height,
-            fileHash: fileHash,
-            fileSize: bytes.length,
-            modifiedAt: DateTime.now(),
-          ),);
+          results.add(
+            _ParseItem(
+              path: path,
+              metadata: metadata,
+              width: width,
+              height: height,
+              fileSize: stat.size,
+              modifiedAt: stat.modified,
+            ),
+          );
         } catch (e) {
           errors.add('${file.path}: $e');
         }
@@ -966,7 +813,9 @@ class GalleryScanService {
         final textData = latin1.decode(data.sublist(nullIndex + 1));
 
         // 快速检查 NAI 特征
-        if (!textData.contains('prompt') && !textData.contains('sampler')) continue;
+        if (!textData.contains('prompt') && !textData.contains('sampler')) {
+          continue;
+        }
 
         // 解析 JSON
         try {
@@ -984,15 +833,22 @@ class GalleryScanService {
             if (comment is String) {
               try {
                 final commentJson = jsonDecode(comment) as Map<String, dynamic>;
-                if (commentJson.containsKey('prompt') || commentJson.containsKey('uc')) {
-                  return NaiImageMetadata.fromNaiComment(commentJson, rawJson: textData);
+                if (commentJson.containsKey('prompt') ||
+                    commentJson.containsKey('uc')) {
+                  return NaiImageMetadata.fromNaiComment(
+                    commentJson,
+                    rawJson: textData,
+                  );
                 }
               } catch (_) {
                 // Comment不是有效的JSON，忽略
               }
             } else if (comment is Map<String, dynamic>) {
               if (comment.containsKey('prompt') || comment.containsKey('uc')) {
-                return NaiImageMetadata.fromNaiComment(comment, rawJson: textData);
+                return NaiImageMetadata.fromNaiComment(
+                  comment,
+                  rawJson: textData,
+                );
               }
             }
           }
@@ -1007,7 +863,7 @@ class GalleryScanService {
     }
   }
 
-  /// 批量写入数据库（优化：使用内存缓存减少数据库查询次数）
+  /// 批量写入数据库
   Future<void> _writeBatchToDatabase(
     List<_ParseItem> items,
     ScanResultBuilder result, {
@@ -1015,8 +871,7 @@ class GalleryScanService {
   }) async {
     final stopwatch = Stopwatch()..start();
 
-    // 使用预加载的缓存，如果不可用则创建空缓存
-    final hashToIdCache = <String, int?>{};
+    // 使用路径到ID的缓存
     final pathToIdCache = <String, int?>{};
 
     for (final item in items) {
@@ -1025,7 +880,6 @@ class GalleryScanService {
         final file = File(path);
         final stat = await file.stat();
         final fileName = p.basename(path);
-        final fileHash = item.fileHash;
         final width = item.width;
         final height = item.height;
         final metadata = item.metadata;
@@ -1034,54 +888,25 @@ class GalleryScanService {
             ? width / height
             : null;
 
-        // 优先使用预加载的全局缓存，然后使用批次内缓存，最后才查询数据库
-        final cachedId = _getImageIdFromCacheByHash(fileHash);
-        int? existingIdByHash = cachedId ?? hashToIdCache[fileHash];
-
-        // 调试日志：追踪缓存命中率
-        if (existingIdByHash != null) {
-          AppLogger.d('[CACHE-HIT] Hash cache hit for $fileName (id=$existingIdByHash)', 'GalleryScanService');
-        } else if (cachedId == null && _hashToIdMap != null && _hashToIdMap!.isNotEmpty) {
-          // 全局缓存存在但没有这个哈希，说明是新文件
-          AppLogger.d('[CACHE-MISS] Hash not in global cache: $fileName', 'GalleryScanService');
-        }
-
-        if (existingIdByHash == null && !hashToIdCache.containsKey(fileHash)) {
-          existingIdByHash = await _dataSource.getImageIdByHash(fileHash);
-          hashToIdCache[fileHash] = existingIdByHash;
-          if (existingIdByHash != null) {
-            AppLogger.d('[DB-HIT] Found in DB by hash: $fileName (id=$existingIdByHash)', 'GalleryScanService');
-          }
-        }
-
-        if (existingIdByHash != null) {
-          final existingRecord = await _dataSource.getImageById(existingIdByHash);
-          if (existingRecord != null && existingRecord.filePath != path) {
-            AppLogger.i(
-              'Detected renamed file: ${existingRecord.filePath} -> $path',
-              'GalleryScanService',
-            );
-            await _handleRenamedFile(existingIdByHash, path, fileName, stat, result);
-            ImageMetadataService().notifyPathChanged(existingRecord.filePath, path);
-            continue;
-          }
+        // 查询现有记录
+        int? existingId = pathToIdCache[path];
+        if (existingId == null && !pathToIdCache.containsKey(path)) {
+          existingId = await _dataSource.getImageIdByPath(path);
+          pathToIdCache[path] = existingId;
         }
 
         final imageId = await _dataSource.upsertImage(
           filePath: path,
           fileName: fileName,
           fileSize: stat.size,
-          fileHash: fileHash,
           width: width,
           height: height,
           aspectRatio: aspectRatio,
           createdAt: stat.modified,
           modifiedAt: stat.modified,
-          resolutionKey: width != null && height != null ? '${width}x$height' : null,
+          resolutionKey:
+              width != null && height != null ? '${width}x$height' : null,
         );
-
-        // 更新全局缓存和批次内缓存
-        _updateCache(fileHash, path, imageId);
 
         if (metadata != null && metadata.hasData) {
           await _dataSource.upsertMetadata(imageId, metadata);
@@ -1092,16 +917,11 @@ class GalleryScanService {
           ImageMetadataService().cacheMetadata(path, metadata);
         }
 
-        // 更新统计 - 优先使用预加载的缓存
+        // 更新统计
         if (isFullScan) {
           result.filesAdded++;
         } else {
-          int? existingId = _getImageIdFromCacheByPath(path) ?? pathToIdCache[path];
-          if (existingId == null && !pathToIdCache.containsKey(path)) {
-            existingId = await _dataSource.getImageIdByPath(path);
-            pathToIdCache[path] = existingId;
-          }
-          if (existingId != null && existingId != imageId) {
+          if (existingId != null) {
             result.filesUpdated++;
           } else {
             result.filesAdded++;
@@ -1124,7 +944,10 @@ class GalleryScanService {
   /// 批量解析文件元数据
   ///
   /// 优化：使用 ImageMetadataBatchService 进行流式解析
-  Future<_ParseResult> _parseInIsolate(List<String> paths, List<Uint8List> bytesList) async {
+  Future<_ParseResult> _parseInIsolate(
+    List<String> paths,
+    List<Uint8List> bytesList,
+  ) async {
     final totalStopwatch = Stopwatch()..start();
 
     try {
@@ -1134,22 +957,24 @@ class GalleryScanService {
 
       for (var i = 0; i < paths.length; i++) {
         final path = paths[i];
-        final bytes = bytesList[i];
+        // bytes = bytesList[i]; // 保留引用用于未来扩展
 
         if (p.extension(path).toLowerCase() == '.png') {
           pngPaths.add(path);
         } else {
-          // 非 PNG 文件：直接计算哈希，没有元数据
-          final fileHash = await Isolate.run(() => _computeFileHashSync(bytes));
-          nonPngItems.add(_ParseItem(
-            path: path,
-            metadata: null,
-            width: null,
-            height: null,
-            fileHash: fileHash,
-            fileSize: bytes.length,
-            modifiedAt: DateTime.now(),
-          ),);
+          // 非 PNG 文件：没有元数据，获取文件信息
+          final file = File(path);
+          final stat = await file.stat();
+          nonPngItems.add(
+            _ParseItem(
+              path: path,
+              metadata: null,
+              width: null,
+              height: null,
+              fileSize: stat.size,
+              modifiedAt: stat.modified,
+            ),
+          );
         }
       }
 
@@ -1165,7 +990,10 @@ class GalleryScanService {
 
         for (final (path, metadata, error) in results) {
           if (error != null) {
-            AppLogger.w('[PERF-ISOLATE] Metadata parse error for $path: $error', 'GalleryScanService');
+            AppLogger.w(
+              '[PERF-ISOLATE] Metadata parse error for $path: $error',
+              'GalleryScanService',
+            );
           }
           metadataResults[path] = metadata;
         }
@@ -1176,85 +1004,45 @@ class GalleryScanService {
         );
       }
 
-      // 在 isolate 中计算所有文件的哈希
-      final hashStopwatch = Stopwatch()..start();
-      final hashResults = await Isolate.run(() {
-        final results = <String, String>{};
-        for (var i = 0; i < paths.length; i++) {
-          results[paths[i]] = _computeFileHashSync(bytesList[i]);
-        }
-        return results;
-      });
-      hashStopwatch.stop();
-
       // 组合结果
       final items = <_ParseItem>[];
       items.addAll(nonPngItems);
 
       for (final path in pngPaths) {
         final metadata = metadataResults[path];
-        final bytes = bytesList[paths.indexOf(path)];
+        // bytes = bytesList[paths.indexOf(path)]; // 保留引用用于未来扩展
+        final file = File(path);
+        final stat = await file.stat();
 
-        items.add(_ParseItem(
-          path: path,
-          metadata: metadata,
-          width: metadata?.width,
-          height: metadata?.height,
-          fileHash: hashResults[path]!,
-          fileSize: bytes.length,
-          modifiedAt: DateTime.now(),
-        ),);
+        items.add(
+          _ParseItem(
+            path: path,
+            metadata: metadata,
+            width: metadata?.width,
+            height: metadata?.height,
+            fileSize: stat.size,
+            modifiedAt: stat.modified,
+          ),
+        );
       }
 
       totalStopwatch.stop();
       if (totalStopwatch.elapsedMilliseconds > 500) {
         AppLogger.w(
-          '[PERF-ISOLATE] Slow batch: ${totalStopwatch.elapsedMilliseconds}ms for ${paths.length} files '
-          '(hash: ${hashStopwatch.elapsedMilliseconds}ms)',
+          '[PERF-ISOLATE] Slow batch: ${totalStopwatch.elapsedMilliseconds}ms for ${paths.length} files',
           'GalleryScanService',
         );
       }
 
       return _ParseResult(items, []);
     } catch (e, stack) {
-      AppLogger.e('[PERF-ISOLATE] Batch parse error', e, stack, 'GalleryScanService');
+      AppLogger.e(
+        '[PERF-ISOLATE] Batch parse error',
+        e,
+        stack,
+        'GalleryScanService',
+      );
       return _ParseResult([], [e.toString()]);
-    }
-  }
-
-  /// 同步计算文件哈希（用于 isolate 中）
-  String _computeFileHashSync(Uint8List bytes) {
-    if (bytes.length <= 16384) {
-      return sha256.convert(bytes).toString();
-    }
-
-    final headBytes = bytes.sublist(0, 8192);
-    final tailBytes = bytes.sublist(bytes.length - 8192);
-    final combined = Uint8List(headBytes.length + tailBytes.length + 8);
-    combined.setAll(0, headBytes);
-    combined.setAll(headBytes.length, tailBytes);
-
-    final sizeBytes = ByteData(8);
-    sizeBytes.setInt64(0, bytes.length);
-    combined.setAll(headBytes.length + tailBytes.length, sizeBytes.buffer.asUint8List());
-
-    return sha256.convert(combined).toString();
-  }
-
-  Future<void> _handleRenamedFile(
-    int imageId,
-    String newPath,
-    String newFileName,
-    FileStat stat,
-    ScanResultBuilder result,
-  ) async {
-    try {
-      await _dataSource.updateFilePath(imageId, newPath, newFileName: newFileName);
-      result.filesUpdated++;
-      AppLogger.d('Updated path for image $imageId: $newPath', 'GalleryScanService');
-    } catch (e, stack) {
-      AppLogger.e('Failed to handle renamed file: $newPath', e, stack, 'GalleryScanService');
-      result.errors.add('$newPath: $e');
     }
   }
 
@@ -1266,31 +1054,15 @@ class GalleryScanService {
     return files;
   }
 
-  Future<List<File>> _collectRecentFiles(Directory dir, {required int maxFiles}) async {
-    final filesWithTime = <File, DateTime>{};
-
-    await for (final file in _scanDirectory(dir)) {
-      try {
-        final stat = await file.stat();
-        filesWithTime[file] = stat.modified;
-      } catch (e) {
-        // 文件可能已被删除或无法访问，跳过
-      }
-    }
-
-    final sortedEntries = filesWithTime.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    return sortedEntries.take(maxFiles).map((e) => e.key).toList();
-  }
-
   Stream<File> _scanDirectory(Directory dir) async* {
     if (!await dir.exists()) return;
 
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (entity is File) {
         // 【修复】排除.thumbs目录中的文件，防止缩略图递归生成
-        if (entity.path.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
+        if (entity.path.contains(
+              '${Platform.pathSeparator}.thumbs${Platform.pathSeparator}',
+            ) ||
             entity.path.contains('.thumb.')) {
           continue;
         }
@@ -1300,6 +1072,310 @@ class GalleryScanService {
           yield entity;
         }
       }
+    }
+  }
+
+  /// 提取元数据（在 isolate 中执行）
+  /// 优化：只读取文件前部（元数据通常在前面）
+  Future<NaiImageMetadata?> _extractMetadataInIsolate(File file) async {
+    try {
+      final ext = p.extension(file.path).toLowerCase();
+      if (ext != '.png') return null;
+
+      // 只读取前200KB（元数据通常在文件前部）
+      final bytes = await _readFileHead(file, 200 * 1024);
+      // 然后在 isolate 中解析元数据
+      return await Isolate.run(() => _extractMetadataSync(bytes));
+    } catch (e) {
+      AppLogger.w(
+        '[SCAN] Failed to extract metadata for ${file.path}: $e',
+        'GalleryScanService',
+      );
+      return null;
+    }
+  }
+
+  /// 真正的流式增量扫描管道
+  ///
+  /// 特点：
+  /// - 使用 mtime + size 快速对比文件变化
+  /// - 批量让出时间片（每 100 个文件）
+  /// - 支持取消（通过 startScan/endScan 机制）
+  Future<ScanResult> incrementalScanPipeline(
+    Directory rootDir, {
+    ScanProgressCallback? onProgress,
+  }) async {
+    if (!startScan()) {
+      AppLogger.w(
+        '[SCAN] startScan failed, another scan in progress',
+        'GalleryScanService',
+      );
+      return ScanResult(errors: ['Another scan is already in progress']);
+    }
+
+    final stopwatch = Stopwatch()..start();
+    final result = ScanResultBuilder();
+
+    AppLogger.i(
+      '[SCAN] === Incremental scan pipeline started ===',
+      'GalleryScanService',
+    );
+
+    try {
+      onProgress?.call(processed: 0, total: 0, phase: 'initializing');
+      AppLogger.d('[SCAN] Phase: initializing', 'GalleryScanService');
+
+      // 预加载现有文件记录（使用 path -> (size, mtime, id) 映射）
+      final existingRecords = await _dataSource.getAllImages();
+      final existingMap = {
+        for (var img in existingRecords)
+          if (!img.isDeleted && img.id != null)
+            img.filePath: (
+              img.fileSize,
+              img.modifiedAt.millisecondsSinceEpoch,
+              img.id!,
+            ),
+      };
+      AppLogger.d(
+        '[SCAN] Loaded ${existingRecords.length} existing records from database',
+        'GalleryScanService',
+      );
+
+      // 扫描目录收集文件
+      final files = <File>[];
+      await for (final file in _scanDirectory(rootDir)) {
+        files.add(file);
+      }
+      result.filesScanned = files.length;
+      AppLogger.i(
+        '[SCAN] Found ${files.length} files in directory',
+        'GalleryScanService',
+      );
+
+      // 启动 ScanStateManager 扫描
+      final stateManagerStarted = _stateManager.startScan(
+        type: ScanType.incremental,
+        rootPath: rootDir.path,
+        total: files.length,
+      );
+      if (!stateManagerStarted) {
+        AppLogger.w(
+          '[SCAN] _stateManager.startScan failed, another scan may be in progress',
+          'GalleryScanService',
+        );
+        _endScan();
+        return ScanResult(errors: ['Another scan is already in progress']);
+      }
+      AppLogger.i(
+        '[SCAN] _stateManager.startScan success, total: ${files.length}',
+        'GalleryScanService',
+      );
+
+      onProgress?.call(processed: 0, total: files.length, phase: 'scanning');
+
+      // 检查点计时器
+      var lastCheckpoint = DateTime.now();
+      var processedCount = 0;
+      var updateCount = 0;
+      var confirmedCount = 0; // 已确认（未变化）的文件数
+
+      AppLogger.i(
+        '[SCAN] Starting file processing loop, files: ${files.length}',
+        'GalleryScanService',
+      );
+
+      // 逐文件处理管道
+      for (var i = 0; i < files.length; i++) {
+        final file = files[i];
+        final path = file.path;
+
+        // 每50个文件记录一次日志
+        if (i % 50 == 0) {
+          AppLogger.d(
+            '[SCAN] Processing file $i/${files.length}: ${p.basename(path)}',
+            'GalleryScanService',
+          );
+        }
+
+        try {
+          // 获取文件信息
+          final stat = await file.stat();
+          final existing = existingMap[path];
+
+          // 检查文件是否需要处理（使用 mtime + size）
+          final bool needsUpdate;
+          if (existing == null) {
+            // 新文件
+            needsUpdate = true;
+          } else {
+            final (existingSize, existingMtime, _) = existing;
+            if (stat.size == existingSize &&
+                stat.modified.millisecondsSinceEpoch == existingMtime) {
+              // 文件未变化
+              needsUpdate = false;
+              result.filesSkipped++;
+              confirmedCount++;
+            } else {
+              // 文件已变化
+              needsUpdate = true;
+            }
+          }
+
+          if (!needsUpdate) {
+            processedCount++;
+            continue;
+          }
+
+          // 需要处理：提取元数据并写入数据库
+          final metadata = await _extractMetadataInIsolate(file);
+          final isNewFile = existing == null;
+
+          await _writeSingleFileToDatabase(
+            file,
+            metadata,
+            result,
+            isNewFile: isNewFile,
+          );
+
+          processedCount++;
+          updateCount++;
+
+          // 更新进度（包含 confirmed 计数）
+          onProgress?.call(
+            processed: processedCount,
+            total: files.length,
+            currentFile: path,
+            phase: 'processing',
+            filesSkipped: result.filesSkipped,
+            confirmed: confirmedCount,
+          );
+
+          // 更新 ScanStateManager 状态（供 UI 监听）
+          _stateManager.updateProgress(
+            processed: processedCount,
+            total: files.length,
+            currentFile: p.basename(path),
+            phase: ScanPhase.indexing,
+          );
+
+          // 每10秒保存检查点
+          if (DateTime.now().difference(lastCheckpoint).inSeconds >= 10) {
+            AppLogger.i(
+              '[SCAN] Checkpoint: $processedCount/${files.length} processed, '
+                  '$updateCount updated, $confirmedCount confirmed',
+              'GalleryScanService',
+            );
+            lastCheckpoint = DateTime.now();
+          }
+
+          // 每 100 个文件让出一次时间片
+          if (processedCount % _batchYieldInterval == 0) {
+            await Future.delayed(Duration.zero);
+          }
+        } catch (e) {
+          result.errors.add('$path: $e');
+          processedCount++; // 错误时也要递增计数器，确保进度准确
+          AppLogger.w(
+            '[SCAN] Error processing file $path: $e',
+            'GalleryScanService',
+          );
+        }
+      }
+
+      AppLogger.i(
+        '[SCAN] Processing loop completed. Total: $processedCount, '
+            'Updated: $updateCount, Confirmed: $confirmedCount, '
+            'Skipped: ${result.filesSkipped}',
+        'GalleryScanService',
+      );
+
+      // 处理已删除的文件
+      final currentPaths = files.map((f) => f.path).toSet();
+      final existingPaths = existingMap.keys.toSet();
+      final deletedPaths = existingPaths.difference(currentPaths);
+      if (deletedPaths.isNotEmpty) {
+        await _dataSource.batchMarkAsDeleted(deletedPaths.toList());
+        result.filesDeleted = deletedPaths.length;
+        AppLogger.i(
+          '[SCAN] Marked ${deletedPaths.length} files as deleted',
+          'GalleryScanService',
+        );
+      }
+
+      onProgress?.call(
+        processed: files.length,
+        total: files.length,
+        phase: 'completed',
+        filesSkipped: result.filesSkipped,
+        confirmed: confirmedCount,
+      );
+      _stateManager.completeScan();
+      AppLogger.i(
+        '[SCAN] === Scan completed: $result ===',
+        'GalleryScanService',
+      );
+    } catch (e, stack) {
+      AppLogger.e('[SCAN] Pipeline failed', e, stack, 'GalleryScanService');
+      _stateManager.errorScan(e.toString());
+      result.errors.add(e.toString());
+    } finally {
+      stopwatch.stop();
+      result.duration = stopwatch.elapsed;
+      _endScan();
+    }
+
+    return result.build();
+  }
+
+  /// 写入单个文件到数据库
+  Future<void> _writeSingleFileToDatabase(
+    File file,
+    NaiImageMetadata? metadata,
+    ScanResultBuilder result, {
+    required bool isNewFile,
+  }) async {
+    try {
+      final path = file.path;
+      final stat = await file.stat();
+      final fileName = p.basename(path);
+
+      final width = metadata?.width;
+      final height = metadata?.height;
+      final aspectRatio = (width != null && height != null && height > 0)
+          ? width / height
+          : null;
+
+      final imageId = await _dataSource.upsertImage(
+        filePath: path,
+        fileName: fileName,
+        fileSize: stat.size,
+        width: width,
+        height: height,
+        aspectRatio: aspectRatio,
+        createdAt: stat.modified,
+        modifiedAt: stat.modified,
+        resolutionKey:
+            width != null && height != null ? '${width}x$height' : null,
+      );
+
+      if (metadata != null && metadata.hasData) {
+        await _dataSource.upsertMetadata(imageId, metadata);
+      }
+
+      // 缓存元数据
+      if (metadata != null && metadata.hasData) {
+        ImageMetadataService().cacheMetadata(path, metadata);
+      }
+
+      // 更新统计
+      if (isNewFile) {
+        result.filesAdded++;
+      } else {
+        result.filesUpdated++;
+      }
+    } catch (e) {
+      result.errors.add('${file.path}: $e');
+      rethrow;
     }
   }
 }

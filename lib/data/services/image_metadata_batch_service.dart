@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import '../../core/utils/app_logger.dart';
-import '../../core/utils/png_metadata_extractor.dart';
+import 'metadata/unified_metadata_parser.dart';
 import '../../data/models/gallery/nai_image_metadata.dart';
 
 /// 批量图像元数据解析服务
@@ -18,7 +18,7 @@ class ImageMetadataBatchService {
 
   Isolate? _isolate;
   SendPort? _sendPort;
-  final _receivePort = ReceivePort();
+  ReceivePort? _receivePort;
   int _requestId = 0;
   final _completers = <int, Completer<_BatchParseResult>>{};
 
@@ -30,18 +30,23 @@ class ImageMetadataBatchService {
 
     AppLogger.i('[MetadataBatchService] Initializing isolate...', 'ImageMetadataBatchService');
 
+    // 创建新的 ReceivePort（避免重复使用已监听的 Stream）
+    _receivePort = ReceivePort();
+
     // 创建 isolate
     _isolate = await Isolate.spawn(
       _isolateEntryPoint,
-      _receivePort.sendPort,
+      _receivePort!.sendPort,
       debugName: 'MetadataBatchIsolate',
     );
 
-    // 等待 isolate 发送它的 SendPort
-    _sendPort = await _receivePort.first as SendPort;
+    // 等待 isolate 发送它的 SendPort，然后持续监听响应
+    // 使用 broadcast stream 允许多次监听
+    final broadcastStream = _receivePort!.asBroadcastStream();
+    _sendPort = await broadcastStream.first as SendPort;
 
-    // 监听响应
-    _receivePort.listen(_handleResponse);
+    // 继续监听后续响应
+    broadcastStream.listen(_handleResponse);
 
     AppLogger.i('[MetadataBatchService] Isolate initialized', 'ImageMetadataBatchService');
   }
@@ -85,7 +90,8 @@ class ImageMetadataBatchService {
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
     _sendPort = null;
-    _receivePort.close();
+    _receivePort?.close();
+    _receivePort = null;
 
     // 清理未完成的请求
     for (final completer in _completers.values) {
@@ -119,13 +125,13 @@ class ImageMetadataBatchService {
           continue;
         }
 
-        // 使用统一的 PNG 元数据提取器（内部处理流式读取）
-        final metadata = PngMetadataExtractor.extractFromFile(
+        // 使用统一的元数据解析器（内部处理渐进式读取）
+        final result = UnifiedMetadataParser.parseFromFile(
           filePath,
           maxBytes: request.maxBytesPerFile,
-          maxChunks: 10,
+          useGradualRead: false,
         );
-        results.add((filePath, metadata, null));
+        results.add((filePath, result.metadata, result.errorMessage));
       } catch (e, stack) {
         AppLogger.e('[MetadataBatchService] Error parsing $filePath', e, stack, 'ImageMetadataBatchService');
         results.add((filePath, null, e.toString()));

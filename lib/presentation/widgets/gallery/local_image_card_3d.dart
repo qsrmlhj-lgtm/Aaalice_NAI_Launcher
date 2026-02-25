@@ -6,19 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/cache/thumbnail_cache_service.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../../data/models/gallery/local_image_record.dart';
-import '../../../data/services/thumbnail_generation_queue.dart';
+import '../../../data/services/thumbnail_service.dart';
 import '../../themes/theme_extension.dart';
 import '../common/app_toast.dart';
 import '../common/floating_action_buttons.dart';
 
-/// Steam风格本地图片卡片
-///
-/// 实现高级视觉效果：
-/// - 边缘发光效果
-/// - 光泽扫过动画
-/// - 悬停时轻微放大和阴影增强
-/// - 复制、发送到主页、收藏按钮
+enum _ImageLoadState { idle, loading, loaded, error }
+
+/// Steam风格本地图片卡片，包含边缘发光、光泽扫过、悬停动画效果
 class LocalImageCard3D extends StatefulWidget {
   final LocalImageRecord record;
   final double width;
@@ -31,9 +28,8 @@ class LocalImageCard3D extends StatefulWidget {
   final bool showFavoriteIndicator;
   final VoidCallback? onFavoriteToggle;
   final VoidCallback? onSendToHome;
-
-  /// 卡片是否在视口中可见（用于优先级控制）
   final bool isVisible;
+  final int priority;
 
   const LocalImageCard3D({
     super.key,
@@ -49,6 +45,7 @@ class LocalImageCard3D extends StatefulWidget {
     this.onFavoriteToggle,
     this.onSendToHome,
     this.isVisible = false,
+    this.priority = 5,
   });
 
   @override
@@ -57,20 +54,14 @@ class LocalImageCard3D extends StatefulWidget {
 
 class _LocalImageCard3DState extends State<LocalImageCard3D>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-  /// 是否悬停
   bool _isHovered = false;
-
-  /// 光泽动画控制器
   late AnimationController _glossController;
-
-  /// 光泽动画
   late Animation<double> _glossAnimation;
-
-  /// 缩略图路径
   String? _thumbnailPath;
-
-  /// 缩略图缓存服务
+  String? _displayPath;
   ThumbnailCacheService? _thumbnailService;
+  _ImageLoadState _loadState = _ImageLoadState.idle;
+  bool _isLoadingThumbnail = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -78,71 +69,107 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
   @override
   void initState() {
     super.initState();
-
     _glossController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-
     _glossAnimation = Tween<double>(begin: -1.5, end: 1.5).animate(
       CurvedAnimation(parent: _glossController, curve: Curves.easeInOut),
     );
-
-    // 异步加载缩略图
-    _loadThumbnail();
+    _initAndLoadThumbnail();
   }
 
-  /// 异步加载或生成缩略图
-  ///
-  /// 流式加载策略：
-  /// 1. 立即检查缩略图缓存，如果存在则显示
-  /// 2. 如果不存在，立即显示原图（不等待）
-  /// 3. 使用 ThumbnailGenerationQueue 后台生成缩略图，支持优先级控制
+  @override
+  void didUpdateWidget(LocalImageCard3D oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.priority != widget.priority ||
+        (oldWidget.isVisible != widget.isVisible && widget.isVisible)) {
+      if (_thumbnailPath == null && !_isLoadingThumbnail) {
+        _loadThumbnail();
+      }
+    }
+  }
+
+  Future<void> _initAndLoadThumbnail() async {
+    _thumbnailService = ThumbnailCacheService.instance;
+    await _thumbnailService!.init();
+    await _loadThumbnail();
+  }
+
   Future<void> _loadThumbnail() async {
+    if (_isLoadingThumbnail) return;
+
+    _isLoadingThumbnail = true;
+    final path = widget.record.path;
+    final fileName = path.split(Platform.pathSeparator).last;
+
+    // 只在调试模式下记录日志，避免影响性能
+    // AppLogger.i('[CardLoad] START: $fileName, priority=${widget.priority}', 'LocalImageCard3D');
+
     try {
-      // 获取缩略图服务
-      _thumbnailService = ThumbnailCacheService();
-      await _thumbnailService!.init();
+      setState(() => _loadState = _ImageLoadState.loading);
 
-      // 首先检查缩略图是否已存在
-      final existingPath = await _thumbnailService!.getThumbnailPath(
-        widget.record.path,
-      );
-
-      if (existingPath != null && mounted) {
-        setState(() {
-          _thumbnailPath = existingPath;
-        });
+      final originalFile = File(path);
+      if (!await originalFile.exists()) {
+        AppLogger.e('[CardLoad] Original file NOT FOUND: $path', 'LocalImageCard3D');
+        if (mounted) {
+          setState(() => _loadState = _ImageLoadState.error);
+        }
         return;
       }
 
-      // 缩略图不存在：先显示原图，然后使用队列后台生成缩略图
+      final existingPath = await _thumbnailService?.getThumbnailPath(path);
+      if (existingPath != null && await File(existingPath).exists()) {
+        // AppLogger.i('[CardLoad] Using existing thumbnail: $fileName', 'LocalImageCard3D');
+        if (mounted) {
+          setState(() {
+            _thumbnailPath = existingPath;
+            _displayPath = existingPath;
+            _loadState = _ImageLoadState.loaded;
+          });
+        }
+        return;
+      }
+
+      // 先显示原图，后台生成缩略图
+      // AppLogger.i('[CardLoad] Using original image: $fileName', 'LocalImageCard3D');
       if (mounted) {
         setState(() {
-          _thumbnailPath = null; // 使用原图
+          _displayPath = path;
+          _loadState = _ImageLoadState.loaded;
         });
       }
 
-      // 使用 ThumbnailGenerationQueue 进行优先级队列生成
-      final queue = ThumbnailGenerationQueue.instance;
-      await queue.enqueueTask(
-        widget.record.path,
-        priority: widget.isVisible ? 1 : 5, // 可见卡片优先级更高
-        onComplete: (path) {
-          if (path != null && mounted && _thumbnailPath != path) {
-            setState(() {
-              _thumbnailPath = path;
-            });
-          }
-        },
+      final thumbnailService = ThumbnailService.instance;
+      await thumbnailService.initialize();
+      thumbnailService.updateVisibility(
+        path,
+        isVisible: widget.isVisible,
+        priority: widget.priority,
       );
-    } catch (e) {
-      // 出错时使用原图
+
+      // 后台生成缩略图（但不切换到缩略图，避免闪烁）
+      unawaited(
+        thumbnailService
+            .getThumbnail(path, size: ThumbnailSize.small, priority: widget.priority)
+            .then((generatedPath) {
+          if (generatedPath != null && mounted) {
+            // AppLogger.i('[CardLoad] Thumbnail generated: $fileName', 'LocalImageCard3D');
+            // 只缓存缩略图路径，不切换到缩略图显示，避免图片闪烁
+            _thumbnailPath = generatedPath;
+          }
+        }),
+      );
+    } catch (e, stack) {
+      AppLogger.e('[CardLoad] ERROR: $fileName', e, stack, 'LocalImageCard3D');
       if (mounted) {
         setState(() {
-          _thumbnailPath = null;
+          _displayPath = path;
+          _loadState = _ImageLoadState.loaded;
         });
       }
+    } finally {
+      _isLoadingThumbnail = false;
     }
   }
 
@@ -155,47 +182,37 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     setState(() => _isHovered = false);
   }
 
-  /// 复制图片到剪贴板
   Future<void> _copyImageToClipboard() async {
     File? tempFile;
     try {
       final sourceFile = File(widget.record.path);
-
       if (!await sourceFile.exists()) {
-        if (mounted) {
-          AppToast.error(context, '文件不存在');
-        }
+        if (mounted) AppToast.error(context, '文件不存在');
         return;
       }
 
       final tempDir = await getTemporaryDirectory();
-      tempFile = File(
-        '${tempDir.path}/NAI_${DateTime.now().millisecondsSinceEpoch}.png',
-      );
+      tempFile = File('${tempDir.path}/NAI_${DateTime.now().millisecondsSinceEpoch}.png');
       await tempFile.writeAsBytes(await sourceFile.readAsBytes());
 
-      // 使用 PowerShell 复制图像到剪贴板
+      const psCommand = r'''
+Add-Type -AssemblyName System.Windows.Forms;
+Add-Type -AssemblyName System.Drawing;
+$image = [System.Drawing.Image]::FromFile("''';
       final result = await Process.run('powershell', [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; \$image = [System.Drawing.Image]::FromFile("${tempFile.path}"); [System.Windows.Forms.Clipboard]::SetImage(\$image); \$image.Dispose();',
+        '$psCommand${tempFile.path}"); [System.Windows.Forms.Clipboard]::SetImage(\$image); \$image.Dispose();',
       ]);
 
-      if (result.exitCode != 0) {
-        throw Exception('PowerShell 命令失败');
-      }
+      if (result.exitCode != 0) throw Exception('PowerShell 命令失败');
 
       await Future.delayed(const Duration(milliseconds: 500));
-
-      if (mounted) {
-        AppToast.success(context, '已复制到剪贴板');
-      }
+      if (mounted) AppToast.success(context, '已复制到剪贴板');
     } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '复制失败: $e');
-      }
+      if (mounted) AppToast.error(context, '复制失败: $e');
     } finally {
       if (tempFile != null && await tempFile.exists()) {
         try {
@@ -205,58 +222,27 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     }
   }
 
-  /// 获取主题适配的效果强度
-  _EffectIntensity _getEffectIntensity(BuildContext context) {
+  (_EffectIntensity, Color) _getEffectConfig(BuildContext context) {
     final theme = Theme.of(context);
     final extension = theme.extension<AppThemeExtension>();
 
-    // 根据主题类型调整效果强度
-    if (extension?.enableNeonGlow == true) {
-      // 霓虹风格：更强的效果
-      return const _EffectIntensity(
-        holographic: 1.5,
-        edgeGlow: 1.3,
-        gloss: 1.0,
-      );
-    } else if (extension?.isLightTheme == true) {
-      // 浅色主题：较弱的效果
-      return const _EffectIntensity(
-        holographic: 0.7,
-        edgeGlow: 0.6,
-        gloss: 1.0,
-      );
-    } else {
-      // 暗色主题：标准效果
-      return const _EffectIntensity(
-        holographic: 1.0,
-        edgeGlow: 1.0,
-        gloss: 0.8,
-      );
-    }
-  }
+    final intensity = switch ((extension?.enableNeonGlow, extension?.isLightTheme)) {
+      (true, _) => (edgeGlow: 1.3, gloss: 1.0),
+      (_, true) => (edgeGlow: 0.6, gloss: 1.0),
+      _ => (edgeGlow: 1.0, gloss: 0.8),
+    };
 
-  /// 获取边缘发光颜色
-  Color _getEdgeGlowColor(BuildContext context) {
-    final theme = Theme.of(context);
-    final extension = theme.extension<AppThemeExtension>();
-
-    // 优先使用主题定义的发光颜色
-    if (extension?.glowColor != null) {
-      return extension!.glowColor!;
-    }
-
-    // 否则使用主题主色
-    return theme.colorScheme.primary;
+    final glowColor = extension?.glowColor ?? theme.colorScheme.primary;
+    return (_EffectIntensity(edgeGlow: intensity.edgeGlow, gloss: intensity.gloss), glowColor);
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    super.build(context);
     final theme = Theme.of(context);
     final cardHeight = widget.height ?? widget.width;
     final colorScheme = theme.colorScheme;
-    final intensity = _getEffectIntensity(context);
-    final glowColor = _getEdgeGlowColor(context);
+    final (intensity, glowColor) = _getEffectConfig(context);
 
     return MouseRegion(
       onEnter: _onHoverEnter,
@@ -278,30 +264,19 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               border: widget.isSelected
-                  ? Border.all(
-                      color: colorScheme.primary,
-                      width: 3,
-                    )
+                  ? Border.all(color: colorScheme.primary, width: 3)
                   : _isHovered
-                      ? Border.all(
-                          color: colorScheme.primary.withOpacity(0.3),
-                          width: 2,
-                        )
+                      ? Border.all(color: colorScheme.primary.withOpacity(0.3), width: 2)
                       : null,
               boxShadow: [
-                // 主阴影
                 BoxShadow(
                   color: _isHovered
                       ? Colors.black.withOpacity(0.35)
                       : Colors.black.withOpacity(0.12),
                   blurRadius: _isHovered ? 28 : 10,
-                  offset: Offset(
-                    0,
-                    _isHovered ? 14 : 4,
-                  ),
+                  offset: Offset(0, _isHovered ? 14 : 4),
                   spreadRadius: _isHovered ? 2 : 0,
                 ),
-                // 次阴影（增加深度感）
                 if (_isHovered)
                   BoxShadow(
                     color: Colors.black.withOpacity(0.15),
@@ -316,59 +291,42 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // 1. 图片层 - 使用RepaintBoundary隔离
-                  RepaintBoundary(
-                    child: _buildImage(),
-                  ),
-
-                  // 2. 边缘发光效果（仅悬停时，带淡入动画）
+                  _buildImageLayer(),
                   if (_isHovered)
                     Positioned.fill(
                       child: TweenAnimationBuilder<double>(
                         tween: Tween(begin: 0.0, end: 1.0),
                         duration: const Duration(milliseconds: 200),
                         curve: Curves.easeOut,
-                        builder: (context, value, child) {
-                          return _EdgeGlowOverlay(
-                            glowColor: glowColor,
-                            intensity: value * intensity.edgeGlow,
-                          );
-                        },
+                        builder: (context, value, child) => _EdgeGlowOverlay(
+                          glowColor: glowColor,
+                          intensity: value * intensity.edgeGlow,
+                        ),
                       ),
                     ),
-
-                  // 3. 光泽扫过效果（仅悬停时）
                   if (_isHovered)
                     Positioned.fill(
                       child: RepaintBoundary(
                         child: AnimatedBuilder(
                           animation: _glossAnimation,
-                          builder: (context, child) {
-                            return _GlossOverlay(
-                              progress: _glossAnimation.value,
-                              intensity: intensity.gloss,
-                            );
-                          },
+                          builder: (context, child) => _GlossOverlay(
+                            progress: _glossAnimation.value,
+                            intensity: intensity.gloss,
+                          ),
                         ),
                       ),
                     ),
-
-                  // 4. 右侧竖向按钮组（复制、发送、收藏）
                   Positioned(
                     top: 8,
                     right: 8,
                     child: _buildActionButtons(),
                   ),
-
-                  // 5. 选中状态指示器
                   if (widget.isSelected)
                     Positioned(
                       top: 8,
                       left: 8,
                       child: _buildSelectionIndicator(colorScheme),
                     ),
-
-                  // 6. 选中覆盖层（使用 IgnorePointer 让点击穿透）
                   if (widget.isSelected)
                     Positioned.fill(
                       child: IgnorePointer(
@@ -380,8 +338,6 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
                         ),
                       ),
                     ),
-
-                  // 7. 悬停时显示元数据预览
                   if (_isHovered && widget.record.metadata != null)
                     Positioned(
                       bottom: 0,
@@ -398,76 +354,115 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     );
   }
 
-  Widget _buildImage() {
-    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
-    final cacheWidth = (widget.width * pixelRatio).toInt();
+  Widget _buildImageLayer() => switch (_loadState) {
+        _ImageLoadState.error => _buildErrorPlaceholder(),
+        _ImageLoadState.loading when _displayPath == null => _buildLoadingPlaceholder(),
+        _ when _displayPath != null => _buildOptimizedImage(_displayPath!),
+        _ => _buildLoadingPlaceholder(),
+      };
 
-    // 流式加载策略：
-    // 1. 直接显示图片（无 placeholder）
-    // 2. 图片加载中显示黑色背景，加载完成后自动显示
-    // 3. 缩略图生成后会自动刷新（通过 _thumbnailPath 变化）
-
-    final String imagePath = _thumbnailPath ?? widget.record.path;
-    final File imageFile = File(imagePath);
-
+  Widget _buildLoadingPlaceholder() {
     return Container(
-      color: Colors.black.withOpacity(0.05),
-      child: Image.file(
-        imageFile,
-        fit: BoxFit.contain,
-        cacheWidth: cacheWidth,
-        gaplessPlayback: true,
-        errorBuilder: (context, error, stackTrace) {
-          // 如果缩略图加载失败，尝试回退到原图
-          if (_thumbnailPath != null && _thumbnailPath != widget.record.path) {
-            return Image.file(
-              File(widget.record.path),
-              fit: BoxFit.contain,
-              cacheWidth: cacheWidth,
-              gaplessPlayback: true,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: Colors.grey[300],
-                  child: const Center(
-                    child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
-                  ),
-                );
-              },
-            );
-          }
-          return Container(
-            color: Colors.grey[300],
-            child: const Center(
-              child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+      color: Colors.grey[850],
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey[600]),
             ),
-          );
-        },
-        // 移除 frameBuilder，不显示 loading placeholder
-        // 图片加载时会显示上面的黑色背景，加载完成后自动显示图片
+            const SizedBox(height: 8),
+            Text(
+              '加载中...',
+              style: TextStyle(color: Colors.grey[600], fontSize: 11),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  /// 构建右侧竖向按钮组
+  Widget _buildErrorPlaceholder() {
+    return Container(
+      color: Colors.red[900]?.withOpacity(0.3),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.broken_image, color: Colors.red[400], size: 40),
+            const SizedBox(height: 8),
+            Text('加载失败', style: TextStyle(color: Colors.red[300], fontSize: 12)),
+            const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: _loadThumbnail,
+              icon: Icon(Icons.refresh, color: Colors.red[300], size: 16),
+              label: Text('重试', style: TextStyle(color: Colors.red[300], fontSize: 11)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptimizedImage(String imagePath) {
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final cacheWidth = (widget.width * pixelRatio * 1.5).toInt();
+
+    return Image.file(
+      File(imagePath),
+      fit: BoxFit.cover,
+      cacheWidth: cacheWidth,
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) return child;
+        return Container(
+          color: Colors.grey[850],
+          child: const Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white38),
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        AppLogger.w('Image load failed, attempting fallback: $imagePath', 'LocalImageCard3D');
+        return _buildErrorFallback(imagePath);
+      },
+    );
+  }
+
+  Widget _buildErrorFallback(String failedPath) {
+    if (failedPath != widget.record.path) {
+      return Image.file(
+        File(widget.record.path),
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => _buildErrorPlaceholder(),
+      );
+    }
+    return _buildErrorPlaceholder();
+  }
+
   Widget _buildActionButtons() {
     return FloatingActionButtons(
       isVisible: _isHovered,
       buttons: [
-        // 收藏按钮（排在第一个）
         FloatingActionButtonData(
-          icon: widget.record.isFavorite
-              ? Icons.favorite
-              : Icons.favorite_border,
+          icon: widget.record.isFavorite ? Icons.favorite : Icons.favorite_border,
           onTap: widget.onFavoriteToggle,
           iconColor: widget.record.isFavorite ? Colors.red : Colors.white,
           visible: widget.onFavoriteToggle != null,
         ),
-        // 复制按钮（始终显示）
-        FloatingActionButtonData(
-          icon: Icons.copy,
-          onTap: _copyImageToClipboard,
-        ),
-        // 发送到主页按钮
+        FloatingActionButtonData(icon: Icons.copy, onTap: _copyImageToClipboard),
         FloatingActionButtonData(
           icon: Icons.send,
           onTap: () => _showSendToHomeMenu(context),
@@ -477,7 +472,6 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     );
   }
 
-  /// 显示发送到主页菜单
   void _showSendToHomeMenu(BuildContext context) {
     final RenderBox? button = context.findRenderObject() as RenderBox?;
     if (button == null) return;
@@ -485,12 +479,10 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     final offset = button.localToGlobal(Offset.zero);
     final screenSize = MediaQuery.of(context).size;
 
-    // 计算菜单位置（在按钮左侧弹出）
     const menuWidth = 160.0;
     double left = offset.dx - menuWidth - 8;
     double top = offset.dy;
 
-    // 边界检查
     if (left < 8) left = offset.dx + button.size.width + 8;
     if (top + 150 > screenSize.height) top = screenSize.height - 150;
 
@@ -508,24 +500,12 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
             : null,
         onSendToImg2Img: () {
           Navigator.of(dialogContext).pop();
-          _showToast(dialogContext, '图生图功能制作中');
+          AppToast.info(dialogContext, '图生图功能制作中');
         },
         onUpscale: () {
           Navigator.of(dialogContext).pop();
-          _showToast(dialogContext, '放大功能制作中');
+          AppToast.info(dialogContext, '放大功能制作中');
         },
-      ),
-    );
-  }
-
-  /// 显示提示
-  void _showToast(BuildContext context, String message) {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    scaffoldMessenger.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -535,22 +515,14 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
       tween: Tween(begin: 0.0, end: 1.0),
       duration: const Duration(milliseconds: 150),
       curve: Curves.easeOutBack,
-      builder: (context, value, child) {
-        return Transform.scale(
-          scale: value,
-          child: child,
-        );
-      },
+      builder: (context, value, child) => Transform.scale(scale: value, child: child),
       child: Container(
         width: 28,
         height: 28,
         decoration: BoxDecoration(
           color: colorScheme.primary,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: Colors.white,
-            width: 2,
-          ),
+          border: Border.all(color: Colors.white, width: 2),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.2),
@@ -559,11 +531,7 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
             ),
           ],
         ),
-        child: Icon(
-          Icons.check,
-          color: colorScheme.onPrimary,
-          size: 18,
-        ),
+        child: Icon(Icons.check, color: colorScheme.onPrimary, size: 18),
       ),
     );
   }
@@ -606,10 +574,8 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
             spacing: 4,
             runSpacing: 2,
             children: [
-              if (metadata.seed != null)
-                _buildMetadataChip('Seed: ${metadata.seed}'),
-              if (metadata.steps != null)
-                _buildMetadataChip('${metadata.steps} steps'),
+              if (metadata.seed != null) _buildMetadataChip('Seed: ${metadata.seed}'),
+              if (metadata.steps != null) _buildMetadataChip('${metadata.steps} steps'),
             ],
           ),
         ],
@@ -624,13 +590,7 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
         color: Colors.white.withOpacity(0.2),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-        ),
-      ),
+      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 10)),
     );
   }
 
@@ -641,80 +601,57 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
   }
 }
 
-/// 效果强度配置
 class _EffectIntensity {
-  final double holographic;
   final double edgeGlow;
   final double gloss;
 
-  const _EffectIntensity({
-    required this.holographic,
-    required this.edgeGlow,
-    required this.gloss,
-  });
+  const _EffectIntensity({required this.edgeGlow, required this.gloss});
 }
 
-/// 边缘发光效果覆盖层
 class _EdgeGlowOverlay extends StatelessWidget {
   final Color glowColor;
   final double intensity;
 
-  const _EdgeGlowOverlay({
-    required this.glowColor,
-    this.intensity = 1.0,
-  });
+  const _EdgeGlowOverlay({required this.glowColor, this.intensity = 1.0});
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: CustomPaint(
         size: Size.infinite,
-        painter: _EdgeGlowPainter(
-          glowColor: glowColor,
-          intensity: intensity,
-        ),
+        painter: _EdgeGlowPainter(glowColor: glowColor, intensity: intensity),
       ),
     );
   }
 }
 
-/// 边缘发光绘制器
 class _EdgeGlowPainter extends CustomPainter {
   final Color glowColor;
   final double intensity;
 
-  _EdgeGlowPainter({
-    required this.glowColor,
-    required this.intensity,
-  });
+  _EdgeGlowPainter({required this.glowColor, required this.intensity});
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
 
-    // 多层内发光效果
     for (int i = 0; i < 3; i++) {
       final inset = (i + 1) * 1.5;
-      final innerRect = rect.deflate(inset);
       final innerRRect = RRect.fromRectAndRadius(
-        innerRect,
+        rect.deflate(inset),
         Radius.circular(math.max(0, 12 - inset)),
       );
 
-      final opacity = 0.12 * intensity * (3 - i) / 3;
-      final blurAmount = (3 - i) * 2.0;
-
       final paint = Paint()
-        ..color = glowColor.withOpacity(opacity)
+        ..color = glowColor.withOpacity(0.12 * intensity * (3 - i) / 3)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, blurAmount);
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, (3 - i) * 2.0);
 
       canvas.drawRRect(innerRRect, paint);
     }
 
-    // 外部高光边框
     final borderPaint = Paint()
       ..color = glowColor.withOpacity(0.25 * intensity)
       ..style = PaintingStyle.stroke
@@ -722,25 +659,17 @@ class _EdgeGlowPainter extends CustomPainter {
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.0);
 
     canvas.drawRRect(rrect, borderPaint);
-
-    // 角落高光点
-    _drawCornerHighlights(canvas, size, glowColor, intensity);
+    _drawCornerHighlights(canvas, size);
   }
 
-  void _drawCornerHighlights(
-    Canvas canvas,
-    Size size,
-    Color color,
-    double intensity,
-  ) {
-    final highlightPaint = Paint()
-      ..color = color.withOpacity(0.3 * intensity)
+  void _drawCornerHighlights(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = glowColor.withOpacity(0.3 * intensity)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
 
     const radius = 3.0;
     const offset = 16.0;
 
-    // 四个角落的高光点
     final corners = [
       const Offset(offset, offset),
       Offset(size.width - offset, offset),
@@ -749,56 +678,41 @@ class _EdgeGlowPainter extends CustomPainter {
     ];
 
     for (final corner in corners) {
-      canvas.drawCircle(corner, radius, highlightPaint);
+      canvas.drawCircle(corner, radius, paint);
     }
   }
 
   @override
   bool shouldRepaint(_EdgeGlowPainter oldDelegate) {
-    return oldDelegate.glowColor != glowColor ||
-        oldDelegate.intensity != intensity;
+    return oldDelegate.glowColor != glowColor || oldDelegate.intensity != intensity;
   }
 }
 
-/// 光泽扫过效果覆盖层
 class _GlossOverlay extends StatelessWidget {
   final double progress;
   final double intensity;
 
-  const _GlossOverlay({
-    required this.progress,
-    this.intensity = 1.0,
-  });
+  const _GlossOverlay({required this.progress, this.intensity = 1.0});
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: CustomPaint(
         size: Size.infinite,
-        painter: _GlossPainter(
-          progress: progress,
-          intensity: intensity,
-        ),
+        painter: _GlossPainter(progress: progress, intensity: intensity),
       ),
     );
   }
 }
 
-/// 改进的光泽效果绘制器
-///
-/// 包含主光泽层和珠光层
 class _GlossPainter extends CustomPainter {
   final double progress;
   final double intensity;
 
-  _GlossPainter({
-    required this.progress,
-    required this.intensity,
-  });
+  _GlossPainter({required this.progress, required this.intensity});
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 主光泽层 - 白色高光
     final mainPaint = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topLeft,
@@ -822,16 +736,15 @@ class _GlossPainter extends CustomPainter {
 
     canvas.drawRect(Offset.zero & size, mainPaint);
 
-    // 珠光层 - 微妙的彩色光泽
     final pearlPaint = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
           Colors.transparent,
-          const Color(0xFFB8E6F5).withOpacity(0.03 * intensity), // 浅青色
-          const Color(0xFFFFF5E1).withOpacity(0.05 * intensity), // 浅金色
-          const Color(0xFFE6B8F5).withOpacity(0.03 * intensity), // 浅紫色
+          const Color(0xFFB8E6F5).withOpacity(0.03 * intensity),
+          const Color(0xFFFFF5E1).withOpacity(0.05 * intensity),
+          const Color(0xFFE6B8F5).withOpacity(0.03 * intensity),
           Colors.transparent,
         ],
         stops: const [0.0, 0.3, 0.5, 0.7, 1.0],
@@ -850,17 +763,10 @@ class _GlossPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_GlossPainter oldDelegate) {
-    return oldDelegate.progress != progress ||
-        oldDelegate.intensity != intensity;
+    return oldDelegate.progress != progress || oldDelegate.intensity != intensity;
   }
 }
 
-/// 发送到主页菜单
-/// 
-/// 用于选择将图片发送到何处：
-/// - 文生图（参数套用）
-/// - 图生图（制作中）
-/// - 放大（制作中）
 class _SendToHomeMenu extends StatelessWidget {
   final Offset position;
   final VoidCallback? onSendToTxt2Img;
@@ -882,7 +788,6 @@ class _SendToHomeMenu extends StatelessWidget {
       type: MaterialType.transparency,
       child: Stack(
         children: [
-          // 点击外部关闭
           Positioned.fill(
             child: GestureDetector(
               onTap: () => Navigator.of(context).pop(),
@@ -890,7 +795,6 @@ class _SendToHomeMenu extends StatelessWidget {
               child: Container(color: Colors.transparent),
             ),
           ),
-          // 菜单
           Positioned(
             left: position.dx,
             top: position.dy,
@@ -917,10 +821,7 @@ class _SendToHomeMenu extends StatelessWidget {
                     subtitle: '套用参数',
                     onTap: onSendToTxt2Img,
                   ),
-                  Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant,
-                  ),
+                  Divider(height: 1, color: theme.colorScheme.outlineVariant),
                   _buildMenuItem(
                     context,
                     icon: Icons.image,
@@ -929,10 +830,7 @@ class _SendToHomeMenu extends StatelessWidget {
                     enabled: false,
                     onTap: onSendToImg2Img,
                   ),
-                  Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant,
-                  ),
+                  Divider(height: 1, color: theme.colorScheme.outlineVariant),
                   _buildMenuItem(
                     context,
                     icon: Icons.zoom_in,
@@ -959,6 +857,7 @@ class _SendToHomeMenu extends StatelessWidget {
     bool enabled = true,
   }) {
     final theme = Theme.of(context);
+    final color = enabled ? theme.colorScheme.onSurface : theme.colorScheme.onSurface.withOpacity(0.38);
 
     return Material(
       color: Colors.transparent,
@@ -972,9 +871,7 @@ class _SendToHomeMenu extends StatelessWidget {
               Icon(
                 icon,
                 size: 20,
-                color: enabled
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurface.withOpacity(0.38),
+                color: enabled ? theme.colorScheme.primary : theme.colorScheme.onSurface.withOpacity(0.38),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -982,21 +879,11 @@ class _SendToHomeMenu extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      label,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: enabled
-                            ? theme.colorScheme.onSurface
-                            : theme.colorScheme.onSurface.withOpacity(0.38),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    Text(label, style: theme.textTheme.bodyMedium?.copyWith(color: color, fontWeight: FontWeight.w500)),
                     Text(
                       subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: enabled
-                            ? theme.colorScheme.onSurfaceVariant
-                            : theme.colorScheme.onSurface.withOpacity(0.38),
+                        color: enabled ? theme.colorScheme.onSurfaceVariant : color,
                         fontSize: 11,
                       ),
                     ),

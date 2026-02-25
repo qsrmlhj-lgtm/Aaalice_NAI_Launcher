@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/utils/app_logger.dart';
 
 part 'nai_user_info_api_service.g.dart';
 
@@ -20,15 +21,20 @@ class NAIUserInfoApiService {
     Duration? receiveTimeout,
     Duration? sendTimeout,
   }) async {
-    final response = await _dio.get(
-      '${ApiConstants.baseUrl}${ApiConstants.userSubscriptionEndpoint}',
-      options: Options(
-        receiveTimeout: receiveTimeout ?? _timeout,
-        sendTimeout: sendTimeout ?? _timeout,
-      ),
-    );
+    try {
+      final response = await _dio.get(
+        '${ApiConstants.baseUrl}${ApiConstants.userSubscriptionEndpoint}',
+        options: Options(
+          receiveTimeout: receiveTimeout ?? _timeout,
+          sendTimeout: sendTimeout ?? _timeout,
+        ),
+      );
 
-    return response.data as Map<String, dynamic>;
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      AppLogger.w('Get user subscription failed: ${e.message}', 'NAIUserInfo');
+      rethrow;
+    }
   }
 }
 

@@ -125,15 +125,13 @@ class BackgroundTaskState {
 @Riverpod(keepAlive: true)
 class BackgroundTaskNotifier extends _$BackgroundTaskNotifier {
   final Map<String, Future<void> Function()> _taskExecutors = {};
-  final Map<String, StreamSubscription<void>> _runningTasks = {};
+  final Map<String, Future<void>> _runningTasks = {};
 
   @override
   BackgroundTaskState build() {
     ref.onDispose(() {
-      // 清理正在运行的任务
-      for (final subscription in _runningTasks.values) {
-        subscription.cancel();
-      }
+      // 清理正在运行的任务记录
+      // 注意：Future 不能被取消，任务将继续在后台执行
       _runningTasks.clear();
     });
     return const BackgroundTaskState();
@@ -197,8 +195,10 @@ class BackgroundTaskNotifier extends _$BackgroundTaskNotifier {
 
     AppLogger.i('Starting background task: $id', 'BackgroundTask');
 
-    // 执行任务
-    executor().then(
+    // 执行任务并保存 Future 引用
+    final future = executor();
+    _runningTasks[id] = future;
+    future.then(
       (_) => _onTaskComplete(id),
       onError: (error) => _onTaskComplete(id, error: error.toString()),
     );
@@ -208,7 +208,7 @@ class BackgroundTaskNotifier extends _$BackgroundTaskNotifier {
     final taskIndex = state.tasks.indexWhere((t) => t.id == id);
     if (taskIndex < 0) return;
 
-    _runningTasks.remove(id)?.cancel();
+    _runningTasks.remove(id);
 
     final updatedTask = state.tasks[taskIndex].copyWith(
       status: error != null
@@ -295,8 +295,8 @@ class BackgroundTaskNotifier extends _$BackgroundTaskNotifier {
       return;
     }
 
-    // 取消现有任务（如果在运行）
-    _runningTasks.remove(id)?.cancel();
+    // 移除现有任务记录（Future 不能被取消，任务将继续在后台执行）
+    _runningTasks.remove(id);
 
     // 重置状态
     final taskIndex = state.tasks.indexWhere((t) => t.id == id);
@@ -317,9 +317,7 @@ class BackgroundTaskNotifier extends _$BackgroundTaskNotifier {
 
   /// 清空所有任务
   void clear() {
-    for (final subscription in _runningTasks.values) {
-      subscription.cancel();
-    }
+    // 清空任务记录（注意：正在运行的 Future 不能被取消，将继续在后台执行）
     _runningTasks.clear();
     _taskExecutors.clear();
     state = const BackgroundTaskState();

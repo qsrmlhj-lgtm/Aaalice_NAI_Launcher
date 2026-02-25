@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import '../../../core/utils/app_logger.dart';
-
 /// 元数据预加载任务
 class PreloadTask {
   final String taskId;
@@ -51,7 +49,7 @@ class MetadataPreloader {
 
     // 队列满了则跳过
     if (_queue.length >= maxQueueSize) {
-      AppLogger.w('Preload queue full, skipping: $taskId', 'MetadataPreloader');
+      // AppLogger.w('Preload queue full, skipping: $taskId', 'MetadataPreloader');
       return false;
     }
 
@@ -127,7 +125,7 @@ class MetadataPreloader {
     try {
       // 实际处理由外部提供
       // 这里只负责队列管理
-      AppLogger.d('Processing preload task: ${task.taskId}', 'MetadataPreloader');
+      // AppLogger.d('Processing preload task: ${task.taskId}', 'MetadataPreloader');
     } finally {
       _semaphore.release();
     }

@@ -112,8 +112,12 @@ class StatisticsNotifier extends _$StatisticsNotifier {
       descending: true,
     );
 
+    // 批量获取所有图片的元数据（避免逐张查询）
+    final imageIds = images.map((img) => img.id!).toList();
+    final metadataMap = await dataSource.getMetadataByImageIds(imageIds);
+
     // Batch load records to avoid UI freeze
-    const batchSize = 50;
+    const batchSize = 100;
     final allRecords = <LocalImageRecord>[];
 
     for (var i = 0; i < images.length; i += batchSize) {
@@ -121,18 +125,15 @@ class StatisticsNotifier extends _$StatisticsNotifier {
       final batch = images.sublist(i, end);
 
       for (final image in batch) {
-        // Get metadata if available
-        final metadata = await dataSource.getMetadataByImageId(image.id!);
-
-        // Get tags
-        final tags = await dataSource.getImageTags(image.id!);
+        // 从批量查询结果中获取元数据
+        final metadata = metadataMap[image.id];
 
         allRecords.add(LocalImageRecord(
           path: image.filePath,
           size: image.fileSize,
           modifiedAt: image.modifiedAt,
           isFavorite: image.isFavorite,
-          tags: tags,
+          tags: const [], // 标签不再预加载，需要时在详情页查询
           metadata: metadata != null
               ? NaiImageMetadata(
                   prompt: metadata.prompt,
@@ -159,9 +160,9 @@ class StatisticsNotifier extends _$StatisticsNotifier {
                   rawJson: metadata.rawJson,
                 )
               : null,
-          metadataStatus: image.metadataStatus == ds.MetadataStatus.success
+          metadataStatus: image.metadataStatus == MetadataStatus.success
               ? MetadataStatus.success
-              : image.metadataStatus == ds.MetadataStatus.failed
+              : image.metadataStatus == MetadataStatus.failed
                   ? MetadataStatus.failed
                   : MetadataStatus.none,
         ),);

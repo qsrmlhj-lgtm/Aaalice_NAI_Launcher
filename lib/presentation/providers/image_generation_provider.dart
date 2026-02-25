@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/utils/app_logger.dart';
-import '../../core/utils/nai_metadata_parser.dart';
+import '../../data/services/metadata/unified_metadata_parser.dart';
 import '../../core/utils/nai_prompt_formatter.dart';
 import '../../data/services/image_metadata_service.dart';
 import '../../data/datasources/remote/nai_image_generation_api_service.dart';
@@ -439,14 +439,15 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           );
 
           // 使用快速路径嵌入元数据（不重新编码PNG，性能提升50-100倍）
-          final embeddedBytes = await NaiMetadataParser.embedMetadata(
+          final embeddedBytes = await UnifiedMetadataParser.embedMetadata(
             image.bytes,
             jsonEncode(metadata),
             useStealth: false, // 默认关闭stealth以提升性能，tEXt chunk足够兼容
           );
 
           // 验证嵌入的元数据
-          final verifyMeta = await NaiMetadataParser.extractFromBytes(embeddedBytes);
+          final verifyResult = UnifiedMetadataParser.parseFromPng(embeddedBytes);
+          final verifyMeta = verifyResult.metadata;
           AppLogger.i(
             '[ImageGeneration] Verify embedded metadata: hasSeparatedFields=${verifyMeta?.hasSeparatedFields}, '
             'fixedPrefix=${verifyMeta?.fixedPrefixTags.length}, fixedSuffix=${verifyMeta?.fixedSuffixTags.length}',

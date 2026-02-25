@@ -244,15 +244,12 @@ class AppLogger {
   /// 确保 Logger 已初始化
   static void _ensureInitialized() {
     if (!_initialized) {
-      // 未初始化时使用默认控制台输出
+      // 未初始化时使用简洁格式，与初始化后保持一致
       _logger ??= Logger(
-        printer: PrettyPrinter(
-          methodCount: 0,
-          errorMethodCount: 5,
-          lineLength: 80,
-          colors: true,
-          printEmojis: true,
-        ),
+        filter: ProductionFilter(),
+        printer: SimplePrinter(printTime: true),
+        level: Level.all,
+        output: ConsoleOutput(),
       );
     }
   }
@@ -380,12 +377,14 @@ class AppLogger {
 }
 
 /// 文件日志输出
+/// 
+/// 【修复】使用同步写入 + 定时刷新，避免日志截断和格式问题
 class FileOutput extends LogOutput {
   final File file;
   final bool overrideExisting;
   final Encoding encoding;
   IOSink? _sink;
-  bool _isFlushing = false;
+  bool _isDestroyed = false;
 
   FileOutput({
     required this.file,
@@ -395,30 +394,44 @@ class FileOutput extends LogOutput {
 
   @override
   Future<void> init() async {
+    // 【修复】使用 append 模式，确保不覆盖已有日志
     _sink = file.openWrite(
       mode: overrideExisting ? FileMode.writeOnly : FileMode.writeOnlyAppend,
       encoding: encoding,
     );
+    _isDestroyed = false;
   }
 
   @override
   void output(OutputEvent event) {
-    if (_sink == null) return;
+    if (_sink == null || _isDestroyed) return;
     
     try {
-      _sink!.writeln(event.lines.join('\n'));
-      // 避免频繁 flush 导致的竞争条件，只在非 flush 状态下执行
-      if (!_isFlushing) {
-        _isFlushing = true;
-        _sink!.flush().whenComplete(() => _isFlushing = false);
+      // 【修复】逐行写入，避免 join 导致的格式问题
+      for (final line in event.lines) {
+        _sink!.writeln(line);
       }
+      // 【修复】不再每次 flush，让系统自动缓冲，提高性能
+      // 在 destroy 时会强制 flush
     } catch (e) {
       // 忽略写入错误，避免日志系统本身导致崩溃
     }
   }
 
+  /// 【新增】强制刷新到文件
+  Future<void> flush() async {
+    if (_sink != null && !_isDestroyed) {
+      try {
+        await _sink!.flush();
+      } catch (e) {
+        // 忽略 flush 错误
+      }
+    }
+  }
+
   @override
   Future<void> destroy() async {
+    _isDestroyed = true;
     try {
       await _sink?.flush();
       await _sink?.close();
