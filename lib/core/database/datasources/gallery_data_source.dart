@@ -544,6 +544,9 @@ class GalleryDataSource extends EnhancedBaseDataSource {
       await _createScanLogsTable(db);
       await _createFtsIndexTable(db);
 
+      // 迁移：添加 last_scanned_at 列（如果缺失）
+      await _migrateAddLastScannedAt(db);
+
       AppLogger.i('Gallery tables initialized', 'GalleryDS');
     });
   }
@@ -623,6 +626,26 @@ class GalleryDataSource extends EnhancedBaseDataSource {
       CREATE INDEX IF NOT EXISTS idx_gallery_images_composite
       ON $_imagesTable(is_deleted, is_favorite, modified_at DESC)
     ''');
+  }
+
+  /// 迁移：添加 last_scanned_at 列（如果缺失）
+  Future<void> _migrateAddLastScannedAt(Database db) async {
+    try {
+      // 检查列是否存在
+      final tableInfo = await db.rawQuery('PRAGMA table_info($_imagesTable)');
+      final hasColumn = tableInfo.any((col) => col['name'] == 'last_scanned_at');
+      
+      if (!hasColumn) {
+        AppLogger.i('[Migration] Adding last_scanned_at column to $_imagesTable', 'GalleryDS');
+        await db.execute('ALTER TABLE $_imagesTable ADD COLUMN last_scanned_at INTEGER');
+        AppLogger.i('[Migration] last_scanned_at column added successfully', 'GalleryDS');
+      } else {
+        AppLogger.d('[Migration] last_scanned_at column already exists', 'GalleryDS');
+      }
+    } catch (e, stack) {
+      AppLogger.e('[Migration] Failed to add last_scanned_at column', e, stack, 'GalleryDS');
+      // 迁移失败不应该阻止应用启动
+    }
   }
 
   Future<void> _createMetadataTable(Database db) async {
