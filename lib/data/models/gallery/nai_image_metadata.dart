@@ -140,42 +140,89 @@ class NaiImageMetadata with _$NaiImageMetadata {
       _$NaiImageMetadataFromJson(json);
 
   /// 从 NAI Comment JSON 构造
+  ///
+  /// 增强错误处理：即使部分字段解析失败，也会返回可用的元数据对象
   factory NaiImageMetadata.fromNaiComment(Map<String, dynamic> json, {String? rawJson}) {
+    Map<String, dynamic>? commentData;
+    String? software;
+    String? source;
+
     try {
-      final (commentData, software, source) = _extractCommentData(json);
+      final extracted = _extractCommentData(json);
+      commentData = extracted.$1;
+      software = extracted.$2;
+      source = extracted.$3;
+    } catch (e) {
+      AppLogger.w('Failed to extract comment data: $e', 'NaiImageMetadata');
+      // 使用原始 JSON 作为备选
+      commentData = json;
+    }
 
-      // 提取固定词（应用专属扩展）
-      final parts = _extractFixedTags(commentData);
+    // 提取固定词（应用专属扩展）
+    Map<String, List<String>> parts = {'fixedPrefix': [], 'fixedSuffix': [], 'qualityTags': []};
+    List<String> characterPrompts = [];
+    List<String> characterNegativePrompts = [];
+    List<CharacterPromptInfo> characterInfos = [];
+    List<VibeReference> vibeReferences = [];
 
+    try {
+      parts = _extractFixedTags(commentData);
+    } catch (e) {
+      AppLogger.w('Failed to extract fixed tags: $e', 'NaiImageMetadata');
+    }
+
+    try {
       // 提取 V4 角色提示词
-      final (characterPrompts, characterNegativePrompts, characterInfos) =
-          _extractCharacterPrompts(commentData, parts);
+      final charResult = _extractCharacterPrompts(commentData, parts);
+      characterPrompts = charResult.$1;
+      characterNegativePrompts = charResult.$2;
+      characterInfos = charResult.$3;
+    } catch (e) {
+      AppLogger.w('Failed to extract character prompts: $e', 'NaiImageMetadata');
+    }
 
+    try {
       // 提取 Vibe 数据
-      final vibeReferences = _extractVibeReferences(commentData);
+      vibeReferences = _extractVibeReferences(commentData);
+    } catch (e) {
+      AppLogger.w('Failed to extract vibe references: $e', 'NaiImageMetadata');
+    }
 
+    // 安全获取字段值
+    String prompt = '';
+    try {
+      prompt = commentData['prompt'] as String? ?? '';
+    } catch (_) {}
+
+    String negativePrompt = '';
+    try {
+      negativePrompt = commentData['uc'] as String? ?? '';
+    } catch (_) {}
+
+    // 构建元数据对象（使用try-catch包装每个字段）
+    try {
       return NaiImageMetadata(
-        prompt: commentData['prompt'] as String? ?? '',
-        negativePrompt: commentData['uc'] as String? ?? '',
+        prompt: prompt,
+        negativePrompt: negativePrompt,
         seed: _toInt(commentData['seed']),
-        sampler: commentData['sampler'] as String?,
+        sampler: _safeGetString(commentData, 'sampler'),
         steps: _toInt(commentData['steps']),
         scale: _extractScale(commentData),
         width: _toInt(commentData['width']),
         height: _toInt(commentData['height']),
-        model: commentData['model'] as String?,
-        smea: commentData['sm'] as bool?,
-        smeaDyn: commentData['sm_dyn'] as bool?,
-        noiseSchedule: commentData['noise_schedule'] as String?,
+        model: _safeGetString(commentData, 'model'),
+        smea: _safeGetBool(commentData, 'sm'),
+        smeaDyn: _safeGetBool(commentData, 'sm_dyn'),
+        noiseSchedule: _safeGetString(commentData, 'noise_schedule'),
         cfgRescale: _toDouble(commentData['cfg_rescale']),
         ucPreset: _toInt(commentData['uc_preset']),
-        qualityToggle: commentData['quality_toggle'] as bool?,
+        qualityToggle: _safeGetBool(commentData, 'quality_toggle'),
         isImg2Img: commentData['image'] != null,
         strength: _toDouble(commentData['strength']),
         noise: _toDouble(commentData['noise']),
         software: software,
         source: source,
-        version: commentData['version']?.toString(),
+        version: _safeGetString(commentData, 'version'),
         characterPrompts: characterPrompts,
         characterNegativePrompts: characterNegativePrompts,
         rawJson: rawJson,
@@ -184,24 +231,68 @@ class NaiImageMetadata with _$NaiImageMetadata {
         qualityTags: parts['qualityTags'] ?? [],
         characterInfos: characterInfos,
         vibeReferences: vibeReferences,
-        originalPrompt: commentData['prompt'] as String? ?? '',
+        originalPrompt: prompt,
       );
     } catch (e, stack) {
-      AppLogger.e('fromNaiComment failed', e, stack, 'NaiImageMetadata');
-      throw FormatException('Failed to parse NAI metadata: $e\nJSON keys: ${json.keys.toList()}');
+      AppLogger.e('fromNaiComment failed, returning partial metadata', e, stack, 'NaiImageMetadata');
+      // 返回最基本的元数据，确保不崩溃
+      return NaiImageMetadata(
+        prompt: prompt,
+        negativePrompt: negativePrompt,
+        rawJson: rawJson,
+        originalPrompt: prompt,
+      );
+    }
+  }
+
+  /// 安全获取字符串字段
+  static String? _safeGetString(Map<String, dynamic> json, String key) {
+    try {
+      final value = json[key];
+      if (value == null) return null;
+      return value.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 安全获取布尔字段
+  static bool? _safeGetBool(Map<String, dynamic> json, String key) {
+    try {
+      final value = json[key];
+      if (value == null) return null;
+      if (value is bool) return value;
+      if (value is String) {
+        return value.toLowerCase() == 'true' || value == '1';
+      }
+      if (value is int) return value == 1;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 
   /// 安全转换为 int
+  ///
+  /// 支持：int, double, String, 以及科学计数法字符串
   static int? _toInt(dynamic value) {
     if (value == null) return null;
     if (value is int) return value;
     if (value is double) return value.toInt();
-    if (value is String) return int.tryParse(value);
+    if (value is String) {
+      // 尝试直接解析
+      final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+      // 尝试解析科学计数法或其他格式
+      final doubleParsed = double.tryParse(value);
+      if (doubleParsed != null) return doubleParsed.toInt();
+    }
     return null;
   }
 
   /// 安全转换为 double
+  ///
+  /// 支持：double, int, String
   static double? _toDouble(dynamic value) {
     if (value == null) return null;
     if (value is double) return value;

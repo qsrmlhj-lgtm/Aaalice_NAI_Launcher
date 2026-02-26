@@ -1,19 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/utils/image_save_utils.dart';
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/zip_utils.dart';
 import '../../../../data/services/alias_resolver_service.dart';
 import '../../../providers/layout_state_provider.dart';
 import '../../../providers/tag_library_page_provider.dart';
-import '../../../../data/services/metadata/unified_metadata_parser.dart';
+
 import '../../../../data/services/image_metadata_service.dart';
+import '../../../../data/models/gallery/nai_image_metadata.dart';
 
 import '../../../../data/repositories/gallery_folder_repository.dart';
 import '../../../providers/image_generation_provider.dart';
@@ -588,6 +590,8 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
   }
 
   /// 从详情页保存图像
+  ///
+  /// 使用 [ImageSaveUtils] 确保元数据完整嵌入
   Future<void> _saveImageFromDetail(
     BuildContext context,
     ImageDetailData image,
@@ -596,86 +600,30 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
       final imageBytes = await image.getImageBytes();
       final saveDirPath = await GalleryFolderRepository.instance.getRootPath();
       if (saveDirPath == null) return;
-      final saveDir = Directory(saveDirPath);
-      if (!await saveDir.exists()) {
-        await saveDir.create(recursive: true);
-      }
-
-      // 从图像中提取元数据以获取正确的参数
-      final metadata = await ImageMetadataService().getMetadataFromBytes(imageBytes);
-
-      final commentJson = <String, dynamic>{
-        'prompt': metadata?.prompt ?? '',
-        'uc': metadata?.negativePrompt ?? '',
-        'seed': metadata?.seed ?? Random().nextInt(4294967295),
-        'steps': metadata?.steps ?? 28,
-        'width': metadata?.width ?? 832,
-        'height': metadata?.height ?? 1216,
-        'scale': metadata?.scale ?? 5.0,
-        'uncond_scale': 0.0,
-        'cfg_rescale': metadata?.cfgRescale ?? 0.0,
-        'n_samples': 1,
-        'noise_schedule': metadata?.noiseSchedule ?? 'native',
-        'sampler': metadata?.sampler ?? 'k_euler_ancestral',
-        'sm': metadata?.smea ?? true,
-        'sm_dyn': metadata?.smeaDyn ?? false,
-      };
-
-      // 添加 V4 多角色信息
-      if (metadata?.characterPrompts.isNotEmpty == true) {
-        final charCaptions = <Map<String, dynamic>>[];
-        final charNegCaptions = <Map<String, dynamic>>[];
-
-        for (int i = 0; i < metadata!.characterPrompts.length; i++) {
-          charCaptions.add({
-            'char_caption': metadata.characterPrompts[i],
-            'centers': [
-              {'x': 0.5, 'y': 0.5},
-            ],
-          });
-          if (i < metadata.characterNegativePrompts.length) {
-            charNegCaptions.add({
-              'char_caption': metadata.characterNegativePrompts[i],
-              'centers': [
-                {'x': 0.5, 'y': 0.5},
-              ],
-            });
-          }
-        }
-
-        commentJson['v4_prompt'] = {
-          'caption': {
-            'base_caption': metadata.prompt,
-            'char_captions': charCaptions,
-          },
-          'use_coords': false,
-          'use_order': true,
-        };
-        commentJson['v4_negative_prompt'] = {
-          'caption': {
-            'base_caption': metadata.negativePrompt,
-            'char_captions': charNegCaptions,
-          },
-          'use_coords': false,
-          'use_order': false,
-        };
-      }
-
-      final embeddedMetadata = {
-        'Description': metadata?.prompt ?? '',
-        'Software': 'NovelAI',
-        'Source': metadata?.source ?? 'NovelAI Diffusion',
-        'Comment': jsonEncode(commentJson),
-      };
-
-      final embeddedBytes = await UnifiedMetadataParser.embedMetadata(
-        imageBytes,
-        jsonEncode(embeddedMetadata),
-      );
 
       final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
-      final file = File('$saveDirPath/$fileName');
-      await file.writeAsBytes(embeddedBytes);
+      final filePath = '$saveDirPath/$fileName';
+
+      // 获取已有元数据（如果图像已包含）
+      final existingMetadata = image.metadata;
+
+      if (existingMetadata != null) {
+        // 使用 ImageSaveUtils 简化元数据嵌入
+        await ImageSaveUtils.saveWithPrebuiltMetadata(
+          imageBytes: imageBytes,
+          filePath: filePath,
+          metadata: {
+            'Description': existingMetadata.prompt,
+            'Software': 'NovelAI',
+            'Source': existingMetadata.source ?? 'NovelAI Diffusion',
+            'Comment': jsonEncode(_buildCommentJsonFromMetadata(existingMetadata)),
+          },
+        );
+      } else {
+        // 没有元数据，直接保存原始字节
+        final file = File(filePath);
+        await file.writeAsBytes(imageBytes);
+      }
 
       ref.read(localGalleryNotifierProvider.notifier).refresh();
 
@@ -687,6 +635,82 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
         AppToast.error(context, context.l10n.image_saveFailed(e.toString()));
       }
     }
+  }
+
+  /// 从元数据构建 Comment JSON（复用 desktop_layout.dart 的逻辑）
+  Map<String, dynamic> _buildCommentJsonFromMetadata(NaiImageMetadata metadata) {
+    final commentJson = <String, dynamic>{
+      'prompt': metadata.prompt,
+      'uc': metadata.negativePrompt,
+      'seed': metadata.seed ?? -1,
+      'steps': metadata.steps ?? 28,
+      'width': metadata.width ?? 832,
+      'height': metadata.height ?? 1216,
+      'scale': metadata.scale ?? 5.0,
+      'uncond_scale': 0.0,
+      'cfg_rescale': metadata.cfgRescale ?? 0.0,
+      'n_samples': 1,
+      'noise_schedule': metadata.noiseSchedule ?? 'native',
+      'sampler': metadata.sampler ?? 'k_euler_ancestral',
+      'sm': metadata.smea ?? false,
+      'sm_dyn': metadata.smeaDyn ?? false,
+    };
+
+    // 添加 V4 多角色信息
+    if (metadata.characterPrompts.isNotEmpty) {
+      final charCaptions = <Map<String, dynamic>>[];
+      final charNegCaptions = <Map<String, dynamic>>[];
+
+      for (int i = 0; i < metadata.characterPrompts.length; i++) {
+        charCaptions.add({
+          'char_caption': metadata.characterPrompts[i],
+          'centers': [
+            {'x': 0.5, 'y': 0.5},
+          ],
+        });
+        if (i < metadata.characterNegativePrompts.length) {
+          charNegCaptions.add({
+            'char_caption': metadata.characterNegativePrompts[i],
+            'centers': [
+              {'x': 0.5, 'y': 0.5},
+            ],
+          });
+        }
+      }
+
+      commentJson['v4_prompt'] = {
+        'caption': {
+          'base_caption': metadata.prompt,
+          'char_captions': charCaptions,
+        },
+        'use_coords': false,
+        'use_order': true,
+      };
+      commentJson['v4_negative_prompt'] = {
+        'caption': {
+          'base_caption': metadata.negativePrompt,
+          'char_captions': charNegCaptions,
+        },
+        'use_coords': false,
+        'use_order': false,
+      };
+    }
+
+    // 添加 Vibe 数据
+    if (metadata.vibeReferences.isNotEmpty) {
+      commentJson['reference_image_multiple'] = metadata.vibeReferences
+          .where((v) => v.vibeEncoding.isNotEmpty)
+          .map((v) => v.vibeEncoding)
+          .toList();
+      commentJson['reference_strength_multiple'] = metadata.vibeReferences
+          .map((v) => v.strength)
+          .toList();
+      commentJson['reference_information_extracted_multiple'] = metadata.vibeReferences
+          .map((v) => v.infoExtracted)
+          .toList();
+    }
+
+    return commentJson;
   }
 
   /// 显示保存到词库对话框

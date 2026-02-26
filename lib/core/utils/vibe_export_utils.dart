@@ -213,8 +213,7 @@ class VibeExportUtils {
 
   /// 生成单个 bundle 条目（简化格式，仅包含必要字段）
   ///
-  /// 根据 vibe_file_parser.dart 的 fromBundle 解析逻辑，
-  /// bundle 条目只需要：name、importInfo.strength、encodings
+  /// 包含：name、importInfo.strength、encodings、thumbnail
   static Future<Map<String, dynamic>> _generateBundleEntry(
     VibeReference vibe,
   ) async {
@@ -233,13 +232,28 @@ class VibeExportUtils {
       encodings = {};
     }
 
-    return <String, dynamic>{
+    final entry = <String, dynamic>{
       'name': vibe.displayName,
       'encodings': encodings,
       'importInfo': {
         'strength': vibe.strength,
       },
     };
+
+    // 添加缩略图（如果存在）
+    final thumbnailBase64 = await _generateThumbnailBase64(vibe);
+    if (thumbnailBase64 != null && thumbnailBase64.isNotEmpty) {
+      entry['thumbnail'] = thumbnailBase64;
+    }
+
+    // 添加原始图片数据（如果encodings为空但原始数据存在，用于后续编码）
+    if (vibe.vibeEncoding.isEmpty &&
+        vibe.rawImageData != null &&
+        vibe.rawImageData!.isNotEmpty) {
+      entry['image'] = base64Encode(vibe.rawImageData!);
+    }
+
+    return entry;
   }
 
   /// 生成缩略图的 base64（如果没有缩略图，尝试生成一个）

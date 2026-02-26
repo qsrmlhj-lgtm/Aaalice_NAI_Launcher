@@ -1246,7 +1246,12 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
     );
     setState(() => _isImporting = false);
 
-    await _handleImportResult(result.success, result.fail);
+    // 如果发生了编码流程，跳过额外的 reload（编码保存时已刷新）
+    await _handleImportResult(
+      result.success,
+      result.fail,
+      skipReload: result.hasEncoding,
+    );
   }
 
   Future<List<PlatformFile>?> _pickImportFiles() async {
@@ -1291,7 +1296,7 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
     return (imageFiles, regularFiles);
   }
 
-  Future<({int success, int fail})> _processImportSources({
+  Future<({int success, int fail, bool hasEncoding})> _processImportSources({
     required List<VibeImageImportItem> imageItems,
     required List<PlatformFile> vibeFiles,
     String? targetCategoryId,
@@ -1307,6 +1312,7 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
 
     var totalSuccess = 0;
     var totalFail = 0;
+    var hasEncoding = false; // 标记是否有图片经过编码流程
     final totalCount = imageItems.length + vibeFiles.length;
 
     // 单独处理每张图片，以便支持无 Vibe 数据图片的编码流程
@@ -1314,10 +1320,12 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
       final imageItem = imageItems[i];
       onProgress(i + 1, totalCount, '导入图片(${i + 1}/${imageItems.length}): ${imageItem.source}');
 
+      // 检测是否经过编码流程
       final result = await _processSingleImageImport(
         imageFile: imageItem,
         importService: importService,
         targetCategoryId: targetCategoryId,
+        onEncodingTriggered: () => hasEncoding = true,
       );
 
       if (result == true) {
@@ -1408,16 +1416,21 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
       }
     }
 
-    return (success: totalSuccess, fail: totalFail);
+    return (success: totalSuccess, fail: totalFail, hasEncoding: hasEncoding);
   }
 
-  Future<void> _handleImportResult(int totalSuccess, int totalFail) async {
+  Future<void> _handleImportResult(
+    int totalSuccess,
+    int totalFail, {
+    bool skipReload = false,
+  }) async {
     // 用户全部取消，不显示任何提示
     if (totalSuccess == 0 && totalFail == 0) {
       return;
     }
 
-    if (totalSuccess > 0) {
+    // skipReload 用于编码流程，因为编码保存时已经更新了状态
+    if (totalSuccess > 0 && !skipReload) {
       await ref.read(vibeLibraryNotifierProvider.notifier).reload();
     }
 
@@ -1907,6 +1920,7 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
     required VibeImageImportItem imageFile,
     required VibeImportService importService,
     String? targetCategoryId,
+    VoidCallback? onEncodingTriggered,
   }) async {
     // 首先尝试提取 Vibe 数据
     try {
@@ -1927,12 +1941,16 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
         categoryId: targetCategoryId,
       );
     } on NoVibeDataException {
+      // 标记编码流程被触发
+      onEncodingTriggered?.call();
       return await _handleImageEncoding(
         imageFile: imageFile,
         targetCategoryId: targetCategoryId,
       );
     } catch (e) {
       if (_isNoVibeDataError(e)) {
+        // 标记编码流程被触发
+        onEncodingTriggered?.call();
         return await _handleImageEncoding(
           imageFile: imageFile,
           targetCategoryId: targetCategoryId,
