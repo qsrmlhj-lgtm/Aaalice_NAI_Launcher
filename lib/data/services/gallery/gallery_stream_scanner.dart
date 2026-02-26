@@ -175,6 +175,7 @@ class GalleryStreamScanner {
         final isProcessed = result.stage == FileProcessingStage.completed || 
                            result.stage == FileProcessingStage.error;
         final isSkipped = result.stage == FileProcessingStage.skipped;
+        final isError = result.stage == FileProcessingStage.error;
         
         stats = stats.copyWith(
           processed: isProcessed ? stats.processed + 1 : stats.processed,
@@ -182,11 +183,12 @@ class GalleryStreamScanner {
           withMetadata: result.metadata != null && result.metadata!.hasData
               ? stats.withMetadata + 1
               : stats.withMetadata,
-          failed: result.stage == FileProcessingStage.error
-              ? stats.failed + 1
-              : stats.failed,
+          failed: isError ? stats.failed + 1 : stats.failed,
           currentFile: p.basename(file.path),
-          currentStage: result.stage,
+          // 【修复】根据结果设置显示阶段：跳过显示 skipped，错误显示 error，正常处理显示 indexing
+          currentStage: isSkipped 
+              ? FileProcessingStage.skipped 
+              : (isError ? FileProcessingStage.error : FileProcessingStage.indexing),
           progress: totalFiles > 0 ? processedCount / totalFiles : 0.0,
         );
 
