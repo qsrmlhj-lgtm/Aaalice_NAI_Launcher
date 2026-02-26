@@ -14,10 +14,9 @@ import '../../models/gallery/nai_image_metadata.dart';
 import '../../repositories/gallery_folder_repository.dart';
 import '../image_metadata_service.dart';
 import 'gallery_filter_service.dart';
-import 'gallery_scan_service.dart';
 import 'gallery_stream_scanner.dart';
 import 'scan_state_manager.dart';
-import 'scan_config.dart' show ScanPhase, ScanConfig, ScanType;
+import 'scan_config.dart' show ScanConfig;
 
 part 'unified_gallery_service.g.dart';
 
@@ -101,18 +100,6 @@ abstract class LocalGalleryService {
   /// - [GalleryScanException] 扫描失败
   Future<void> refresh();
 
-  /// 重建完整索引
-  ///
-  /// 执行全量扫描，重建数据库索引
-  /// 这是一个耗时操作，建议显示进度提示
-  ///
-  /// 返回扫描结果统计
-  ///
-  /// 可能抛出：
-  /// - [GalleryCancelledException] 用户取消
-  /// - [GalleryScanException] 扫描失败
-  Future<ScanResult?> rebuildIndex();
-
   /// 获取当前过滤后的文件总数
   int get filteredCount;
 
@@ -153,9 +140,6 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   List<File> _filteredFiles = [];
   FilterCriteria _currentFilter = const FilterCriteria();
   int _pageSize = 50;
-
-  // 取消令牌
-  bool _shouldCancelRebuild = false;
 
   LocalGalleryServiceImpl({
     required GalleryDataSource dataSource,
@@ -394,91 +378,42 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   }
 
   /// 执行完整扫描
+  /// 
+  /// 使用统一的 GalleryStreamScanner，与增量扫描使用同一套逻辑
   Future<void> _performFullScan() async {
-    final scanService = GalleryScanService(dataSource: _dataSource);
-    final filesToScan = _allFiles.map((f) => File(f.path)).toList();
-    
-    // 使用文件系统实际文件数作为总数（反映实际处理进度）
-    final actualFileCount = filesToScan.length;
-    
-    // 获取数据库统计信息
-    final existingCount = await _dataSource.countImages();
-    
-    // 启动扫描状态管理，设置总数量为实际文件数
-    final scanManager = ScanStateManager.instance;
-    final started = scanManager.startScan(
-      type: ScanType.full,
-      rootPath: (await GalleryFolderRepository.instance.getRootPath()) ?? '',
-      total: actualFileCount,
-      existingInDatabase: existingCount,
-      metadataCacheCount: 0,
-    );
-    if (!started) {
-      AppLogger.w('全量扫描已在进行中，跳过此次请求', 'LocalGalleryService');
+    final rootPath = await GalleryFolderRepository.instance.getRootPath();
+    if (rootPath == null) {
+      AppLogger.w('[UGS] _performFullScan: rootPath is null', 'LocalGalleryService');
       return;
     }
-    scanManager.updateProgress(
-      processed: 0,
-      total: actualFileCount,
-      phase: ScanPhase.scanning,
+
+    // 检查是否已有扫描在进行中
+    final scanManager = ScanStateManager.instance;
+    if (scanManager.isScanning) {
+      AppLogger.w('[UGS] 全量扫描请求被忽略：已有扫描在进行中', 'LocalGalleryService');
+      return;
+    }
+
+    final dir = Directory(rootPath);
+    
+    AppLogger.i('[UGS] 开始执行全量流式扫描', 'LocalGalleryService');
+    
+    // 使用新的流式扫描器：真正的单文件流水线
+    final scanner = GalleryStreamScanner(dataSource: _dataSource);
+    
+    await scanner.startScanning(
+      dir,
+      onFileProcessed: (result, stats) {
+        // 每处理一个文件就更新状态
+        AppLogger.d(
+          '[UGS] File processed: ${result.path.split(Platform.pathSeparator).last}, '
+          'stage: ${result.stage}, total: ${stats.totalDiscovered}',
+          'LocalGalleryService',
+        );
+      },
     );
-
-    // 启动定时器定期更新元数据统计（每2秒）
-    Timer? metadataUpdateTimer;
-    metadataUpdateTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      final statusCounts = await _dataSource.countImagesByMetadataStatus();
-      final successCount = statusCounts['success'] ?? 0;
-      AppLogger.d('[FullScan] Metadata status: $statusCounts', 'LocalGalleryService');
-      scanManager.setMetadataCacheCount(successCount);
-    });
-
-    try {
-      await scanService.processFiles(
-        filesToScan,
-        onProgress: (
-          {required processed, required total, currentFile, required phase, filesSkipped, confirmed,}
-        ) {
-          // 更新扫描状态管理器的进度
-          scanManager.updateProgress(
-            processed: processed,
-            total: actualFileCount,
-            currentFile: currentFile,
-            phase: _convertToScanPhase(phase),
-          );
-          
-          // 每处理100个文件更新一次日志
-          if (processed % 100 == 0) {
-            AppLogger.d('Full scan progress: $processed/$actualFileCount ($phase)', 'LocalGalleryService');
-          }
-        },
-      );
-    } finally {
-      // 停止定时器
-      metadataUpdateTimer.cancel();
-    }
-
-    // 最后更新一次元数据统计
-    final finalStatusCounts = await _dataSource.countImagesByMetadataStatus();
-    scanManager.setMetadataCacheCount(finalStatusCounts['success'] ?? 0);
-
-    scanManager.completeScan();
-    AppLogger.i('Full scan complete: $actualFileCount files', 'LocalGalleryService');
-  }
-  
-  /// 将字符串phase转换为ScanPhase
-  ScanPhase _convertToScanPhase(String phase) {
-    switch (phase) {
-      case 'scanning':
-        return ScanPhase.scanning;
-      case 'indexing':
-        return ScanPhase.indexing;
-      case 'metadata':
-        return ScanPhase.parsing;
-      case 'completed':
-        return ScanPhase.completed;
-      default:
-        return ScanPhase.idle;
-    }
+    
+    AppLogger.i('[UGS] 全量流式扫描完成', 'LocalGalleryService');
   }
 
   // ============================================================
@@ -829,81 +764,6 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     }
   }
 
-  @override
-  Future<ScanResult?> rebuildIndex() async {
-    _ensureInitialized();
-
-    if (_shouldCancelRebuild) {
-      _shouldCancelRebuild = false;
-      return null;
-    }
-
-    final stopwatch = Stopwatch()..start();
-    final total = _allFiles.length;
-    var newFiles = 0;
-    var updatedFiles = 0;
-    final errors = <String>[];
-
-    const batchSize = 100;
-    for (var i = 0; i < total; i += batchSize) {
-      if (_shouldCancelRebuild) {
-        break;
-      }
-
-      final end = (i + batchSize < total) ? i + batchSize : total;
-      final batch = _allFiles.sublist(i, end);
-
-      for (final file in batch) {
-        try {
-          final stat = await file.stat();
-          final fileName = file.path.split(Platform.pathSeparator).last;
-
-          final existingId = await _dataSource.getImageIdByPath(file.path);
-
-          await _dataSource.upsertImage(
-            filePath: file.path,
-            fileName: fileName,
-            fileSize: stat.size,
-            createdAt: stat.changed,
-            modifiedAt: stat.modified,
-          );
-
-          if (existingId == null) {
-            newFiles++;
-          } else {
-            updatedFiles++;
-          }
-        } catch (e) {
-          if (errors.length < 10) {
-            errors.add('${file.path}: $e');
-          }
-        }
-      }
-
-      // 让出时间片
-      await Future.delayed(Duration.zero);
-    }
-
-    stopwatch.stop();
-
-    if (_shouldCancelRebuild) {
-      _shouldCancelRebuild = false;
-      throw const GalleryCancelledException(progress: null);
-    }
-
-    // 刷新文件列表
-    await refresh();
-
-    return ScanResult(
-      filesScanned: total,
-      filesAdded: newFiles,
-      filesUpdated: updatedFiles,
-      filesDeleted: 0,
-      duration: stopwatch.elapsed,
-      errors: errors,
-    );
-  }
-
   // ============================================================
   // 工具方法
   // ============================================================
@@ -1045,9 +905,6 @@ class ErrorGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwError();
 
   @override
-  Future<ScanResult?> rebuildIndex() => _throwError();
-
-  @override
   Future<void> setSearchQuery(String query) => _throwError();
 
   @override
@@ -1110,9 +967,6 @@ class _PlaceholderGalleryService implements LocalGalleryService {
 
   @override
   Future<void> refresh() => _throwNotInitialized();
-
-  @override
-  Future<ScanResult?> rebuildIndex() => _throwNotInitialized();
 
   @override
   Future<void> setSearchQuery(String query) => _throwNotInitialized();

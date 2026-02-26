@@ -132,6 +132,11 @@ class GalleryScanProgressNotifier extends StateNotifier<ScanProgressState> {
     final failed = processed > withMetadata ? processed - withMetadata : 0;
     _failedCount = failed;
     
+    // 【修复】处理文件名：如果新文件名为空，保留旧值
+    final currentFile = progress.currentFile?.isNotEmpty == true
+        ? progress.currentFile!
+        : state.cacheStats.currentFile;
+    
     // 更新状态（从 ScanStateManager 获取元数据计数）
     if (state.isScanning || scanManager.isScanning) {
       state = state.copyWith(
@@ -141,7 +146,7 @@ class GalleryScanProgressNotifier extends StateNotifier<ScanProgressState> {
           withMetadata: withMetadata,
           failedMetadata: _failedCount,
           currentStage: progress.phase.name,
-          currentFile: progress.currentFile ?? state.cacheStats.currentFile,
+          currentFile: currentFile,
         ),
         progress: total > 0 ? processed / total : 0.0,
       );
@@ -162,6 +167,7 @@ class GalleryScanProgressNotifier extends StateNotifier<ScanProgressState> {
               totalImages: 0, // 将在第一个进度更新时设置
               withMetadata: initialMetadataCount,
               currentStage: 'scanning',
+              currentFile: state.cacheStats.currentFile, // 保留之前的文件名
             ),
           );
         }

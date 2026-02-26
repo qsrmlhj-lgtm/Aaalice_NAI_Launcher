@@ -7,7 +7,6 @@ import 'package:path/path.dart' as p;
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/utils/app_logger.dart';
-import '../../data/services/gallery/index.dart';
 import '../../data/services/image_metadata_service.dart';
 import '../database/datasources/gallery_data_source.dart';
 
@@ -291,8 +290,6 @@ class GalleryCacheManager {
   /// 清除 L1 内存缓存
   Future<void> clearL1MemoryCache() async {
     await ImageMetadataService().clearCache();
-    final scanService = GalleryScanService(dataSource: GalleryDataSource());
-    scanService.clearCache();
     GalleryDataSource().clearCache();
     _invalidateStatisticsCache();
     AppLogger.i('L1 memory cache cleared', 'GalleryCacheManager');

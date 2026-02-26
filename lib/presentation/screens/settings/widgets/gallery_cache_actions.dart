@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/database/datasources/gallery_data_source.dart';
 import '../../../../core/utils/app_logger.dart';
 import '../../../../data/repositories/gallery_folder_repository.dart';
-import '../../../../data/services/gallery/gallery_stream_scanner.dart';
 import '../../../../data/services/gallery/index.dart';
 import '../../../providers/local_gallery_provider.dart';
 import '../../../widgets/common/app_toast.dart';
