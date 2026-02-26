@@ -188,11 +188,12 @@ class UnifiedMetadataParser {
     final stopwatch = Stopwatch()..start();
     _statistics.totalAttempts++;
 
-    AppLogger.d(
-      '[UnifiedMetadataParser] parseFromFile START: $filePath, '
-      'maxBytes=$maxBytes, useGradualRead=$useGradualRead',
-      _tag,
-    );
+    // 扫描时日志太频繁，只在需要时开启详细日志
+    // AppLogger.d(
+    //   '[UnifiedMetadataParser] parseFromFile START: $filePath, '
+    //   'maxBytes=$maxBytes, useGradualRead=$useGradualRead',
+    //   _tag,
+    // );
 
     try {
       final file = File(filePath);
@@ -218,7 +219,7 @@ class UnifiedMetadataParser {
         );
       }
 
-      AppLogger.d('[UnifiedMetadataParser] File size: $fileSize bytes', _tag);
+      // AppLogger.d('[UnifiedMetadataParser] File size: $fileSize bytes', _tag);
 
       MetadataParseResult result;
 
@@ -300,10 +301,10 @@ class UnifiedMetadataParser {
         );
       }
 
-      AppLogger.d(
-        'PNG header valid, ${fileInfo}bytes length=${bytes.length}, starting decode...',
-        _tag,
-      );
+      // AppLogger.d(
+      //   'PNG header valid, ${fileInfo}bytes length=${bytes.length}, starting decode...',
+      //   _tag,
+      // );
 
       // 使用 image 包解析 PNG
       final decoder = img.PngDecoder();
@@ -329,10 +330,10 @@ class UnifiedMetadataParser {
       final pngInfo = info as img.PngInfo;
       final textData = pngInfo.textData;
 
-      AppLogger.d(
-        'PNG decoded successfully, ${fileInfo}textData fields: ${textData.keys.toList()}',
-        _tag,
-      );
+      // AppLogger.d(
+      //   'PNG decoded successfully, ${fileInfo}textData fields: ${textData.keys.toList()}',
+      //   _tag,
+      // );
 
       // 使用 textData 解析
       final result = parseFromTextData(textData);
@@ -367,7 +368,7 @@ class UnifiedMetadataParser {
     final triedParsers = <String>[];
 
     try {
-      AppLogger.d('Parsing textData with ${textData.length} entries', _tag);
+      // AppLogger.d('Parsing textData with ${textData.length} entries', _tag);
 
       // 尝试每个解析器
       for (final parser in _parsers) {
@@ -376,10 +377,11 @@ class UnifiedMetadataParser {
         try {
           final metadata = parser.parse(textData);
           if (metadata != null) {
-            AppLogger.i(
-              'Metadata parsed successfully by ${parser.name}: ${metadata.prompt.substring(0, metadata.prompt.length > 30 ? 30 : metadata.prompt.length)}...',
-              _tag,
-            );
+            // 扫描时成功日志太频繁，只在调试时开启
+            // AppLogger.i(
+            //   'Metadata parsed successfully by ${parser.name}: ${metadata.prompt.substring(0, metadata.prompt.length > 30 ? 30 : metadata.prompt.length)}...',
+            //   _tag,
+            // );
 
             // 更新解析器统计
             _statistics.parserSuccessCounts[parser.name] =
@@ -397,7 +399,7 @@ class UnifiedMetadataParser {
             return result;
           }
         } catch (e) {
-          AppLogger.d('Parser ${parser.name} failed: $e', _tag);
+          // AppLogger.d('Parser ${parser.name} failed: $e', _tag);
           _statistics.parserFailureCounts[parser.name] =
               (_statistics.parserFailureCounts[parser.name] ?? 0) + 1;
         }
@@ -419,7 +421,7 @@ class UnifiedMetadataParser {
       }
 
       final error = 'No parser could extract metadata from ${textData.length} fields';
-      AppLogger.d(error, _tag);
+      // AppLogger.d(error, _tag);
       return MetadataParseResult.failed(
         triedParsers,
         error,
@@ -532,15 +534,15 @@ class UnifiedMetadataParser {
     String filePath,
     int fileSize,
   ) {
-    AppLogger.d('[UnifiedMetadataParser] Using gradual read strategy', _tag);
+    // AppLogger.d('[UnifiedMetadataParser] Using gradual read strategy', _tag);
     _statistics.gradualReadAttempts++;
 
     // 如果文件很小，直接完整读取
     if (fileSize <= _gradualReadThresholds.first) {
-      AppLogger.d(
-        '[UnifiedMetadataParser] Small file (${fileSize ~/ 1024}KB), reading entirely',
-        _tag,
-      );
+      // AppLogger.d(
+      //   '[UnifiedMetadataParser] Small file (${fileSize ~/ 1024}KB), reading entirely',
+      //   _tag,
+      // );
       return _extractFullFile(file, filePath);
     }
 
@@ -548,52 +550,52 @@ class UnifiedMetadataParser {
     for (final threshold in _gradualReadThresholds) {
       if (fileSize <= threshold) {
         // 文件小于当前阈值，直接完整读取
-        AppLogger.d(
-          '[UnifiedMetadataParser] File size <= ${threshold ~/ 1024}KB, reading entirely',
-          _tag,
-        );
+        // AppLogger.d(
+        //   '[UnifiedMetadataParser] File size <= ${threshold ~/ 1024}KB, reading entirely',
+        //   _tag,
+        // );
         return _extractFullFile(file, filePath);
       }
 
       // 尝试读取到当前阈值
-      AppLogger.d(
-        '[UnifiedMetadataParser] Trying ${threshold ~/ 1024}KB read...',
-        _tag,
-      );
+      // AppLogger.d(
+      //   '[UnifiedMetadataParser] Trying ${threshold ~/ 1024}KB read...',
+      //   _tag,
+      // );
       final result = _extractWithLimit(file, filePath, threshold, fileSize);
 
       if (result.success) {
-        AppLogger.i(
-          '[UnifiedMetadataParser] Metadata found at ${threshold ~/ 1024}KB threshold',
-          _tag,
-        );
+        // AppLogger.i(
+        //   '[UnifiedMetadataParser] Metadata found at ${threshold ~/ 1024}KB threshold',
+        //   _tag,
+        // );
         _statistics.gradualReadSuccesses++;
         return result;
       }
 
-      AppLogger.d(
-        '[UnifiedMetadataParser] No metadata in first ${threshold ~/ 1024}KB, will expand...',
-        _tag,
-      );
+      // AppLogger.d(
+      //   '[UnifiedMetadataParser] No metadata in first ${threshold ~/ 1024}KB, will expand...',
+      //   _tag,
+      // );
     }
 
     // 所有阈值都尝试过，读取完整文件
-    AppLogger.d(
-      '[UnifiedMetadataParser] No metadata in thresholds, trying full file read...',
-      _tag,
-    );
+    // AppLogger.d(
+    //   '[UnifiedMetadataParser] No metadata in thresholds, trying full file read...',
+    //   _tag,
+    // );
     return _extractFullFile(file, filePath);
   }
 
   /// 读取完整文件并提取元数据
   static MetadataParseResult _extractFullFile(File file, String filePath) {
-    AppLogger.d('[UnifiedMetadataParser] Reading full file...', _tag);
+    // AppLogger.d('[UnifiedMetadataParser] Reading full file...', _tag);
     try {
       final bytes = file.readAsBytesSync();
-      AppLogger.d(
-        '[UnifiedMetadataParser] Full read: ${bytes.length} bytes',
-        _tag,
-      );
+      // AppLogger.d(
+      //   '[UnifiedMetadataParser] Full read: ${bytes.length} bytes',
+      //   _tag,
+      // );
       return parseFromPng(bytes, filePathForLog: filePath);
     } catch (e) {
       final error = 'Error reading full file: $e';
@@ -640,10 +642,10 @@ class UnifiedMetadataParser {
         }
       }
 
-      AppLogger.d(
-        '[UnifiedMetadataParser] Read ${bytes.length} bytes (requested $maxBytes), decoding...',
-        _tag,
-      );
+      // AppLogger.d(
+      //   '[UnifiedMetadataParser] Read ${bytes.length} bytes (requested $maxBytes), decoding...',
+      //   _tag,
+      // );
 
       return parseFromPng(bytes, filePathForLog: filePath);
     } catch (e) {
@@ -1137,20 +1139,20 @@ class NovelAiParser implements MetadataParser {
 
       try {
         final json = jsonDecode(text) as Map<String, dynamic>;
-        AppLogger.d(
-          'NovelAiParser: Parsed JSON from "$field", keys=${json.keys.toList()}',
-          'UnifiedMetadataParser',
-        );
+        // AppLogger.d(
+        //   'NovelAiParser: Parsed JSON from "$field", keys=${json.keys.toList()}',
+        //   'UnifiedMetadataParser',
+        // );
 
         // 直接格式
         if (json.containsKey('prompt')) {
-          AppLogger.d(
-            'NovelAiParser: Found prompt field, creating metadata...',
-            'UnifiedMetadataParser',
-          );
+          // AppLogger.d(
+          //   'NovelAiParser: Found prompt field, creating metadata...',
+          //   'UnifiedMetadataParser',
+          // );
           try {
             final result = NaiImageMetadata.fromNaiComment(json, rawJson: text);
-            AppLogger.d('NovelAiParser: Metadata created successfully', 'UnifiedMetadataParser');
+            // AppLogger.d('NovelAiParser: Metadata created successfully', 'UnifiedMetadataParser');
             return result;
           } catch (e, stack) {
             AppLogger.e(
@@ -1166,10 +1168,10 @@ class NovelAiParser implements MetadataParser {
         // 嵌套格式
         if (json.containsKey('Comment')) {
           final comment = json['Comment'];
-          AppLogger.d(
-            'NovelAiParser: Found nested Comment field, type=${comment.runtimeType}',
-            'UnifiedMetadataParser',
-          );
+          // AppLogger.d(
+          //   'NovelAiParser: Found nested Comment field, type=${comment.runtimeType}',
+          //   'UnifiedMetadataParser',
+          // );
 
           if (comment is String) {
             try {
@@ -1180,7 +1182,7 @@ class NovelAiParser implements MetadataParser {
               );
 
               final result = NaiImageMetadata.fromNaiComment(commentJson, rawJson: text);
-              AppLogger.d('NovelAiParser: Metadata created from nested Comment', 'UnifiedMetadataParser');
+              // AppLogger.d('NovelAiParser: Metadata created from nested Comment', 'UnifiedMetadataParser');
               return result;
             } catch (e, stack) {
               AppLogger.e(

@@ -185,10 +185,7 @@ class GalleryStreamScanner {
               : stats.withMetadata,
           failed: isError ? stats.failed + 1 : stats.failed,
           currentFile: p.basename(file.path),
-          // 【修复】根据结果设置显示阶段：跳过显示 skipped，错误显示 error，正常处理显示 indexing
-          currentStage: isSkipped 
-              ? FileProcessingStage.skipped 
-              : (isError ? FileProcessingStage.error : FileProcessingStage.indexing),
+          // 【修复】不覆盖 currentStage，保留 _processSingleFile 内部设置的阶段
           progress: totalFiles > 0 ? processedCount / totalFiles : 0.0,
         );
 
