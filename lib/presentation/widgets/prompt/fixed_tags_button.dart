@@ -434,6 +434,15 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
             )
           else
             const Spacer(),
+          // 【新增】关联自词库的标识
+          if (entry.sourceEntryId != null) ...[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.sync_alt,
+              size: 12,
+              color: Colors.blue.shade400,
+            ),
+          ],
           // 位置标签（固定宽度，靠右）
           const SizedBox(width: 8),
           Container(
@@ -602,6 +611,15 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
                 fontSize: 9,
                 color: theme.colorScheme.outline,
               ),
+            ),
+          ],
+          // 【新增】关联自词库的标识
+          if (entry.sourceEntryId != null) ...[
+            const SizedBox(width: 4),
+            Icon(
+              Icons.sync_alt,
+              size: 10,
+              color: Colors.blue.shade300,
             ),
           ],
         ],

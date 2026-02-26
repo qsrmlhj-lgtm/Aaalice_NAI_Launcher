@@ -6,6 +6,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../core/storage/local_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../data/models/tag_library/tag_library_entry.dart';
+import 'tag_library_page_provider.dart';
 
 part 'fixed_tags_provider.g.dart';
 
@@ -147,12 +149,16 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
   }
 
   /// 添加固定词
+  /// 
+  /// 【新增】sourceEntryId 参数：如果此固定词是从词库关联过来的，
+  /// 传入词库条目的 ID，用于双向同步
   Future<FixedTagEntry> addEntry({
     required String name,
     required String content,
     double weight = 1.0,
     FixedTagPosition position = FixedTagPosition.prefix,
     bool enabled = true,
+    String? sourceEntryId, // 【新增】来源词库条目ID
   }) async {
     final entry = FixedTagEntry.create(
       name: name,
@@ -160,6 +166,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       weight: weight,
       position: position,
       enabled: enabled,
+      sourceEntryId: sourceEntryId, // 【新增】
       sortOrder: state.entries.length,
     );
 
@@ -175,6 +182,9 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
   }
 
   /// 更新固定词
+  /// 
+  /// 【新增】如果此固定词有关联的词库条目（sourceEntryId != null），
+  /// 则反向同步更新词库条目（双向同步）
   Future<void> updateEntry(FixedTagEntry updatedEntry) async {
     final index = state.entries.indexWhere((e) => e.id == updatedEntry.id);
     if (index == -1) {
@@ -194,6 +204,88 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       'Updated fixed tag: ${updatedEntry.displayName}',
       'FixedTagsProvider',
     );
+    
+    // 【新增】如果有关联的词库条目，反向同步更新
+    if (updatedEntry.sourceEntryId != null) {
+      await _syncToTagLibrary(updatedEntry);
+    }
+  }
+  
+  /// 【新增】从词库同步更新固定词
+  /// 
+  /// 当词库条目更新时，更新所有 sourceEntryId 匹配的固定词
+  Future<void> syncFromTagLibrary(TagLibraryEntry tagEntry) async {
+    final entriesToSync = state.entries
+        .where((e) => e.sourceEntryId == tagEntry.id)
+        .toList();
+    
+    if (entriesToSync.isEmpty) return;
+    
+    final newEntries = [...state.entries];
+    for (final fixedTag in entriesToSync) {
+      final index = newEntries.indexWhere((e) => e.id == fixedTag.id);
+      if (index != -1) {
+        // 只同步名称和内容，保留固定词特有的设置（权重、位置、启用状态）
+        newEntries[index] = fixedTag.copyWith(
+          name: tagEntry.name,
+          content: tagEntry.content,
+          updatedAt: DateTime.now(),
+        );
+      }
+    }
+    
+    state = state.copyWith(entries: newEntries);
+    await _saveEntries();
+    
+    AppLogger.d(
+      'Synced ${entriesToSync.length} fixed tags from tag library: ${tagEntry.name}',
+      'FixedTagsProvider',
+    );
+  }
+  
+  /// 【新增】同步到词库（反向同步）
+  /// 
+  /// 当固定词更新时，同步更新关联的词库条目
+  Future<void> _syncToTagLibrary(FixedTagEntry fixedTag) async {
+    if (fixedTag.sourceEntryId == null) return;
+    
+    try {
+      final tagLibraryNotifier = ref.read(tagLibraryPageNotifierProvider.notifier);
+      final tagLibraryState = ref.read(tagLibraryPageNotifierProvider);
+      
+      // 查找关联的词库条目
+      final tagEntry = tagLibraryState.entries
+          .cast<TagLibraryEntry?>()
+          .firstWhere(
+            (e) => e?.id == fixedTag.sourceEntryId,
+            orElse: () => null,
+          );
+      
+      if (tagEntry == null) {
+        AppLogger.w(
+          'Source tag library entry not found: ${fixedTag.sourceEntryId}',
+          'FixedTagsProvider',
+        );
+        return;
+      }
+      
+      // 更新词库条目（只更新名称和内容）
+      final updatedTagEntry = tagEntry.copyWith(
+        name: fixedTag.name,
+        content: fixedTag.content,
+        updatedAt: DateTime.now(),
+      );
+      
+      // 使用 updateEntry 更新，但不触发再次同步（避免循环）
+      await tagLibraryNotifier.updateEntryWithoutSync(updatedTagEntry);
+      
+      AppLogger.d(
+        'Synced fixed tag to tag library: ${fixedTag.name}',
+        'FixedTagsProvider',
+      );
+    } catch (e) {
+      AppLogger.w('Failed to sync to tag library: $e', 'FixedTagsProvider');
+    }
   }
 
   /// 删除固定词

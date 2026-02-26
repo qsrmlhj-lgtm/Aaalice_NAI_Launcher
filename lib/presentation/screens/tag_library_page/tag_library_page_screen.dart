@@ -754,6 +754,8 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
   }
 
   /// 处理发送到固定词
+  /// 
+  /// 【新增】传入 sourceEntryId 建立双向同步关联
   Future<void> _handleSendToFixedTag(
     TagLibraryEntry entry,
     bool sendAsAlias,
@@ -765,6 +767,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
     await ref.read(fixedTagsNotifierProvider.notifier).addEntry(
           name: entry.name,
           content: content,
+          sourceEntryId: entry.id, // 【新增】建立关联，用于双向同步
         );
 
     if (!mounted) return;

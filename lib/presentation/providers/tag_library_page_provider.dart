@@ -7,6 +7,7 @@ import '../../core/storage/local_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/models/tag_library/tag_library_category.dart';
 import '../../data/models/tag_library/tag_library_entry.dart';
+import 'fixed_tags_provider.dart';
 
 part 'tag_library_page_provider.g.dart';
 
@@ -269,8 +270,20 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
     return entry;
   }
 
-  /// 更新条目
+  /// 更新条目（带同步）
+  /// 
+  /// 【新增】自动同步更新关联的固定词（双向同步）
   Future<void> updateEntry(TagLibraryEntry updatedEntry) async {
+    await updateEntryWithoutSync(updatedEntry);
+    
+    // 【新增】同步更新关联的固定词
+    await _syncToFixedTags(updatedEntry);
+  }
+  
+  /// 【新增】更新条目（不带同步）
+  /// 
+  /// 用于从固定词反向同步时，避免循环同步
+  Future<void> updateEntryWithoutSync(TagLibraryEntry updatedEntry) async {
     final index = state.entries.indexWhere((e) => e.id == updatedEntry.id);
     if (index == -1) return;
 
@@ -278,6 +291,18 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
     newEntries[index] = updatedEntry;
     state = state.copyWith(entries: newEntries);
     await _saveEntries();
+  }
+  
+  /// 【新增】同步更新关联的固定词
+  /// 
+  /// 当词库条目更新时，自动更新所有 sourceEntryId 匹配的固定词
+  Future<void> _syncToFixedTags(TagLibraryEntry entry) async {
+    try {
+      final fixedTagsNotifier = ref.read(fixedTagsNotifierProvider.notifier);
+      await fixedTagsNotifier.syncFromTagLibrary(entry);
+    } catch (e) {
+      AppLogger.w('Failed to sync to fixed tags: $e', 'TagLibraryPage');
+    }
   }
 
   /// 删除条目

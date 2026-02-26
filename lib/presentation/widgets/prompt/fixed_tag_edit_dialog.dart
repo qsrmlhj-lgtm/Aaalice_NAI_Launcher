@@ -101,6 +101,38 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
 
                 const SizedBox(height: 20),
 
+                // 【新增】关联自词库的标识
+                if (widget.entry?.sourceEntryId != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.sync_alt,
+                          size: 16,
+                          color: Colors.blue.shade700,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '关联自词库（双向同步）',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.blue.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
                 // 名称输入
                 Text(
                   context.l10n.fixedTags_name,

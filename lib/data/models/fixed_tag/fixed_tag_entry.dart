@@ -46,6 +46,10 @@ class FixedTagEntry with _$FixedTagEntry {
     /// 所属分类ID (用于词库功能)
     String? categoryId,
 
+    /// 【新增】来源词库条目ID (用于双向同步)
+    /// 如果不为 null，表示此固定词是从词库关联过来的
+    String? sourceEntryId,
+
     /// 排序顺序
     @Default(0) int sortOrder,
 
@@ -67,6 +71,7 @@ class FixedTagEntry with _$FixedTagEntry {
     FixedTagPosition position = FixedTagPosition.prefix,
     bool enabled = true,
     String? categoryId,
+    String? sourceEntryId, // 【新增】来源词库条目ID
     int sortOrder = 0,
   }) {
     final now = DateTime.now();
@@ -78,6 +83,7 @@ class FixedTagEntry with _$FixedTagEntry {
       position: position,
       enabled: enabled,
       categoryId: categoryId,
+      sourceEntryId: sourceEntryId, // 【新增】
       sortOrder: sortOrder,
       createdAt: now,
       updatedAt: now,
