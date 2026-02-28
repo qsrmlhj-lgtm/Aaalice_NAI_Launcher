@@ -123,14 +123,22 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
       _currentScale = value;
     });
 
-    // 获取当前平移值
+    // 获取当前矩阵的缩放比例
     final currentMatrix = _controller.value;
-    final currentTranslation = currentMatrix.getTranslation();
+    final currentScale = currentMatrix.getMaxScaleOnAxis();
 
-    // 创建新的变换矩阵，保持平移，更新缩放
-    final newMatrix = Matrix4.identity()
-      ..translate(currentTranslation.x, currentTranslation.y)
-      ..scale(value);
+    // 如果缩放比例相同，不更新
+    if ((currentScale - value).abs() < 0.01) return;
+
+    // 计算缩放比例变化
+    final scaleDelta = value / currentScale;
+
+    // 创建新的变换矩阵，以中心点为基准进行缩放
+    final newMatrix = Matrix4.copy(currentMatrix);
+    // 缩放矩阵
+    final scaleMatrix = Matrix4.identity()..scale(scaleDelta);
+    // 组合变换: 先应用现有变换，再应用缩放
+    newMatrix.multiply(scaleMatrix);
 
     _controller.value = newMatrix;
   }
@@ -398,25 +406,33 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
   /// 构建预览图片（应用变换）
   Widget _buildPreviewImage() {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final matrix = _controller.value;
+    return ValueListenableBuilder<Matrix4>(
+      valueListenable: _controller,
+      builder: (context, matrix, child) {
         final scale = matrix.getMaxScaleOnAxis();
         final translation = matrix.getTranslation();
 
-        return Transform(
-          transform: Matrix4.identity()
-            ..translate(translation.x, translation.y)
-            ..scale(scale),
-          alignment: Alignment.center,
-          child: Image.file(
-            File(widget.imagePath),
-            fit: BoxFit.cover,
-            width: 200,
-            height: 80,
-            errorBuilder: (_, __, ___) => Container(
-              color: Colors.grey.shade800,
+        // 默认状态（scale=1.0, offset=0,0）时，显示图片中心
+        final effectiveScale = scale.clamp(1.0, 3.0);
+        final effectiveTranslationX = translation.x;
+        final effectiveTranslationY = translation.y;
+
+        return OverflowBox(
+          maxWidth: double.infinity,
+          maxHeight: double.infinity,
+          child: Transform(
+            transform: Matrix4.identity()
+              ..translate(effectiveTranslationX, effectiveTranslationY)
+              ..scale(effectiveScale),
+            alignment: Alignment.center,
+            child: Image.file(
+              File(widget.imagePath),
+              fit: BoxFit.cover,
+              width: 200,
+              height: 80,
+              errorBuilder: (_, __, ___) => Container(
+                color: Colors.grey.shade800,
+              ),
             ),
           ),
         );
