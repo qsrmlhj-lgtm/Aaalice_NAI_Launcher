@@ -154,118 +154,135 @@ class _EntryCardState extends State<EntryCard>
             ? theme.colorScheme.primary.withOpacity(0.5)
             : Colors.transparent);
 
+    // 构建卡片主体内容（在GestureDetector内）
+    final cardBody = GestureDetector(
+      onTap: widget.isSelectionMode ? widget.onToggleSelection : widget.onTap,
+      onLongPress: widget.isSelectionMode
+          ? null
+          : () {
+              HapticFeedback.mediumImpact();
+              widget.onToggleSelection?.call();
+            },
+      child: AnimatedBuilder(
+        animation: _animationController,
+        builder: (context, child) {
+          return Transform.scale(
+            scale: _scaleAnimation.value,
+            child: Container(
+              height: 80,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  // 光晕效果
+                  if (widget.isSelected || _isHovering)
+                    BoxShadow(
+                      color: widget.isSelected
+                          ? theme.colorScheme.primary.withOpacity(0.5)
+                          : theme.colorScheme.primary.withOpacity(0.25),
+                      blurRadius: 16,
+                      spreadRadius: 1,
+                    ),
+                  // 悬浮阴影（动态）
+                  BoxShadow(
+                    color: Colors.black.withOpacity(
+                      0.15 + (0.15 * _elevationAnimation.value),
+                    ),
+                    blurRadius: 10 + (12 * _elevationAnimation.value),
+                    offset: Offset(
+                      0,
+                      4 + (8 * _elevationAnimation.value),
+                    ),
+                  ),
+                ],
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // 背景层（统一背景色，防止白边）
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                  // 内容层（带ClipRRect）
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // 1. 背景图片
+                        _buildBackgroundImage(entry),
+
+                        // 2. 轻微暗化遮罩（仅当有缩略图时显示）
+                        if (entry.hasThumbnail) _buildDarkenOverlay(),
+
+                        // 3. 内容区域（仅显示名称，按钮移到外层）
+                        if (!widget.isSelectionMode && !_isHovering)
+                          _buildNameArea(theme, entry),
+
+                        // 4. 收藏图标（常驻显示在右上角，仅非选择模式、非悬浮且已收藏时）
+                        if (!widget.isSelectionMode &&
+                            !_isHovering &&
+                            widget.entry.isFavorite)
+                          const Positioned(
+                            top: 8,
+                            right: 8,
+                            child: _FavoriteIndicator(),
+                          ),
+
+                        // 5. 选择模式 Checkbox（右上角）
+                        if (widget.isSelectionMode)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: _SelectionCheckbox(
+                              isSelected: widget.isSelected,
+                              onTap: widget.onToggleSelection,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  // 边框层（放在最上层）
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: borderColor,
+                        width: widget.isSelected ? 2.5 : 2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    // 外层包装：MouseRegion + 悬浮按钮层
     Widget cardContent = CompositedTransformTarget(
       link: _layerLink,
       child: MouseRegion(
         onEnter: (_) => _onEnter(),
         onExit: (_) => _onExit(),
-        child: GestureDetector(
-          onTap:
-              widget.isSelectionMode ? widget.onToggleSelection : widget.onTap,
-          onLongPress: widget.isSelectionMode
-              ? null
-              : () {
-                  HapticFeedback.mediumImpact();
-                  widget.onToggleSelection?.call();
-                },
-          child: AnimatedBuilder(
-            animation: _animationController,
-            builder: (context, child) {
-              return Transform.scale(
-                scale: _scaleAnimation.value,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            // 卡片主体（可点击）
+            cardBody,
+
+            // 悬浮按钮层（在GestureDetector外面，独立响应事件）
+            if (!widget.isSelectionMode && _isHovering)
+              Positioned.fill(
                 child: Container(
-                  height: 80,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      // 光晕效果
-                      if (widget.isSelected || _isHovering)
-                        BoxShadow(
-                          color: widget.isSelected
-                              ? theme.colorScheme.primary.withOpacity(0.5)
-                              : theme.colorScheme.primary.withOpacity(0.25),
-                          blurRadius: 16,
-                          spreadRadius: 1,
-                        ),
-                      // 悬浮阴影（动态）
-                      BoxShadow(
-                        color: Colors.black.withOpacity(
-                          0.15 + (0.15 * _elevationAnimation.value),
-                        ),
-                        blurRadius: 10 + (12 * _elevationAnimation.value),
-                        offset: Offset(
-                          0,
-                          4 + (8 * _elevationAnimation.value),
-                        ),
-                      ),
-                    ],
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // 背景层（统一背景色，防止白边）
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          color: Colors.grey.shade800,
-                        ),
-                      ),
-                      // 内容层（带ClipRRect）
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            // 1. 背景图片
-                            _buildBackgroundImage(entry),
-
-                            // 2. 轻微暗化遮罩（仅当有缩略图时显示）
-                            if (entry.hasThumbnail)
-                              _buildDarkenOverlay(),
-
-                            // 3. 内容区域（名称或按钮，互斥显示）
-                            if (!widget.isSelectionMode)
-                              _buildContentArea(theme, entry),
-
-                            // 4. 收藏图标（常驻显示在右上角，仅非选择模式、非悬浮且已收藏时）
-                            if (!widget.isSelectionMode &&
-                                !_isHovering &&
-                                widget.entry.isFavorite)
-                              const Positioned(
-                                top: 8,
-                                right: 8,
-                                child: _FavoriteIndicator(),
-                              ),
-
-                            // 5. 选择模式 Checkbox（右上角）
-                            if (widget.isSelectionMode)
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: _SelectionCheckbox(
-                                  isSelected: widget.isSelected,
-                                  onTap: widget.onToggleSelection,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      // 边框层（放在最上层）
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: borderColor,
-                            width: widget.isSelected ? 2.5 : 2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  color: Colors.black.withOpacity(0.5),
+                  child: _buildFloatingButtons(theme, entry),
                 ),
-              );
-            },
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -342,50 +359,8 @@ class _EntryCardState extends State<EntryCard>
     );
   }
 
-  /// 构建内容区域（名称和按钮互斥显示）
-  Widget _buildContentArea(ThemeData theme, TagLibraryEntry entry) {
-    final l10n = context.l10n;
-    // 悬浮时显示按钮，否则显示名称
-    if (_isHovering) {
-      return Container(
-        color: Colors.black.withOpacity(0.5),
-        child: Center(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _ActionIcon(
-                icon: Icons.delete_outline,
-                tooltip: l10n.common_delete,
-                onTap: widget.onDelete,
-                isDestructive: true,
-              ),
-              const SizedBox(width: 8),
-              if (widget.onEdit != null)
-                _ActionIcon(
-                  icon: Icons.edit_outlined,
-                  tooltip: l10n.common_edit,
-                  onTap: widget.onEdit!,
-                ),
-              if (widget.onEdit != null) const SizedBox(width: 8),
-              _ActionIcon(
-                icon: entry.isFavorite ? Icons.favorite : Icons.favorite_border,
-                tooltip: entry.isFavorite ? l10n.common_unfavorite : l10n.common_favorite,
-                onTap: widget.onToggleFavorite,
-                color: entry.isFavorite ? Colors.redAccent : null,
-              ),
-              const SizedBox(width: 8),
-              _ActionIcon(
-                icon: Icons.content_copy,
-                tooltip: l10n.common_copy,
-                onTap: () => _copyToClipboard(entry.content),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // 正常状态显示名称（靠左排列）
+  /// 构建名称显示区域
+  Widget _buildNameArea(ThemeData theme, TagLibraryEntry entry) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Align(
@@ -401,6 +376,44 @@ class _EntryCardState extends State<EntryCard>
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.left,
         ),
+      ),
+    );
+  }
+
+  /// 构建悬浮操作按钮
+  Widget _buildFloatingButtons(ThemeData theme, TagLibraryEntry entry) {
+    final l10n = context.l10n;
+    return Center(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _ActionIcon(
+            icon: Icons.delete_outline,
+            tooltip: l10n.common_delete,
+            onTap: widget.onDelete,
+            isDestructive: true,
+          ),
+          const SizedBox(width: 8),
+          if (widget.onEdit != null)
+            _ActionIcon(
+              icon: Icons.edit_outlined,
+              tooltip: l10n.common_edit,
+              onTap: widget.onEdit!,
+            ),
+          if (widget.onEdit != null) const SizedBox(width: 8),
+          _ActionIcon(
+            icon: entry.isFavorite ? Icons.favorite : Icons.favorite_border,
+            tooltip: entry.isFavorite ? l10n.common_unfavorite : l10n.common_favorite,
+            onTap: widget.onToggleFavorite,
+            color: entry.isFavorite ? Colors.redAccent : null,
+          ),
+          const SizedBox(width: 8),
+          _ActionIcon(
+            icon: Icons.content_copy,
+            tooltip: l10n.common_copy,
+            onTap: () => _copyToClipboard(entry.content),
+          ),
+        ],
       ),
     );
   }
