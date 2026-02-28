@@ -156,6 +156,10 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
 
               const SizedBox(width: 12),
 
+              // 排序下拉菜单
+              _buildSortDropdown(theme, state),
+              const SizedBox(width: 8),
+
               // 视图切换
               _buildViewModeToggle(theme, state),
 
@@ -273,8 +277,69 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
                 .read(tagLibraryPageNotifierProvider.notifier)
                 .setViewMode(TagLibraryViewMode.card),
           ),
+          _ViewModeButton(
+            icon: Icons.folder_copy_outlined,
+            isSelected: state.viewMode == TagLibraryViewMode.grouped,
+            onTap: () => ref
+                .read(tagLibraryPageNotifierProvider.notifier)
+                .setViewMode(TagLibraryViewMode.grouped),
+          ),
         ],
       ),
+    );
+  }
+
+  /// 构建排序下拉菜单
+  Widget _buildSortDropdown(ThemeData theme, TagLibraryPageState state) {
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<TagLibrarySortBy>(
+          value: state.sortBy,
+          icon: const Icon(Icons.arrow_drop_down, size: 18),
+          borderRadius: BorderRadius.circular(8),
+          style: theme.textTheme.bodyMedium?.copyWith(fontSize: 13),
+          items: [
+            DropdownMenuItem(
+              value: TagLibrarySortBy.order,
+              child: _buildSortItem(Icons.sort, '自定义排序'),
+            ),
+            DropdownMenuItem(
+              value: TagLibrarySortBy.name,
+              child: _buildSortItem(Icons.sort_by_alpha, '名称'),
+            ),
+            DropdownMenuItem(
+              value: TagLibrarySortBy.useCount,
+              child: _buildSortItem(Icons.trending_up, '使用频率'),
+            ),
+            DropdownMenuItem(
+              value: TagLibrarySortBy.updatedAt,
+              child: _buildSortItem(Icons.access_time, '更新时间'),
+            ),
+          ],
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(tagLibraryPageNotifierProvider.notifier).setSortBy(value);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSortItem(IconData icon, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16),
+        const SizedBox(width: 8),
+        Text(label),
+      ],
     );
   }
 }
