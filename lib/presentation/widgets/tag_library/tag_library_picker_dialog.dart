@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
@@ -7,6 +5,7 @@ import 'package:nai_launcher/core/utils/localization_extension.dart';
 import '../../../data/models/tag_library/tag_library_category.dart';
 import '../../../data/models/tag_library/tag_library_entry.dart';
 import '../../providers/tag_library_page_provider.dart';
+import '../common/thumbnail_display.dart';
 
 /// 词库条目选择对话框
 ///
@@ -307,17 +306,16 @@ class _EntrySelectCardState extends State<_EntrySelectCard> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
-          child: entry.hasThumbnail
-              ? Image.file(
-                  File(entry.thumbnail!),
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stack) =>
-                      _buildPlaceholder(theme),
-                )
-              : _buildPlaceholder(theme),
-        ),
+        if (entry.hasThumbnail && entry.thumbnail != null)
+          ThumbnailDisplay(
+            imagePath: entry.thumbnail!,
+            offsetX: entry.thumbnailOffsetX,
+            offsetY: entry.thumbnailOffsetY,
+            scale: entry.thumbnailScale,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+          )
+        else
+          _buildPlaceholder(theme),
 
         // 悬停遮罩
         if (_isHovering)
