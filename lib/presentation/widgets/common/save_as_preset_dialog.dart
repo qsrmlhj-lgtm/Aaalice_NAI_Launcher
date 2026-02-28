@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../data/models/gallery/nai_image_metadata.dart';
+import '../../../../data/models/prompt/prompt_config.dart';
+import '../../../../presentation/providers/prompt_config_provider.dart' show promptConfigNotifierProvider;
 import 'app_toast.dart';
 
 /// 保存为预设对话框
 ///
 /// 用于将图片元数据保存为快速预设
-/// TODO: 需要接入 PromptPresetProvider 和 RandomPromptPreset 模型
-class SaveAsPresetDialog extends StatefulWidget {
+class SaveAsPresetDialog extends ConsumerStatefulWidget {
   /// 要保存的元数据
   final NaiImageMetadata metadata;
 
@@ -30,10 +32,10 @@ class SaveAsPresetDialog extends StatefulWidget {
   }
 
   @override
-  State<SaveAsPresetDialog> createState() => _SaveAsPresetDialogState();
+  ConsumerState<SaveAsPresetDialog> createState() => _SaveAsPresetDialogState();
 }
 
-class _SaveAsPresetDialogState extends State<SaveAsPresetDialog> {
+class _SaveAsPresetDialogState extends ConsumerState<SaveAsPresetDialog> {
   late final TextEditingController _nameController;
 
   // 选项状态
@@ -91,6 +93,88 @@ class _SaveAsPresetDialogState extends State<SaveAsPresetDialog> {
     return '$promptPart$seedPart';
   }
 
+  /// 从元数据构建预设配置列表
+  List<PromptConfig> _buildConfigs(NaiImageMetadata metadata) {
+    final configs = <PromptConfig>[];
+
+    // 主提示词处理 - 将提示词中的标签作为配置内容
+    if (_includePrompt && metadata.mainPrompt.isNotEmpty) {
+      final promptTags = _extractTags(metadata.mainPrompt);
+      if (promptTags.isNotEmpty) {
+        configs.add(
+          PromptConfig.create(
+            name: '主提示词',
+            selectionMode: SelectionMode.all,
+            stringContents: promptTags,
+          ),
+        );
+      }
+    }
+
+    // 质量词处理
+    if (_includeQualityTags && metadata.qualityTags.isNotEmpty) {
+      final qualityTags = _extractTags(metadata.qualityTags.join(', '));
+      if (qualityTags.isNotEmpty) {
+        configs.add(
+          PromptConfig.create(
+            name: '质量词',
+            selectionMode: SelectionMode.all,
+            stringContents: qualityTags,
+          ),
+        );
+      }
+    }
+
+    // 固定词处理
+    if (_includeFixedTags && metadata.hasSeparatedFields) {
+      final fixedTags = <String>[
+        ...metadata.fixedPrefixTags,
+        ...metadata.fixedSuffixTags,
+      ];
+      if (fixedTags.isNotEmpty) {
+        configs.add(
+          PromptConfig.create(
+            name: '固定词',
+            selectionMode: SelectionMode.all,
+            stringContents: fixedTags,
+          ),
+        );
+      }
+    }
+
+    // 负向提示词处理
+    if (_includeNegativePrompt && metadata.negativePrompt.isNotEmpty) {
+      final negativeTags = _extractTags(metadata.negativePrompt);
+      if (negativeTags.isNotEmpty) {
+        configs.add(
+          PromptConfig.create(
+            name: '负向提示词',
+            selectionMode: SelectionMode.all,
+            stringContents: negativeTags,
+          ),
+        );
+      }
+    }
+
+    return configs;
+  }
+
+  /// 从提示词文本中提取标签列表
+  List<String> _extractTags(String prompt) {
+    if (prompt.isEmpty) return [];
+
+    // 移除权重括号，分割逗号分隔的标签
+    final cleanPrompt = prompt
+        .replaceAll(RegExp(r'[\[\]\(\)\{\}]'), '') // 移除括号
+        .replaceAll(RegExp(r':\d+\.?\d*'), ''); // 移除权重值
+
+    return cleanPrompt
+        .split(',')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+  }
+
   Future<void> _save() async {
     final name = _nameController.text.trim();
 
@@ -102,17 +186,34 @@ class _SaveAsPresetDialogState extends State<SaveAsPresetDialog> {
     setState(() => _isSaving = true);
 
     try {
-      // TODO: 需要接入 PromptPresetProvider 和 RandomPromptPreset 模型
-      // 临时提示功能尚未实现
-      await Future.delayed(const Duration(milliseconds: 500)); // 模拟保存
+      // 获取 notifier
+      final notifier = ref.read(promptConfigNotifierProvider.notifier);
+
+      // 构建配置列表
+      final configs = _buildConfigs(widget.metadata);
+
+      if (configs.isEmpty) {
+        AppToast.warning(context, '请至少选择一项要保存的内容');
+        setState(() => _isSaving = false);
+        return;
+      }
+
+      // 创建预设
+      final preset = RandomPromptPreset.create(
+        name: name,
+        configs: configs,
+      );
+
+      // 保存预设
+      await notifier.addPreset(preset);
 
       if (mounted) {
-        AppToast.info(context, '预设保存功能即将推出');
+        AppToast.success(context, '预设保存成功');
         Navigator.of(context).pop(true);
       }
     } catch (e) {
       if (mounted) {
-        AppToast.error(context, '保存失败: $e');
+        AppToast.error(context, '保存失败: \$e');
       }
     } finally {
       if (mounted) {

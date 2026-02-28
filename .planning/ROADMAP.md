@@ -35,7 +35,7 @@
 
 **Depends on:** Phase 1
 
-**Status:** 4/5 plans completed
+**Status:** 5/5 plans completed
 
 | Plan | Wave | Description | Status |
 |------|------|-------------|--------|
@@ -43,11 +43,14 @@
 | PLAN-02 | 1 | 提取 GenerationControls 及其内嵌组件 | ✅ 完成 |
 | PLAN-03 | 2 | 提取布局辅助组件（ResizeHandle, CollapsedPanel） | ✅ 完成 |
 | PLAN-04 | 3 | 提取面板组件并简化 desktop_layout.dart | ✅ 完成 |
-| PLAN-05 | 4 | 清理、验证和最终优化 | 🟡 Ready |
+| PLAN-05 | 4 | 清理、验证和最终优化 | ✅ 完成 |
 
 **Progress:**
-- desktop_layout.dart: 356 行 → 191 行（减少 46%）
-- 新组件: LeftPanel, RightPanel, MainWorkspace
-- 导出文件: widgets/index.dart
+- desktop_layout.dart: 356 行 → 192 行（减少 46%）
+- 新组件: LeftPanel, RightPanel, MainWorkspace, ResizeHandle, CollapsedPanel
+- 新服务: GenerationSaveService
+- 新组件目录: generation_controls/ (5 个组件)
+- 导出文件: widgets/index.dart, generation_controls/index.dart
+- flutter analyze: 零错误
 
 ---
