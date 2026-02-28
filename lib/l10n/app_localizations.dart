@@ -11315,6 +11315,60 @@ abstract class AppLocalizations {
   /// **'Enter entry name'**
   String get tagLibrary_entryNameHint;
 
+  /// No description provided for @tagLibrary_selectNewImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Select New Image'**
+  String get tagLibrary_selectNewImage;
+
+  /// No description provided for @tagLibrary_adjustDisplayRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Adjust Display Range'**
+  String get tagLibrary_adjustDisplayRange;
+
+  /// No description provided for @tagLibrary_adjustThumbnailTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Adjust Thumbnail Display Range'**
+  String get tagLibrary_adjustThumbnailTitle;
+
+  /// No description provided for @tagLibrary_dragToMove.
+  ///
+  /// In en, this message translates to:
+  /// **'Drag to move, scroll or pinch to zoom'**
+  String get tagLibrary_dragToMove;
+
+  /// No description provided for @tagLibrary_livePreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Live Preview'**
+  String get tagLibrary_livePreview;
+
+  /// No description provided for @tagLibrary_horizontalOffset.
+  ///
+  /// In en, this message translates to:
+  /// **'Horizontal Offset'**
+  String get tagLibrary_horizontalOffset;
+
+  /// No description provided for @tagLibrary_verticalOffset.
+  ///
+  /// In en, this message translates to:
+  /// **'Vertical Offset'**
+  String get tagLibrary_verticalOffset;
+
+  /// No description provided for @tagLibrary_zoom.
+  ///
+  /// In en, this message translates to:
+  /// **'Zoom'**
+  String get tagLibrary_zoom;
+
+  /// No description provided for @tagLibrary_zoomRatio.
+  ///
+  /// In en, this message translates to:
+  /// **'Zoom Ratio'**
+  String get tagLibrary_zoomRatio;
+
   /// No description provided for @queue_title.
   ///
   /// In en, this message translates to:

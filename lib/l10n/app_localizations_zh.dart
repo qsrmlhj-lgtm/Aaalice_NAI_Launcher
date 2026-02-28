@@ -6015,6 +6015,33 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tagLibrary_entryNameHint => '输入条目名称';
 
   @override
+  String get tagLibrary_selectNewImage => '选择新图片';
+
+  @override
+  String get tagLibrary_adjustDisplayRange => '调整显示范围';
+
+  @override
+  String get tagLibrary_adjustThumbnailTitle => '调整预览图显示范围';
+
+  @override
+  String get tagLibrary_dragToMove => '拖拽移动，滚轮或双指缩放';
+
+  @override
+  String get tagLibrary_livePreview => '实时预览';
+
+  @override
+  String get tagLibrary_horizontalOffset => '水平偏移';
+
+  @override
+  String get tagLibrary_verticalOffset => '垂直偏移';
+
+  @override
+  String get tagLibrary_zoom => '缩放';
+
+  @override
+  String get tagLibrary_zoomRatio => '缩放比例';
+
+  @override
   String get queue_title => '队列';
 
   @override

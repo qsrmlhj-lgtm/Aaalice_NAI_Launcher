@@ -6015,6 +6015,33 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tagLibrary_entryNameHint => 'Enter entry name';
 
   @override
+  String get tagLibrary_selectNewImage => 'Select New Image';
+
+  @override
+  String get tagLibrary_adjustDisplayRange => 'Adjust Display Range';
+
+  @override
+  String get tagLibrary_adjustThumbnailTitle => 'Adjust Thumbnail Display Range';
+
+  @override
+  String get tagLibrary_dragToMove => 'Drag to move, scroll or pinch to zoom';
+
+  @override
+  String get tagLibrary_livePreview => 'Live Preview';
+
+  @override
+  String get tagLibrary_horizontalOffset => 'Horizontal Offset';
+
+  @override
+  String get tagLibrary_verticalOffset => 'Vertical Offset';
+
+  @override
+  String get tagLibrary_zoom => 'Zoom';
+
+  @override
+  String get tagLibrary_zoomRatio => 'Zoom Ratio';
+
+  @override
   String get queue_title => 'Queue';
 
   @override
