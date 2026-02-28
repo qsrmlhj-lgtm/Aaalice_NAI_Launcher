@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -49,6 +50,7 @@ class ThumbnailCropDialog extends StatefulWidget {
 class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
   late final TransformationController _controller;
   double _currentScale = 1.0;
+  Size? _imageSize;
 
   // 预览区域比例（与 EntryCard 一致：宽度/高度）
   static const double _previewAspectRatio = 2.5; // 200 / 80
@@ -57,8 +59,42 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
   void initState() {
     super.initState();
     _controller = TransformationController();
+    _loadImageSize();
     _applyInitialTransform();
     _currentScale = widget.initialScale.clamp(1.0, 3.0);
+  }
+
+  /// 加载图像尺寸以计算基础缩放
+  void _loadImageSize() {
+    final imageProvider = FileImage(File(widget.imagePath));
+    imageProvider.resolve(const ImageConfiguration()).addListener(
+      ImageStreamListener((ImageInfo info, bool synchronousCall) {
+        if (mounted) {
+          setState(() {
+            _imageSize = Size(
+              info.image.width.toDouble(),
+              info.image.height.toDouble(),
+            );
+          });
+        }
+      }),
+    );
+  }
+
+  /// 计算基础缩放比例（让图像完整显示在容器中）
+  double get _baseScale {
+    if (_imageSize == null) return 1.0;
+
+    // 容器尺寸（固定 200x80）
+    const containerWidth = 200.0;
+    const containerHeight = 80.0;
+
+    // 计算让图像完整显示所需的缩放
+    final scaleX = containerWidth / _imageSize!.width;
+    final scaleY = containerHeight / _imageSize!.height;
+
+    // 取较小值，确保图像完整显示（不裁剪）
+    return math.min(scaleX, scaleY);
   }
 
   @override
@@ -69,6 +105,8 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
   /// 应用初始变换值
   void _applyInitialTransform() {
+    if (_imageSize == null) return;
+
     final matrix = _offsetScaleToMatrix(
       widget.initialOffsetX,
       widget.initialOffsetY,
@@ -79,66 +117,92 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
   /// 将相对 offset 和 scale 转换为 Matrix4
   Matrix4 _offsetScaleToMatrix(double offsetX, double offsetY, double scale) {
-    // 计算平移值：offset 范围是 -1.0 ~ 1.0，表示图片边缘到中心的最大偏移
-    // 实际平移像素值需要根据容器尺寸和图片尺寸计算
-    // 简化处理：使用相对值直接映射到平移
-    final translationX = offsetX * 100 * (scale - 1.0);
-    final translationY = offsetY * 100 * (scale - 1.0);
+    if (_imageSize == null) return Matrix4.identity();
+
+    // 计算实际缩放（基础缩放 * 用户缩放）
+    final actualScale = _baseScale * scale.clamp(1.0, 3.0);
+
+    // 计算平移值：offset 范围是 -1.0 ~ 1.0
+    // 根据容器和图片尺寸计算最大可平移距离
+    const containerWidth = 200.0;
+    const containerHeight = 80.0;
+
+    final scaledImageWidth = _imageSize!.width * actualScale;
+    final scaledImageHeight = _imageSize!.height * actualScale;
+
+    final maxTranslateX = math.max(0, (scaledImageWidth - containerWidth) / 2);
+    final maxTranslateY = math.max(0, (scaledImageHeight - containerHeight) / 2);
+
+    final translationX = offsetX * maxTranslateX;
+    final translationY = offsetY * maxTranslateY;
 
     return Matrix4.identity()
       ..translate(translationX, translationY)
-      ..scale(scale);
+      ..scale(actualScale);
   }
 
   /// 从 Matrix4 提取 offset 和 scale
   ThumbnailCropResult _matrixToOffsetScale() {
+    if (_imageSize == null) {
+      return const ThumbnailCropResult(offsetX: 0, offsetY: 0, scale: 1);
+    }
+
     final matrix = _controller.value;
 
-    // 提取缩放值（取 x 或 y 方向的缩放，假设等比缩放）
-    final scale = matrix.getMaxScaleOnAxis().clamp(1.0, 3.0);
+    // 提取实际缩放值
+    final actualScale = matrix.getMaxScaleOnAxis();
+
+    // 转换为用户相对缩放（实际缩放 / 基础缩放）
+    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
 
     // 提取平移值
     final translationX = matrix.getTranslation().x;
     final translationY = matrix.getTranslation().y;
 
+    // 计算最大可平移距离
+    const containerWidth = 200.0;
+    const containerHeight = 80.0;
+
+    final scaledImageWidth = _imageSize!.width * actualScale;
+    final scaledImageHeight = _imageSize!.height * actualScale;
+
+    final maxTranslateX = math.max(0, (scaledImageWidth - containerWidth) / 2);
+    final maxTranslateY = math.max(0, (scaledImageHeight - containerHeight) / 2);
+
     // 将绝对像素值转换为相对值 (-1.0 ~ 1.0)
-    // 避免除以零
-    final offsetX = scale > 1.0
-        ? (translationX / (100 * (scale - 1.0))).clamp(-1.0, 1.0)
+    final offsetX = maxTranslateX > 0
+        ? (translationX / maxTranslateX).clamp(-1.0, 1.0)
         : 0.0;
-    final offsetY = scale > 1.0
-        ? (translationY / (100 * (scale - 1.0))).clamp(-1.0, 1.0)
+    final offsetY = maxTranslateY > 0
+        ? (translationY / maxTranslateY).clamp(-1.0, 1.0)
         : 0.0;
 
     return ThumbnailCropResult(
       offsetX: offsetX,
       offsetY: offsetY,
-      scale: scale,
+      scale: relativeScale,
     );
   }
 
   /// 处理缩放滑块变化
   void _onScaleChanged(double value) {
+    if (_imageSize == null) return;
+
     setState(() {
       _currentScale = value;
     });
 
-    // 获取当前矩阵的缩放比例
+    // 计算实际缩放比例（基础缩放 * 用户缩放）
+    final actualScale = _baseScale * value;
+
+    // 获取当前平移值
     final currentMatrix = _controller.value;
-    final currentScale = currentMatrix.getMaxScaleOnAxis();
+    final currentTranslation = currentMatrix.getTranslation();
 
-    // 如果缩放比例相同，不更新
-    if ((currentScale - value).abs() < 0.01) return;
-
-    // 计算缩放比例变化
-    final scaleDelta = value / currentScale;
-
-    // 创建新的变换矩阵，以中心点为基准进行缩放
-    final newMatrix = Matrix4.copy(currentMatrix);
-    // 缩放矩阵
-    final scaleMatrix = Matrix4.identity()..scale(scaleDelta);
-    // 组合变换: 先应用现有变换，再应用缩放
-    newMatrix.multiply(scaleMatrix);
+    // 创建新的变换矩阵，保持平移，更新缩放
+    final newMatrix = Matrix4.identity()
+      ..translate(currentTranslation.x, currentTranslation.y)
+      ..scale(actualScale);
 
     _controller.value = newMatrix;
   }
@@ -303,36 +367,47 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
         borderRadius: BorderRadius.circular(10),
         child: AspectRatio(
           aspectRatio: _previewAspectRatio,
-          child: InteractiveViewer(
-            transformationController: _controller,
-            boundaryMargin: EdgeInsets.zero,
-            constrained: false,
-            minScale: 1.0,
-            maxScale: 3.0,
-            onInteractionUpdate: (details) {
-              // 同步更新滑块值
-              final scale = _controller.value.getMaxScaleOnAxis();
-              setState(() {
-                _currentScale = scale.clamp(1.0, 3.0);
-              });
-            },
-            child: Image.file(
-              File(widget.imagePath),
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: Colors.grey.shade800,
-                  child: const Center(
-                    child: Icon(
-                      Icons.broken_image,
-                      size: 48,
-                      color: Colors.white38,
-                    ),
+          child: _imageSize == null
+              ? const Center(child: CircularProgressIndicator())
+              : InteractiveViewer(
+                  transformationController: _controller,
+                  boundaryMargin: EdgeInsets.zero,
+                  constrained: false,
+                  minScale: _baseScale,
+                  maxScale: _baseScale * 3.0,
+                  onInteractionUpdate: (details) {
+                    // 计算相对于基础缩放的缩放值
+                    final actualScale = _controller.value.getMaxScaleOnAxis();
+                    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
+                    setState(() {
+                      _currentScale = relativeScale;
+                    });
+                  },
+                  onInteractionEnd: (details) {
+                    // 交互结束时确保状态同步
+                    final actualScale = _controller.value.getMaxScaleOnAxis();
+                    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
+                    setState(() {
+                      _currentScale = relativeScale;
+                    });
+                  },
+                  child: Image.file(
+                    File(widget.imagePath),
+                    fit: BoxFit.contain, // 使用 contain 确保完整显示
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: Colors.grey.shade800,
+                        child: const Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            size: 48,
+                            color: Colors.white38,
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-          ),
+                ),
         ),
       ),
     );
@@ -377,25 +452,33 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
               const SizedBox(width: 16),
               // 数值显示
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildValueRow(
-                      l10n.tagLibrary_horizontalOffset,
-                      (_currentScale > 1.0 ? _controller.value.getTranslation().x / (100 * (_currentScale - 1.0)) : 0.0).toStringAsFixed(2),
-                    ),
-                    const SizedBox(height: 4),
-                    _buildValueRow(
-                      l10n.tagLibrary_verticalOffset,
-                      (_currentScale > 1.0 ? _controller.value.getTranslation().y / (100 * (_currentScale - 1.0)) : 0.0).toStringAsFixed(2),
-                    ),
-                    const SizedBox(height: 4),
-                    _buildValueRow(
-                      l10n.tagLibrary_zoomRatio,
-                      '${_currentScale.toStringAsFixed(2)}x',
-                    ),
-                  ],
-                ),
+                child: _imageSize == null
+                    ? const SizedBox.shrink()
+                    : ValueListenableBuilder<Matrix4>(
+                        valueListenable: _controller,
+                        builder: (context, matrix, child) {
+                          final result = _matrixToOffsetScale();
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildValueRow(
+                                l10n.tagLibrary_horizontalOffset,
+                                result.offsetX.toStringAsFixed(2),
+                              ),
+                              const SizedBox(height: 4),
+                              _buildValueRow(
+                                l10n.tagLibrary_verticalOffset,
+                                result.offsetY.toStringAsFixed(2),
+                              ),
+                              const SizedBox(height: 4),
+                              _buildValueRow(
+                                l10n.tagLibrary_zoomRatio,
+                                '${result.scale.toStringAsFixed(2)}x',
+                              ),
+                            ],
+                          );
+                        },
+                      ),
               ),
             ],
           ),
@@ -412,8 +495,8 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
         final scale = matrix.getMaxScaleOnAxis();
         final translation = matrix.getTranslation();
 
-        // 默认状态（scale=1.0, offset=0,0）时，显示图片中心
-        final effectiveScale = scale.clamp(1.0, 3.0);
+        // 使用实际缩放比例（基础缩放 * 用户缩放）
+        final effectiveScale = scale;
         final effectiveTranslationX = translation.x;
         final effectiveTranslationY = translation.y;
 
@@ -427,9 +510,7 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
             alignment: Alignment.center,
             child: Image.file(
               File(widget.imagePath),
-              fit: BoxFit.cover,
-              width: 200,
-              height: 80,
+              fit: BoxFit.contain,
               errorBuilder: (_, __, ___) => Container(
                 color: Colors.grey.shade800,
               ),
