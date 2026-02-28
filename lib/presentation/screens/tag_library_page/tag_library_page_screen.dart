@@ -321,7 +321,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
       case TagLibraryViewMode.grouped:
         return GroupedEntriesView(
           onEdit: _showEditDialog,
-          onDelete: _showDeleteEntryConfirmation,
+          onDelete: _showDeleteEntryConfirmationForEntry,
           onSend: _showEntryDetail,
         );
     }
@@ -718,7 +718,10 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
   void _showDeleteEntryConfirmation(String entryId) {
     final state = ref.read(tagLibraryPageNotifierProvider);
     final entry = state.entries.firstWhere((e) => e.id == entryId);
+    _showDeleteEntryConfirmationForEntry(entry);
+  }
 
+  void _showDeleteEntryConfirmationForEntry(TagLibraryEntry entry) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -734,7 +737,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
             onPressed: () {
               ref
                   .read(tagLibraryPageNotifierProvider.notifier)
-                  .deleteEntry(entryId);
+                  .deleteEntry(entry.id);
               Navigator.of(context).pop();
             },
             style: FilledButton.styleFrom(

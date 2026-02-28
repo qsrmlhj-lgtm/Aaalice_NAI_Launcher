@@ -87,8 +87,6 @@ class GroupedEntriesView extends ConsumerWidget {
     TagLibraryEntry entry,
     dynamic selectionState,
   ) {
-    final state = ref.read(tagLibraryPageNotifierProvider);
-    final allIds = state.filteredEntries.map((e) => e.id).toList();
     final isSelected = selectionState.isSelected(entry.id);
 
     return EntryCard(
@@ -139,7 +137,7 @@ class GroupedEntriesView extends ConsumerWidget {
         groups.add(CategoryGroup(
           category: category,
           entries: categoryEntries,
-        ));
+        ),);
       }
     }
 
@@ -154,7 +152,7 @@ class GroupedEntriesView extends ConsumerWidget {
           createdAt: DateTime.now(),
         ),
         entries: uncategorizedEntries,
-      ));
+      ),);
     }
 
     return groups;
