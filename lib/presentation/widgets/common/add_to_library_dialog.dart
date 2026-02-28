@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/app_logger.dart';
+import '../../../../data/models/prompt/tag_category.dart';
+import '../../../../data/models/prompt/weighted_tag.dart';
+import '../../providers/tag_library_provider.dart';
 import 'app_toast.dart';
 
 /// 添加到词库对话框
@@ -111,7 +114,6 @@ class _AddToLibraryDialogState extends ConsumerState<AddToLibraryDialog> {
   }
 
   Future<void> _save() async {
-    final name = _nameController.text.trim();
     final content = _contentController.text.trim();
 
     if (content.isEmpty) {
@@ -122,22 +124,96 @@ class _AddToLibraryDialogState extends ConsumerState<AddToLibraryDialog> {
     setState(() => _isSaving = true);
 
     try {
-      // TODO: 接入 TagLibraryProvider
-      // 临时记录日志
+      // 获取 notifier 和当前词库
+      final notifier = ref.read(tagLibraryNotifierProvider.notifier);
+      final currentLibrary = ref.read(tagLibraryNotifierProvider).library;
+
+      if (currentLibrary == null) {
+        throw Exception('词库未加载');
+      }
+
+      // 解析内容（支持逗号分隔的多个标签）
+      final tagNames = content
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+
+      if (tagNames.isEmpty) {
+        throw Exception('没有有效的标签内容');
+      }
+
+      // 确定目标分类
+      final targetCategory = _selectedCategoryId != null
+          ? TagSubCategory.values.firstWhere(
+              (c) => c.name == _selectedCategoryId,
+              orElse: () => TagSubCategory.other,
+            )
+          : TagSubCategory.other;
+
+      // 获取当前分类的标签列表
+      final currentTags = currentLibrary.getCategory(targetCategory);
+      final existingNames = currentTags.map((t) => t.tag.toLowerCase()).toSet();
+
+      // 创建新标签列表（过滤重复）
+      final newTags = <WeightedTag>[];
+      var addedCount = 0;
+      var duplicateCount = 0;
+
+      for (final tagName in tagNames) {
+        final normalizedName = tagName.toLowerCase();
+        if (existingNames.contains(normalizedName)) {
+          duplicateCount++;
+          continue;
+        }
+
+        final newTag = WeightedTag(
+          tag: tagName,
+          weight: 5,
+          source: TagSource.custom,
+        );
+        newTags.add(newTag);
+        existingNames.add(normalizedName);
+        addedCount++;
+      }
+
+      if (newTags.isEmpty) {
+        if (mounted) {
+          AppToast.warning(
+            context,
+            duplicateCount > 0 ? '所有标签已存在于词库中' : '没有可添加的标签',
+          );
+        }
+        setState(() => _isSaving = false);
+        return;
+      }
+
+      // 合并新旧标签
+      final updatedTags = [...currentTags, ...newTags];
+      final updatedLibrary = currentLibrary.setCategory(targetCategory, updatedTags);
+
+      // 保存词库
+      await notifier.saveLibrary(updatedLibrary);
+
       AppLogger.i(
-        'Add to library: name=$name, content=${content.substring(0, content.length.clamp(0, 50))}..., '
-        'categoryId=$_selectedCategoryId, tags=$_tags',
+        'Added $addedCount tags to library (category: ${targetCategory.name}, '
+        'duplicates skipped: $duplicateCount)',
         'AddToLibraryDialog',
       );
 
-      // 模拟保存
-      await Future.delayed(const Duration(milliseconds: 500));
-
       if (mounted) {
-        AppToast.info(context, '添加到词库功能即将推出');
+        if (duplicateCount > 0) {
+          AppToast.success(
+            context,
+            '已添加 $addedCount 个标签，跳过 $duplicateCount 个重复标签',
+          );
+        } else {
+          AppToast.success(context, '已添加到词库');
+        }
         Navigator.of(context).pop(true);
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      AppLogger.e('Failed to add to library', e, stackTrace);
       if (mounted) {
         AppToast.error(context, '添加失败: $e');
       }
@@ -215,23 +291,33 @@ class _AddToLibraryDialogState extends ConsumerState<AddToLibraryDialog> {
               const SizedBox(height: 16),
 
               // 目标分类
-              DropdownButtonFormField<String?>(
-                value: _selectedCategoryId,
-                decoration: const InputDecoration(
-                  labelText: '目标分类',
-                  prefixIcon: Icon(Icons.folder_outlined),
-                  border: OutlineInputBorder(),
-                ),
-                items: const [
-                  DropdownMenuItem(
-                    value: null,
-                    child: Text('未分类'),
-                  ),
-                  // TODO: 从 TagLibraryProvider 获取分类列表
-                  // DropdownMenuItem(value: 'category_id', child: Text('分类名称')),
-                ],
-                onChanged: (value) {
-                  setState(() => _selectedCategoryId = value);
+              Consumer(
+                builder: (context, ref, child) {
+                  const categories = TagSubCategory.values;
+
+                  return DropdownButtonFormField<String?>(
+                    value: _selectedCategoryId,
+                    decoration: const InputDecoration(
+                      labelText: '目标分类',
+                      prefixIcon: Icon(Icons.folder_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('未分类'),
+                      ),
+                      ...categories.map((category) {
+                        return DropdownMenuItem(
+                          value: category.name,
+                          child: Text(TagSubCategoryHelper.getDisplayName(category)),
+                        );
+                      }),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _selectedCategoryId = value);
+                    },
+                  );
                 },
               ),
               const SizedBox(height: 16),

@@ -286,6 +286,14 @@ class TagLibraryNotifier extends _$TagLibraryNotifier {
     await _libraryService.saveLibrary(mergedLibrary);
     state = state.copyWith(library: mergedLibrary);
   }
+
+  /// 保存词库
+  ///
+  /// 用于将修改后的词库持久化到本地存储
+  Future<void> saveLibrary(TagLibrary library) async {
+    await _libraryService.saveLibrary(library);
+    state = state.copyWith(library: library);
+  }
 }
 
 /// 便捷 Provider：获取当前词库
