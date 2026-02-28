@@ -29,20 +29,20 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: 稳定版
 status: active
-last_updated: "2026-02-28T23:15:00Z"
+last_updated: "2026-02-28T23:55:00Z"
 progress:
-  total_phases: 3
-  completed_phases: 2
-  total_plans: 14
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 19
   completed_plans: 11
 ---
 
 # Project State
 
 ## Current
-- Phase: 3 — 清理待办功能实现
-- Active Work: PLAN-05 已完成
-- Last Action: 完成代码清理和静态分析验证
+- Phase: 4 — 词库条目编辑界面添加预览图显示范围调整功能
+- Active Work: PLAN-01 已完成
+- Last Action: 完成数据模型扩展与代码生成
 
 ## Phase Status
 | Phase | Status | Verifier |
@@ -50,6 +50,7 @@ progress:
 | 1 | ✅ Completed | - |
 | 2 | ✅ Completed | - |
 | 3 | ✅ Completed | - |
+| 4 | 📝 Planned | - |
 
 ## Phase 3 Plans
 | Plan | Wave | Description | Status |
@@ -95,18 +96,37 @@ progress:
 ### Roadmap Evolution
 - Phase 2 added: desktop_layout.dart 拆分评估
 - Phase 3 added: 清理待办功能实现（6个TODO：TagLibrary接入、Vibe保存、Prompt预设、Vibe PNG嵌入）
+- Phase 4 added: 词库条目编辑界面添加预览图显示范围调整功能
+
+## Phase 4 Plans
+| Plan | Wave | Description | Status |
+|------|------|-------------|--------|
+| PLAN-01 | 1 | 数据模型扩展 - TagLibraryEntry 添加 offset/scale 字段 | ✅ 完成 |
+| PLAN-02 | 2 | 调整对话框实现 - 使用 InteractiveViewer 实现调整界面 | Ready |
+| PLAN-03 | 3 | 编辑对话框集成 - 添加调整入口和实时预览 | Ready |
+| PLAN-04 | 4 | EntryCard 和悬浮预览集成 - 应用显示范围设置 | Ready |
+| PLAN-05 | 5 | 本地化与测试验证 - 添加本地化字符串，运行分析验证 | Ready |
 
 ## Next
-**Phase 3 已完成**
+**Phase 4 — 词库条目编辑界面添加预览图显示范围调整功能**
 
-所有计划已完成：
-- ✅ PLAN-01: add_to_library_dialog TagLibrary 接入
-- ✅ PLAN-02: save_as_preset_dialog 预设保存
-- ✅ PLAN-03: detail_metadata_panel Vibe 保存对话框
-- ⏭️ PLAN-04: PNG 元数据嵌入（用户决定跳过）
-- ✅ PLAN-05: 测试验证和代码清理
+计划已创建完成，可以开始执行。
 
-**下一步**: 规划 Phase 4 或进入发布准备阶段
+**执行顺序**：
+1. Wave 1: PLAN-01（数据模型）
+2. Wave 2: PLAN-02（调整对话框）
+3. Wave 3: PLAN-03（编辑对话框集成）
+4. Wave 4: PLAN-04（EntryCard 和悬浮预览）
+5. Wave 5: PLAN-05（本地化和验证）
+
+**核心决策**：
+- 调整方式：拖拽平移 + 缩放（使用 Flutter 原生 InteractiveViewer）
+- 数据存储：扩展 TagLibraryEntry 模型（thumbnailOffsetX/Y, thumbnailScale）
+- 交互方式：点击预览图显示选项菜单，选择"调整显示范围"
+- 应用范围：EntryCard 背景图、悬浮预览、编辑对话框预览区域
+- 默认值：offset(0,0) 居中，scale 1.0（向后兼容）
+
+**下一步**: 运行 `/gsd:execute-phase 4` 开始执行
 
 ### Quick Tasks Completed
 

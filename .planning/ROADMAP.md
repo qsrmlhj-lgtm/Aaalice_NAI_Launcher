@@ -89,4 +89,35 @@
 - 代码格式化: 修复 23 处尾随逗号问题
 - 所有已实现功能代码质量达标
 
+### Phase 4: 词库条目编辑界面添加预览图显示范围调整功能
+
+**Goal:** 在词库条目编辑对话框中添加预览图显示范围调整功能，允许用户通过拖拽平移和缩放来选择图片的显示区域。调整后该设置应用于所有显示该预览图的地方（卡片、悬浮预览等）。
+
+**Requirements**:
+- 使用 InteractiveViewer 实现拖拽平移 + 缩放调整
+- 扩展 TagLibraryEntry 模型，添加 offsetX/Y 和 scale 字段
+- 编辑对话框集成调整入口（点击预览图显示选项菜单）
+- EntryCard 和悬浮预览应用新的显示范围设置
+- 所有用户可见字符串支持中英文本地化
+- flutter analyze 无错误
+
+**Depends on:** Phase 3
+
+**Status:** 1/5 plans completed
+
+| Plan | Wave | Description | Status |
+|------|------|-------------|--------|
+| PLAN-01 | 1 | 数据模型扩展 - TagLibraryEntry 添加 offset/scale 字段 | ✅ 完成 |
+| PLAN-02 | 2 | 调整对话框实现 - 使用 InteractiveViewer 实现调整界面 | Ready |
+| PLAN-03 | 3 | 编辑对话框集成 - 添加调整入口和实时预览 | Ready |
+| PLAN-04 | 4 | EntryCard 和悬浮预览集成 - 应用显示范围设置 | Ready |
+| PLAN-05 | 5 | 本地化与测试验证 - 添加本地化字符串，运行分析验证 | Ready |
+
+**实现决策**:
+- 调整方式: 拖拽平移 + 缩放（使用 Flutter 原生 InteractiveViewer）
+- 数据存储: TagLibraryEntry 添加 thumbnailOffsetX, thumbnailOffsetY, thumbnailScale 字段
+- 交互方式: 点击预览图显示选项菜单，选择"调整显示范围"进入调整模式
+- 应用范围: EntryCard 背景图、悬浮预览、编辑对话框预览区域
+- 默认值: offset(0,0) 居中，scale 1.0（向后兼容）
+
 ---
