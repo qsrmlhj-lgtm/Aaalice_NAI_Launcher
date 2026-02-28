@@ -196,7 +196,7 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 720,
-        constraints: const BoxConstraints(maxHeight: 640),
+        constraints: const BoxConstraints(maxHeight: 720),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -461,8 +461,8 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
     final maxOffsetX = (displayedSize.width - cropSize.width).clamp(0, double.infinity);
     final maxOffsetY = (displayedSize.height - cropSize.height).clamp(0, double.infinity);
 
-    final offsetX = _cropX * maxOffsetX / 2;
-    final offsetY = _cropY * maxOffsetY / 2;
+    final offsetX = _cropX * maxOffsetX;
+    final offsetY = _cropY * maxOffsetY;
 
     // 将显示坐标转换为图像坐标
     final imageScaleX = _imageSize!.width / displayedSize.width;
