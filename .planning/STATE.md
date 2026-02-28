@@ -16,7 +16,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: 稳定版
 status: active
-last_updated: "2026-02-28T14:30:00Z"
+last_updated: "2026-02-28T22:20:00Z"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -29,19 +29,19 @@ progress:
 ## Current
 - Phase: 3 — 清理待办功能实现
 - Active Work: PLAN-02 已完成
-- Last Action: 完成 save_as_preset_dialog 预设保存功能实现
+- Last Action: 完成 save_as_preset_dialog 的预设保存功能
 
 ## Phase Status
 | Phase | Status | Verifier |
 |-------|--------|----------|
 | 1 | ✅ Completed | - |
 | 2 | ✅ Completed | - |
-| 3 | Planned | - |
+| 3 | Active | - |
 
 ## Phase 3 Plans
 | Plan | Wave | Description | Status |
 |------|------|-------------|--------|
-| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | Ready |
+| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | ✅ 完成 |
 | PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
 | PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | Ready |
 | PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |

@@ -72,15 +72,15 @@
 
 | Plan | Wave | Description | Status |
 |------|------|-------------|--------|
-| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | Ready |
-| PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
+| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | ✅ 完成 |
+| PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | Ready |
 | PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | Ready |
 | PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |
 | PLAN-05 | 3 | 测试验证和代码清理 | Ready |
 
 **TODO 清单**:
-- [ ] add_to_library_dialog.dart (2 TODOs) - 接入 TagLibraryProvider
-- [x] save_as_preset_dialog.dart (2 TODOs) - 接入 PromptConfigProvider
+- [x] add_to_library_dialog.dart (2 TODOs) - 接入 TagLibraryProvider
+- [ ] save_as_preset_dialog.dart (2 TODOs) - 接入 PromptConfigProvider
 - [ ] detail_metadata_panel.dart (1 TODO) - 实现 Vibe 保存对话框
 - [ ] vibe_export_handler.dart (1 TODO) - 实现 PNG iTXt 嵌入（可选）
 
