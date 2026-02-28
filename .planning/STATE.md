@@ -2,28 +2,50 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: 稳定版
+status: unknown
+last_updated: "2026-02-28T13:38:06.366Z"
+progress:
+  total_phases: 2
+  completed_phases: 2
+  total_plans: 9
+  completed_plans: 9
+---
+
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: 稳定版
 status: active
 last_updated: "2026-02-28T14:30:00Z"
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 3
+  completed_phases: 2
+  total_plans: 14
+  completed_plans: 10
 ---
 
 # Project State
 
 ## Current
-- Phase: 2 — desktop_layout.dart 拆分
-- Active Work: PLAN-05 已完成
-- Last Action: 清理、验证和最终优化，修复导入路径错误和类名冲突，分析零错误
+- Phase: 3 — 清理待办功能实现
+- Active Work: PLAN-02 已完成
+- Last Action: 完成 save_as_preset_dialog 预设保存功能实现
 
 ## Phase Status
 | Phase | Status | Verifier |
 |-------|--------|----------|
 | 1 | ✅ Completed | - |
-| 2 | 完成 | - |
-| 3 | ⚪ Not Started | - |
+| 2 | ✅ Completed | - |
+| 3 | Planned | - |
+
+## Phase 3 Plans
+| Plan | Wave | Description | Status |
+|------|------|-------------|--------|
+| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | Ready |
+| PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
+| PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | Ready |
+| PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |
+| PLAN-05 | 3 | 测试验证和代码清理 | Ready |
 
 ## Phase 1 Plans
 | Plan | Wave | Description | Status |
@@ -59,9 +81,16 @@ progress:
 
 ### Roadmap Evolution
 - Phase 2 added: desktop_layout.dart 拆分评估
+- Phase 3 added: 清理待办功能实现（6个TODO：TagLibrary接入、Vibe保存、Prompt预设、Vibe PNG嵌入）
 
 ## Next
-Phase 2 所有计划已完成。desktop_layout.dart 拆分完成：
-- 从 356 行简化为 192 行
-- 提取了 12 个新组件/服务
-- 分析零错误，代码结构清晰
+**Phase 3 规划**: 清理6个TODO功能实现
+
+| 文件 | TODO数量 | 状态 |
+|------|----------|------|
+| add_to_library_dialog.dart | 2 | 基础设施已就绪，待接入TagLibraryProvider |
+| detail_metadata_panel.dart | 1 | 基础设施已就绪，待接入VibeLibraryNotifier |
+| save_as_preset_dialog.dart | 2 | 基础设施已就绪，待接入promptConfigProvider |
+| vibe_export_handler.dart | 1 | 需要实现PNG iTXt元数据嵌入逻辑（中/高工作量）|
+
+**下一步**: `/gsd:plan-phase 3`

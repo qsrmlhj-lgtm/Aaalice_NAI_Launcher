@@ -53,4 +53,35 @@
 - 导出文件: widgets/index.dart, generation_controls/index.dart
 - flutter analyze: 零错误
 
+### Phase 3: 清理待办功能实现
+
+**Goal:** 实现代码库中遗留的 6 个 TODO 功能，将未完成的功能接入已有的基础设施
+
+**Requirements**:
+- "添加到词库"对话框能真正添加条目到词库
+- 词库分类下拉框显示实际分类列表
+- "保存为预设"对话框能真正保存预设
+- "保存到 Vibe 库"功能可用
+- Vibe 导出图片时嵌入元数据（可选，工作量较高）
+- flutter analyze 无错误
+- 所有功能经过手动测试验证
+
+**Depends on:** Phase 2
+
+**Status:** 5/5 plans planned
+
+| Plan | Wave | Description | Status |
+|------|------|-------------|--------|
+| PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | Ready |
+| PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
+| PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | Ready |
+| PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |
+| PLAN-05 | 3 | 测试验证和代码清理 | Ready |
+
+**TODO 清单**:
+- [ ] add_to_library_dialog.dart (2 TODOs) - 接入 TagLibraryProvider
+- [x] save_as_preset_dialog.dart (2 TODOs) - 接入 PromptConfigProvider
+- [ ] detail_metadata_panel.dart (1 TODO) - 实现 Vibe 保存对话框
+- [ ] vibe_export_handler.dart (1 TODO) - 实现 PNG iTXt 嵌入（可选）
+
 ---
