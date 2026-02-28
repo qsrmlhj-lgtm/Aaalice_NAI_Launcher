@@ -18,6 +18,9 @@ enum TagLibraryViewMode {
 
   /// 列表视图
   list,
+
+  /// 分组视图
+  grouped,
 }
 
 /// 词库排序方式
@@ -51,7 +54,7 @@ class TagLibraryPageState {
     this.categories = const [],
     this.selectedCategoryId,
     this.searchQuery = '',
-    this.viewMode = TagLibraryViewMode.card,
+    this.viewMode = TagLibraryViewMode.grouped,
     this.sortBy = TagLibrarySortBy.order,
     this.isLoading = false,
     this.error,
@@ -191,9 +194,12 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
 
       // 加载视图模式
       final viewModeIndex = _storage.getTagLibraryViewMode();
-      final viewMode = viewModeIndex == 1
-          ? TagLibraryViewMode.list
-          : TagLibraryViewMode.card;
+      final viewMode = switch (viewModeIndex) {
+        0 => TagLibraryViewMode.card,
+        1 => TagLibraryViewMode.list,
+        2 => TagLibraryViewMode.grouped,
+        _ => TagLibraryViewMode.grouped,
+      };
 
       return TagLibraryPageState(
         entries: entries,
@@ -626,9 +632,7 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
   void setViewMode(TagLibraryViewMode mode) {
     state = state.copyWith(viewMode: mode);
     // 持久化视图模式
-    _storage.setTagLibraryViewMode(
-      mode == TagLibraryViewMode.list ? 1 : 0,
-    );
+    _storage.setTagLibraryViewMode(mode.index);
   }
 
   /// 设置排序方式
