@@ -2130,9 +2130,33 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
 
     // 编码重试循环
     while (mounted) {
-      // 显示编码中对话框
       if (!mounted) break;
-      encode_dialog.VibeImageEncodingDialog.show(context);
+
+      // 显示编码中对话框，使用自己的 context 管理
+      final dialogCompleter = Completer<void>();
+      BuildContext? dialogContext;
+
+      unawaited(
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          useRootNavigator: true,
+          builder: (ctx) {
+            dialogContext = ctx;
+            dialogCompleter.complete();
+            return const encode_dialog.VibeImageEncodingDialog();
+          },
+        ),
+      );
+
+      // 等待对话框显示完成
+      await dialogCompleter.future;
+
+      void closeDialog() {
+        if (dialogContext != null && dialogContext!.mounted) {
+          Navigator.of(dialogContext!).pop();
+        }
+      }
 
       String? encoding;
       String? errorMessage;
@@ -2161,9 +2185,7 @@ class _VibeLibraryScreenState extends ConsumerState<VibeLibraryScreen> {
         AppLogger.e('Vibe 编码失败: ${imageFile.source}', e, null, 'VibeLibrary');
       } finally {
         // 关闭编码中对话框
-        if (mounted) {
-          encode_dialog.VibeImageEncodingDialog.hide(context);
-        }
+        closeDialog();
       }
 
       if (encoding != null && mounted) {

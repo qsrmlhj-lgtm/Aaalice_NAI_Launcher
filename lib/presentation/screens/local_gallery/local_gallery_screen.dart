@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/storage_keys.dart';
 import '../../../core/shortcuts/default_shortcuts.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../data/models/gallery/nai_image_metadata.dart';
 import '../../../core/utils/nai_prompt_formatter.dart';
 import '../../../core/utils/permission_utils.dart';
 import '../../../core/utils/sd_to_nai_converter.dart';
@@ -787,58 +788,72 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   }
 
   Future<void> _reuseMetadata(LocalImageRecord record) async {
-    final metadata = record.metadata;
-    if (metadata == null || !metadata.hasData) return;
+    try {
+      final metadata = record.metadata;
+      if (metadata == null || !metadata.hasData) {
+        AppToast.warning(context, '此图片没有元数据');
+        return;
+      }
 
-    final options = await MetadataImportDialog.show(context, metadata: metadata);
-    if (options == null || !mounted) return;
+      final options = await MetadataImportDialog.show(context, metadata: metadata);
+      if (options == null || !mounted) return;
 
-    final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
+      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
 
-    if (options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty) {
-      ref.read(characterPromptNotifierProvider.notifier).clearAllCharacters();
-    }
+      // 安全获取角色提示词列表（防止 null）
+      final characterPrompts = metadata.characterPrompts;
+      final hasCharacters = characterPrompts.isNotEmpty;
 
-    var appliedCount = 0;
+      if (options.importCharacterPrompts && hasCharacters) {
+        ref.read(characterPromptNotifierProvider.notifier).clearAllCharacters();
+      }
 
-    if (options.importPrompt && metadata.prompt.isNotEmpty) {
-      paramsNotifier.updatePrompt(_formatPrompt(metadata.prompt));
-      appliedCount++;
-    }
+      var appliedCount = 0;
 
-    if (options.importNegativePrompt && metadata.negativePrompt.isNotEmpty) {
-      paramsNotifier.updateNegativePrompt(_formatPrompt(metadata.negativePrompt));
-      appliedCount++;
-    }
+      if (options.importPrompt && metadata.prompt.isNotEmpty) {
+        paramsNotifier.updatePrompt(_formatPrompt(metadata.prompt));
+        appliedCount++;
+      }
 
-    if (options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty) {
-      _applyCharacterPrompts(metadata);
-      appliedCount++;
-    }
+      if (options.importNegativePrompt && metadata.negativePrompt.isNotEmpty) {
+        paramsNotifier.updateNegativePrompt(_formatPrompt(metadata.negativePrompt));
+        appliedCount++;
+      }
 
-    _applyParam(options.importSeed, metadata.seed, paramsNotifier.updateSeed);
-    _applyParam(options.importSteps, metadata.steps, paramsNotifier.updateSteps);
-    _applyParam(options.importScale, metadata.scale, paramsNotifier.updateScale);
-    _applyParam(options.importSampler, metadata.sampler, paramsNotifier.updateSampler);
-    _applyParam(options.importModel, metadata.model, paramsNotifier.updateModel);
-    _applyParam(options.importSmea, metadata.smea, paramsNotifier.updateSmea);
-    _applyParam(options.importSmeaDyn, metadata.smeaDyn, paramsNotifier.updateSmeaDyn);
-    _applyParam(options.importNoiseSchedule, metadata.noiseSchedule, paramsNotifier.updateNoiseSchedule);
-    _applyParam(options.importCfgRescale, metadata.cfgRescale, paramsNotifier.updateCfgRescale);
-    _applyParam(options.importQualityToggle, metadata.qualityToggle, paramsNotifier.updateQualityToggle);
-    _applyParam(options.importUcPreset, metadata.ucPreset, paramsNotifier.updateUcPreset);
+      if (options.importCharacterPrompts && hasCharacters) {
+        _applyCharacterPrompts(metadata);
+        appliedCount++;
+      }
 
-    if (options.importSize && metadata.width != null && metadata.height != null) {
-      paramsNotifier.updateSize(metadata.width!, metadata.height!);
-      appliedCount++;
-    }
+      _applyParam(options.importSeed, metadata.seed, paramsNotifier.updateSeed);
+      _applyParam(options.importSteps, metadata.steps, paramsNotifier.updateSteps);
+      _applyParam(options.importScale, metadata.scale, paramsNotifier.updateScale);
+      _applyParam(options.importSampler, metadata.sampler, paramsNotifier.updateSampler);
+      _applyParam(options.importModel, metadata.model, paramsNotifier.updateModel);
+      _applyParam(options.importSmea, metadata.smea, paramsNotifier.updateSmea);
+      _applyParam(options.importSmeaDyn, metadata.smeaDyn, paramsNotifier.updateSmeaDyn);
+      _applyParam(options.importNoiseSchedule, metadata.noiseSchedule, paramsNotifier.updateNoiseSchedule);
+      _applyParam(options.importCfgRescale, metadata.cfgRescale, paramsNotifier.updateCfgRescale);
+      _applyParam(options.importQualityToggle, metadata.qualityToggle, paramsNotifier.updateQualityToggle);
+      _applyParam(options.importUcPreset, metadata.ucPreset, paramsNotifier.updateUcPreset);
 
-    if (!mounted) return;
+      if (options.importSize && metadata.width != null && metadata.height != null) {
+        paramsNotifier.updateSize(metadata.width!, metadata.height!);
+        appliedCount++;
+      }
 
-    if (appliedCount > 0) {
-      AppToast.info(context, context.l10n.metadataImport_appliedToMain(appliedCount));
-    } else {
-      AppToast.warning(context, context.l10n.metadataImport_noParamsSelected);
+      if (!mounted) return;
+
+      if (appliedCount > 0) {
+        AppToast.info(context, context.l10n.metadataImport_appliedToMain(appliedCount));
+      } else {
+        AppToast.warning(context, context.l10n.metadataImport_noParamsSelected);
+      }
+    } catch (e, stack) {
+      AppLogger.e('导入参数失败', e, stack, 'LocalGallery');
+      if (mounted) {
+        AppToast.error(context, '导入参数失败: $e');
+      }
     }
   }
 
@@ -850,14 +865,18 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     if (shouldApply && value != null) updater(value);
   }
 
-  void _applyCharacterPrompts(dynamic metadata) {
+  void _applyCharacterPrompts(NaiImageMetadata metadata) {
     final characterNotifier = ref.read(characterPromptNotifierProvider.notifier);
     final characters = <char.CharacterPrompt>[];
 
-    for (var i = 0; i < metadata.characterPrompts.length; i++) {
-      final prompt = _formatPrompt(metadata.characterPrompts[i]);
-      var negPrompt = i < metadata.characterNegativePrompts.length
-          ? metadata.characterNegativePrompts[i]
+    // 安全获取角色提示词列表
+    final characterPrompts = metadata.characterPrompts;
+    final characterNegativePrompts = metadata.characterNegativePrompts;
+
+    for (var i = 0; i < characterPrompts.length; i++) {
+      final prompt = _formatPrompt(characterPrompts[i]);
+      var negPrompt = i < characterNegativePrompts.length
+          ? characterNegativePrompts[i]
           : '';
       if (negPrompt.isNotEmpty) negPrompt = _formatPrompt(negPrompt);
 

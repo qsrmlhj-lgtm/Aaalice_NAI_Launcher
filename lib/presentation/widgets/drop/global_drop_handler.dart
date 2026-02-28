@@ -12,6 +12,7 @@ import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import '../../../core/enums/precise_ref_type.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../data/models/gallery/nai_image_metadata.dart';
 import '../../../data/services/image_metadata_service.dart';
 import '../../../core/utils/vibe_file_parser.dart';
 import '../../../data/models/character/character_prompt.dart' as char;
@@ -811,15 +812,18 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
 
   /// 根据选项应用元数据
   Future<int> _applyMetadataWithOptions(
-    dynamic metadata,
+    NaiImageMetadata metadata,
     MetadataImportOptions options,
     GenerationParamsNotifier notifier,
   ) async {
     var appliedCount = 0;
 
+    // 安全获取角色提示词列表
+    final characterPrompts = metadata.characterPrompts;
+    final hasCharacters = characterPrompts.isNotEmpty;
+
     // 只有在勾选导入多角色提示词时才清空
-    if (options.importCharacterPrompts &&
-        metadata.characterPrompts.isNotEmpty) {
+    if (options.importCharacterPrompts && hasCharacters) {
       ref.read(characterPromptNotifierProvider.notifier).clearAllCharacters();
     }
 
@@ -827,8 +831,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     appliedCount += _applyBasicParams(metadata, options, notifier);
 
     // 应用多角色提示词
-    if (options.importCharacterPrompts &&
-        metadata.characterPrompts.isNotEmpty) {
+    if (options.importCharacterPrompts && hasCharacters) {
       _applyCharacterPrompts(metadata);
       appliedCount++;
     }
@@ -881,12 +884,17 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     return count;
   }
 
-  void _applyCharacterPrompts(dynamic metadata) {
+  void _applyCharacterPrompts(NaiImageMetadata metadata) {
     final characters = <char.CharacterPrompt>[];
-    for (var i = 0; i < metadata.characterPrompts.length; i++) {
-      final prompt = metadata.characterPrompts[i];
-      final negPrompt = i < metadata.characterNegativePrompts.length
-          ? metadata.characterNegativePrompts[i]
+    
+    // 安全获取角色提示词列表
+    final characterPrompts = metadata.characterPrompts;
+    final characterNegativePrompts = metadata.characterNegativePrompts;
+    
+    for (var i = 0; i < characterPrompts.length; i++) {
+      final prompt = characterPrompts[i];
+      final negPrompt = i < characterNegativePrompts.length
+          ? characterNegativePrompts[i]
           : '';
 
       characters.add(

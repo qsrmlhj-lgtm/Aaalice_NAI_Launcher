@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/constants/api_constants.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/services/metadata/unified_metadata_parser.dart';
 import '../../core/utils/nai_prompt_formatter.dart';
@@ -380,9 +381,17 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
             }
           }
 
+          // 计算有效的负面提示词（应用 UC 预设）
+          final effectiveNegativePrompt = UcPresets.applyPresetWithNsfwCheck(
+            params.negativePrompt,
+            params.prompt,
+            params.model,
+            params.ucPreset,
+          );
+
           final commentJson = <String, dynamic>{
             'prompt': params.prompt,
-            'uc': params.negativePrompt,
+            'uc': effectiveNegativePrompt,
             'seed': actualSeed,
             'steps': params.steps,
             'width': params.width,
@@ -419,7 +428,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
             };
             commentJson['v4_negative_prompt'] = {
               'caption': {
-                'base_caption': params.negativePrompt,  // 改为 base_caption（NAI官方格式）
+                'base_caption': effectiveNegativePrompt,  // 改为 base_caption（NAI官方格式）
                 'char_captions': charNegCaptions,
               },
               'use_coords': false,

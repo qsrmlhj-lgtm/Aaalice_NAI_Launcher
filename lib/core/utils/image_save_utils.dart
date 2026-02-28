@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../../data/models/gallery/nai_image_metadata.dart';
 import '../../data/models/image/image_params.dart';
 import '../../data/services/metadata/unified_metadata_parser.dart';
+import '../constants/api_constants.dart';
 import '../enums/precise_ref_type.dart';
 import 'app_logger.dart';
 
@@ -33,9 +34,17 @@ class ImageSaveUtils {
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
   }) {
+    // 计算有效的负面提示词（应用 UC 预设）
+    final effectiveNegativePrompt = UcPresets.applyPresetWithNsfwCheck(
+      params.negativePrompt,
+      params.prompt,
+      params.model,
+      params.ucPreset,
+    );
+
     final commentJson = <String, dynamic>{
       'prompt': params.prompt,
-      'uc': params.negativePrompt,
+      'uc': effectiveNegativePrompt,
       'seed': actualSeed,
       'steps': params.steps,
       'width': params.width,
@@ -81,7 +90,7 @@ class ImageSaveUtils {
       if (charNegCaptions != null && charNegCaptions.isNotEmpty) {
         commentJson['v4_negative_prompt'] = {
           'caption': {
-            'base_caption': params.negativePrompt,
+            'base_caption': effectiveNegativePrompt,
             'char_captions': charNegCaptions,
           },
           'use_coords': false,
