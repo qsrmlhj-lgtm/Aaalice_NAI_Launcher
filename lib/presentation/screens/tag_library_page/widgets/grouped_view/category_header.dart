@@ -10,35 +10,53 @@ class CategoryHeaderDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
     final theme = Theme.of(context);
+    final isPinned = shrinkOffset > 0 || overlapsContent;
+
     return Container(
-      color: theme.colorScheme.surfaceContainerLow,
+      color: isPinned
+          ? theme.colorScheme.surfaceContainerHighest
+          : theme.colorScheme.surfaceContainerLow,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(
-            Icons.folder_outlined,
-            size: 18,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w600,
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            child: Icon(
+              Icons.folder_outlined,
+              size: 18,
+              color: isPinned
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: isPinned
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurface,
+              ),
+            ),
+          ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
             decoration: BoxDecoration(
-              color: theme.colorScheme.primaryContainer,
+              color: isPinned
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
               '$count',
               style: TextStyle(
                 fontSize: 12,
-                color: theme.colorScheme.onPrimaryContainer,
+                fontWeight: FontWeight.w500,
+                color: isPinned
+                    ? theme.colorScheme.onPrimaryContainer
+                    : theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
