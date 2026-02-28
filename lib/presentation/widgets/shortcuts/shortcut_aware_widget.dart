@@ -142,7 +142,6 @@ class _ShortcutAwareWidgetState extends ConsumerState<ShortcutAwareWidget> {
 
     // 使用 Shortcuts + Actions + Focus 确保快捷键在整个子树中都能工作
     // 即使子组件（如 TextField）获得焦点，快捷键也能正常触发
-    // 使用 ValueKey 基于实际快捷键内容，确保配置变化时 Shortcuts widget 会重建
     // 收集所有生效的快捷键字符串作为 key 的一部分
     final activeShortcuts = <String>[];
     for (final entry in widget.shortcuts.entries) {
@@ -157,9 +156,14 @@ class _ShortcutAwareWidgetState extends ConsumerState<ShortcutAwareWidget> {
     activeShortcuts.sort(); // 确保顺序一致
     final configKey = activeShortcuts.join('|');
 
-    return Shortcuts(
+    // 关键修复：使用 Shortcuts.manager 并创建新的 ShortcutManager 实例
+    // 因为 Flutter 的 Shortcuts widget 内部会缓存 shortcuts，即使 key 变化也可能不更新
+    // 通过显式创建新的 ShortcutManager，确保快捷键映射总是被正确更新
+    final shortcutManager = ShortcutManager(shortcuts: shortcutsMap);
+
+    return Shortcuts.manager(
       key: ValueKey('shortcuts_${config.enableShortcuts}_$configKey'),
-      shortcuts: shortcutsMap,
+      manager: shortcutManager,
       child: Actions(
         key: ValueKey('actions_${config.enableShortcuts}_$configKey'),
         actions: actionsMap,
@@ -241,9 +245,13 @@ class _ShortcutAwareWidgetState extends ConsumerState<ShortcutAwareWidget> {
       'default',
       shortcutsMap.hashCode,
     );
-    return Shortcuts(
+
+    // 关键修复：使用 Shortcuts.manager 并创建新的 ShortcutManager 实例
+    final shortcutManager = ShortcutManager(shortcuts: shortcutsMap);
+
+    return Shortcuts.manager(
       key: ValueKey('shortcuts_default_$defaultHash'),
-      shortcuts: shortcutsMap,
+      manager: shortcutManager,
       child: Actions(
         key: ValueKey('actions_default_$defaultHash'),
         actions: actionsMap,
