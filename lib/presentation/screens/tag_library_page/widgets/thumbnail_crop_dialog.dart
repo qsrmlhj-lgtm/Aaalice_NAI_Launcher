@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -25,8 +24,8 @@ class ThumbnailCropResult {
 
 /// 缩略图裁剪调整对话框
 ///
-/// 使用 InteractiveViewer 实现拖拽平移和缩放功能，
-/// 允许用户调整图片在 EntryCard 中的显示范围。
+/// 显示完整图像，用户通过拖拽矩形框选择显示区域。
+/// 矩形框的比例与 EntryCard 一致。
 class ThumbnailCropDialog extends StatefulWidget {
   final String imagePath;
   final double initialOffsetX;
@@ -48,23 +47,29 @@ class ThumbnailCropDialog extends StatefulWidget {
 }
 
 class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
-  late final TransformationController _controller;
-  double _currentScale = 1.0;
+  // 图像尺寸
   Size? _imageSize;
 
-  // 预览区域比例（与 EntryCard 一致：宽度/高度）
-  static const double _previewAspectRatio = 2.5; // 200 / 80
+  // 裁剪框状态
+  double _cropX = 0.0; // 裁剪框中心 X（相对于图像中心）
+  double _cropY = 0.0; // 裁剪框中心 Y（相对于图像中心）
+  double _cropScale = 1.0; // 裁剪框缩放（1.0 = 完整显示图像）
+
+  // 显示区域尺寸
+  static const double _displayWidth = 640.0;
+  static const double _displayHeight = 360.0;
+
+  // EntryCard 比例
+  static const double _cardAspectRatio = 2.5; // 200 / 80
 
   @override
   void initState() {
     super.initState();
-    _controller = TransformationController();
+    _cropScale = widget.initialScale.clamp(1.0, 3.0);
     _loadImageSize();
-    _applyInitialTransform();
-    _currentScale = widget.initialScale.clamp(1.0, 3.0);
   }
 
-  /// 加载图像尺寸以计算基础缩放
+  /// 加载图像尺寸
   void _loadImageSize() {
     final imageProvider = FileImage(File(widget.imagePath));
     imageProvider.resolve(const ImageConfiguration()).addListener(
@@ -75,175 +80,111 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
               info.image.width.toDouble(),
               info.image.height.toDouble(),
             );
+            // 根据初始 offset 计算裁剪框位置
+            _cropX = widget.initialOffsetX;
+            _cropY = widget.initialOffsetY;
           });
         }
       }),
     );
   }
 
-  /// 计算基础缩放比例（让图像完整显示在容器中）
-  double get _baseScale {
-    if (_imageSize == null) return 1.0;
+  /// 计算图像在显示区域中的尺寸（保持比例）
+  Size get _displayedImageSize {
+    if (_imageSize == null) return const Size(_displayWidth, _displayHeight);
 
-    // 容器尺寸（固定 200x80）
-    const containerWidth = 200.0;
-    const containerHeight = 80.0;
+    final imageAspectRatio = _imageSize!.width / _imageSize!.height;
+    const displayAspectRatio = _displayWidth / _displayHeight;
 
-    // 计算让图像完整显示所需的缩放
-    final scaleX = containerWidth / _imageSize!.width;
-    final scaleY = containerHeight / _imageSize!.height;
-
-    // 取较小值，确保图像完整显示（不裁剪）
-    return math.min(scaleX, scaleY);
+    if (imageAspectRatio > displayAspectRatio) {
+      // 图像更宽，以宽度为准
+      const width = _displayWidth;
+      final height = width / imageAspectRatio;
+      return Size(width, height);
+    } else {
+      // 图像更高，以高度为准
+      const height = _displayHeight;
+      final width = height * imageAspectRatio;
+      return Size(width, height);
+    }
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  /// 计算裁剪框尺寸
+  Size get _cropBoxSize {
+    final displayedSize = _displayedImageSize;
 
-  /// 应用初始变换值
-  void _applyInitialTransform() {
-    if (_imageSize == null) return;
+    // 裁剪框的比例是 EntryCard 的比例
+    // 当 scale = 1.0 时，裁剪框尽可能大但保持比例
+    // 当 scale > 1.0 时，裁剪框变小（放大图像）
 
-    final matrix = _offsetScaleToMatrix(
-      widget.initialOffsetX,
-      widget.initialOffsetY,
-      widget.initialScale,
-    );
-    _controller.value = matrix;
-  }
+    // 基础裁剪框尺寸（scale = 1.0）
+    double baseWidth, baseHeight;
 
-  /// 将相对 offset 和 scale 转换为 Matrix4
-  Matrix4 _offsetScaleToMatrix(double offsetX, double offsetY, double scale) {
-    if (_imageSize == null) return Matrix4.identity();
-
-    // 计算实际缩放（基础缩放 * 用户缩放）
-    final actualScale = _baseScale * scale.clamp(1.0, 3.0);
-
-    // 计算平移值：offset 范围是 -1.0 ~ 1.0
-    // 根据容器和图片尺寸计算最大可平移距离
-    const containerWidth = 200.0;
-    const containerHeight = 80.0;
-
-    final scaledImageWidth = _imageSize!.width * actualScale;
-    final scaledImageHeight = _imageSize!.height * actualScale;
-
-    final maxTranslateX = math.max(0, (scaledImageWidth - containerWidth) / 2);
-    final maxTranslateY = math.max(0, (scaledImageHeight - containerHeight) / 2);
-
-    final translationX = offsetX * maxTranslateX;
-    final translationY = offsetY * maxTranslateY;
-
-    return Matrix4.identity()
-      ..translate(translationX, translationY)
-      ..scale(actualScale);
-  }
-
-  /// 从 Matrix4 提取 offset 和 scale
-  ThumbnailCropResult _matrixToOffsetScale() {
-    if (_imageSize == null) {
-      return const ThumbnailCropResult(offsetX: 0, offsetY: 0, scale: 1);
+    if (displayedSize.width / displayedSize.height > _cardAspectRatio) {
+      // 图像比裁剪框更宽，以高度为准
+      baseHeight = displayedSize.height;
+      baseWidth = baseHeight * _cardAspectRatio;
+    } else {
+      // 图像比裁剪框更高，以宽度为准
+      baseWidth = displayedSize.width;
+      baseHeight = baseWidth / _cardAspectRatio;
     }
 
-    final matrix = _controller.value;
-
-    // 提取实际缩放值
-    final actualScale = matrix.getMaxScaleOnAxis();
-
-    // 转换为用户相对缩放（实际缩放 / 基础缩放）
-    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
-
-    // 提取平移值
-    final translationX = matrix.getTranslation().x;
-    final translationY = matrix.getTranslation().y;
-
-    // 计算最大可平移距离
-    const containerWidth = 200.0;
-    const containerHeight = 80.0;
-
-    final scaledImageWidth = _imageSize!.width * actualScale;
-    final scaledImageHeight = _imageSize!.height * actualScale;
-
-    final maxTranslateX = math.max(0, (scaledImageWidth - containerWidth) / 2);
-    final maxTranslateY = math.max(0, (scaledImageHeight - containerHeight) / 2);
-
-    // 将绝对像素值转换为相对值 (-1.0 ~ 1.0)
-    final offsetX = maxTranslateX > 0
-        ? (translationX / maxTranslateX).clamp(-1.0, 1.0)
-        : 0.0;
-    final offsetY = maxTranslateY > 0
-        ? (translationY / maxTranslateY).clamp(-1.0, 1.0)
-        : 0.0;
-
-    return ThumbnailCropResult(
-      offsetX: offsetX,
-      offsetY: offsetY,
-      scale: relativeScale,
-    );
+    // 根据缩放调整裁剪框大小
+    final scaleFactor = 1.0 / _cropScale;
+    return Size(baseWidth * scaleFactor, baseHeight * scaleFactor);
   }
 
-  /// 处理缩放滑块变化
-  void _onScaleChanged(double value) {
+  /// 处理拖拽
+  void _onPanUpdate(DragUpdateDetails details) {
     if (_imageSize == null) return;
 
     setState(() {
-      _currentScale = value;
+      // 将像素偏移转换为相对偏移（-1.0 ~ 1.0）
+      final displayedSize = _displayedImageSize;
+      final maxOffsetX = (displayedSize.width - _cropBoxSize.width) / 2;
+      final maxOffsetY = (displayedSize.height - _cropBoxSize.height) / 2;
+
+      if (maxOffsetX > 0) {
+        _cropX += details.delta.dx / maxOffsetX;
+        _cropX = _cropX.clamp(-1.0, 1.0);
+      }
+      if (maxOffsetY > 0) {
+        _cropY += details.delta.dy / maxOffsetY;
+        _cropY = _cropY.clamp(-1.0, 1.0);
+      }
     });
-
-    // 计算实际缩放比例（基础缩放 * 用户缩放）
-    final actualScale = _baseScale * value;
-
-    // 获取当前平移值
-    final currentMatrix = _controller.value;
-    final currentTranslation = currentMatrix.getTranslation();
-
-    // 创建新的变换矩阵，保持平移，更新缩放
-    final newMatrix = Matrix4.identity()
-      ..translate(currentTranslation.x, currentTranslation.y)
-      ..scale(actualScale);
-
-    _controller.value = newMatrix;
   }
 
-  /// 重置为默认状态
+  /// 处理缩放
+  void _onScaleUpdate(double newScale) {
+    setState(() {
+      _cropScale = newScale.clamp(1.0, 3.0);
+      // 缩放时重新约束位置
+      _cropX = _cropX.clamp(-1.0, 1.0);
+      _cropY = _cropY.clamp(-1.0, 1.0);
+    });
+  }
+
+  /// 重置
   void _reset() {
     setState(() {
-      _currentScale = 1.0;
+      _cropX = 0.0;
+      _cropY = 0.0;
+      _cropScale = 1.0;
     });
-    _controller.value = Matrix4.identity();
   }
 
-  /// 确认并返回结果
+  /// 确认
   void _confirm() {
-    final result = _matrixToOffsetScale();
-
-    // 应用边界约束
-    final constrainedResult = _applyBoundaryConstraints(result);
-
-    widget.onConfirm(constrainedResult);
-    Navigator.of(context).pop();
-  }
-
-  /// 应用边界约束
-  /// 确保图片边缘不会进入容器内部（防止空白）
-  ThumbnailCropResult _applyBoundaryConstraints(ThumbnailCropResult result) {
-    // 当 scale 为 1.0 时，offset 应该为 0
-    if (result.scale <= 1.01) {
-      return const ThumbnailCropResult(
-        offsetX: 0.0,
-        offsetY: 0.0,
-        scale: 1.0,
-      );
-    }
-
-    // 约束 offset 在有效范围内
-    return ThumbnailCropResult(
-      offsetX: result.offsetX.clamp(-1.0, 1.0),
-      offsetY: result.offsetY.clamp(-1.0, 1.0),
-      scale: result.scale.clamp(1.0, 3.0),
+    widget.onConfirm(
+      ThumbnailCropResult(
+        offsetX: _cropX,
+        offsetY: _cropY,
+        scale: _cropScale,
+      ),
     );
+    Navigator.of(context).pop();
   }
 
   @override
@@ -264,21 +205,21 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
             // 调整区域
             Flexible(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: SingleChildScrollView(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 预览区域说明
-                      _buildPreviewLabel(theme, l10n),
+                      // 提示文字
+                      _buildHint(theme, l10n),
                       const SizedBox(height: 12),
 
-                      // 调整区域（使用 AspectRatio 保持与 EntryCard 一致的比例）
+                      // 图像调整区域
                       _buildAdjustArea(),
                       const SizedBox(height: 16),
 
-                      // 实时预览（显示调整后的效果）
+                      // 实时预览
                       _buildLivePreview(theme, l10n),
                       const SizedBox(height: 16),
 
@@ -331,8 +272,8 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
     );
   }
 
-  /// 构建预览标签
-  Widget _buildPreviewLabel(ThemeData theme, AppLocalizations l10n) {
+  /// 构建提示
+  Widget _buildHint(ThemeData theme, AppLocalizations l10n) {
     return Row(
       children: [
         Icon(
@@ -355,59 +296,86 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
   /// 构建调整区域
   Widget _buildAdjustArea() {
+    if (_imageSize == null) {
+      return Container(
+        width: _displayWidth,
+        height: _displayHeight,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.grey.shade900,
+        ),
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Container(
+      width: _displayWidth,
+      height: _displayHeight,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Colors.grey.shade700,
-          width: 2,
-        ),
+        color: Colors.grey.shade900,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: AspectRatio(
-          aspectRatio: _previewAspectRatio,
-          child: _imageSize == null
-              ? const Center(child: CircularProgressIndicator())
-              : InteractiveViewer(
-                  transformationController: _controller,
-                  boundaryMargin: EdgeInsets.zero,
-                  constrained: false,
-                  minScale: _baseScale,
-                  maxScale: _baseScale * 3.0,
-                  onInteractionUpdate: (details) {
-                    // 计算相对于基础缩放的缩放值
-                    final actualScale = _controller.value.getMaxScaleOnAxis();
-                    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
-                    setState(() {
-                      _currentScale = relativeScale;
-                    });
-                  },
-                  onInteractionEnd: (details) {
-                    // 交互结束时确保状态同步
-                    final actualScale = _controller.value.getMaxScaleOnAxis();
-                    final relativeScale = (actualScale / _baseScale).clamp(1.0, 3.0);
-                    setState(() {
-                      _currentScale = relativeScale;
-                    });
-                  },
-                  child: Image.file(
-                    File(widget.imagePath),
-                    fit: BoxFit.contain, // 使用 contain 确保完整显示
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        color: Colors.grey.shade800,
-                        child: const Center(
-                          child: Icon(
-                            Icons.broken_image,
-                            size: 48,
-                            color: Colors.white38,
-                          ),
-                        ),
-                      );
-                    },
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // 背景图像
+            Image.file(
+              File(widget.imagePath),
+              fit: BoxFit.contain,
+              width: _displayedImageSize.width,
+              height: _displayedImageSize.height,
+              errorBuilder: (_, __, ___) => Container(
+                color: Colors.grey.shade800,
+                child: const Center(
+                  child: Icon(Icons.broken_image, size: 48, color: Colors.white38),
+                ),
+              ),
+            ),
+
+            // 遮罩层（裁剪框外的暗色区域）
+            CustomPaint(
+              size: Size(_displayedImageSize.width, _displayedImageSize.height),
+              painter: _CropOverlayPainter(
+                cropBoxSize: _cropBoxSize,
+                offsetX: _cropX,
+                offsetY: _cropY,
+              ),
+            ),
+
+            // 可拖拽的裁剪框
+            Positioned(
+              left: (_displayWidth - _cropBoxSize.width) / 2 + _cropX * (_displayedImageSize.width - _cropBoxSize.width) / 2,
+              top: (_displayHeight - _cropBoxSize.height) / 2 + _cropY * (_displayedImageSize.height - _cropBoxSize.height) / 2,
+              child: GestureDetector(
+                onPanUpdate: _onPanUpdate,
+                child: Container(
+                  width: _cropBoxSize.width,
+                  height: _cropBoxSize.height,
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Colors.white,
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.5),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.open_with,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                 ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -434,7 +402,7 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
           const SizedBox(height: 8),
           Row(
             children: [
-              // 模拟 EntryCard 尺寸的预览
+              // 实时预览图
               Container(
                 width: 200,
                 height: 80,
@@ -452,33 +420,25 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
               const SizedBox(width: 16),
               // 数值显示
               Expanded(
-                child: _imageSize == null
-                    ? const SizedBox.shrink()
-                    : ValueListenableBuilder<Matrix4>(
-                        valueListenable: _controller,
-                        builder: (context, matrix, child) {
-                          final result = _matrixToOffsetScale();
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildValueRow(
-                                l10n.tagLibrary_horizontalOffset,
-                                result.offsetX.toStringAsFixed(2),
-                              ),
-                              const SizedBox(height: 4),
-                              _buildValueRow(
-                                l10n.tagLibrary_verticalOffset,
-                                result.offsetY.toStringAsFixed(2),
-                              ),
-                              const SizedBox(height: 4),
-                              _buildValueRow(
-                                l10n.tagLibrary_zoomRatio,
-                                '${result.scale.toStringAsFixed(2)}x',
-                              ),
-                            ],
-                          );
-                        },
-                      ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildValueRow(
+                      l10n.tagLibrary_horizontalOffset,
+                      _cropX.toStringAsFixed(2),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildValueRow(
+                      l10n.tagLibrary_verticalOffset,
+                      _cropY.toStringAsFixed(2),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildValueRow(
+                      l10n.tagLibrary_zoomRatio,
+                      '${_cropScale.toStringAsFixed(2)}x',
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -489,35 +449,45 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
 
   /// 构建预览图片（应用变换）
   Widget _buildPreviewImage() {
-    return ValueListenableBuilder<Matrix4>(
-      valueListenable: _controller,
-      builder: (context, matrix, child) {
-        final scale = matrix.getMaxScaleOnAxis();
-        final translation = matrix.getTranslation();
+    if (_imageSize == null) {
+      return Container(color: Colors.grey.shade800);
+    }
 
-        // 使用实际缩放比例（基础缩放 * 用户缩放）
-        final effectiveScale = scale;
-        final effectiveTranslationX = translation.x;
-        final effectiveTranslationY = translation.y;
+    // 计算预览图中的裁剪区域
+    final displayedSize = _displayedImageSize;
+    final cropSize = _cropBoxSize;
 
-        return OverflowBox(
-          maxWidth: double.infinity,
-          maxHeight: double.infinity,
-          child: Transform(
-            transform: Matrix4.identity()
-              ..translate(effectiveTranslationX, effectiveTranslationY)
-              ..scale(effectiveScale),
-            alignment: Alignment.center,
-            child: Image.file(
-              File(widget.imagePath),
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => Container(
-                color: Colors.grey.shade800,
-              ),
-            ),
+    // 裁剪框相对于图像的位置
+    final maxOffsetX = (displayedSize.width - cropSize.width).clamp(0, double.infinity);
+    final maxOffsetY = (displayedSize.height - cropSize.height).clamp(0, double.infinity);
+
+    final offsetX = _cropX * maxOffsetX / 2;
+    final offsetY = _cropY * maxOffsetY / 2;
+
+    // 将显示坐标转换为图像坐标
+    final imageScaleX = _imageSize!.width / displayedSize.width;
+    final imageScaleY = _imageSize!.height / displayedSize.height;
+
+    final sourceCropWidth = cropSize.width * imageScaleX;
+    final sourceCropHeight = cropSize.height * imageScaleY;
+    final sourceOffsetX = (_imageSize!.width - sourceCropWidth) / 2 + offsetX * imageScaleX;
+    final sourceOffsetY = (_imageSize!.height - sourceCropHeight) / 2 + offsetY * imageScaleY;
+
+    return ClipRect(
+      child: OverflowBox(
+        maxWidth: double.infinity,
+        maxHeight: double.infinity,
+        child: Transform.translate(
+          offset: Offset(-sourceOffsetX, -sourceOffsetY),
+          child: Image.file(
+            File(widget.imagePath),
+            fit: BoxFit.none,
+            width: _imageSize!.width,
+            height: _imageSize!.height,
+            errorBuilder: (_, __, ___) => Container(color: Colors.grey.shade800),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -561,12 +531,12 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
           ),
           Expanded(
             child: Slider(
-              value: _currentScale,
+              value: _cropScale,
               min: 1.0,
               max: 3.0,
               divisions: 20,
-              label: '${_currentScale.toStringAsFixed(2)}x',
-              onChanged: _onScaleChanged,
+              label: '${_cropScale.toStringAsFixed(2)}x',
+              onChanged: _onScaleUpdate,
             ),
           ),
           Icon(
@@ -582,7 +552,7 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              '${_currentScale.toStringAsFixed(2)}x',
+              '${_cropScale.toStringAsFixed(2)}x',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -630,6 +600,65 @@ class _ThumbnailCropDialogState extends State<ThumbnailCropDialog> {
         ],
       ),
     );
+  }
+}
+
+/// 裁剪框遮罩绘制器
+class _CropOverlayPainter extends CustomPainter {
+  final Size cropBoxSize;
+  final double offsetX;
+  final double offsetY;
+
+  _CropOverlayPainter({
+    required this.cropBoxSize,
+    required this.offsetX,
+    required this.offsetY,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black.withOpacity(0.5)
+      ..style = PaintingStyle.fill;
+
+    // 计算裁剪框位置（中心对齐）
+    final centerX = size.width / 2;
+    final centerY = size.height / 2;
+
+    final maxOffsetX = (size.width - cropBoxSize.width) / 2;
+    final maxOffsetY = (size.height - cropBoxSize.height) / 2;
+
+    final cropLeft = centerX - cropBoxSize.width / 2 + offsetX * maxOffsetX;
+    final cropTop = centerY - cropBoxSize.height / 2 + offsetY * maxOffsetY;
+    final cropRight = cropLeft + cropBoxSize.width;
+    final cropBottom = cropTop + cropBoxSize.height;
+
+    // 绘制整个背景，然后挖空中间
+    canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height), Paint());
+
+    // 绘制半透明背景
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      paint,
+    );
+
+    // 使用混合模式清除中间区域
+    final clearPaint = Paint()
+      ..blendMode = BlendMode.clear;
+
+    canvas.drawRect(
+      Rect.fromLTRB(cropLeft, cropTop, cropRight, cropBottom),
+      clearPaint,
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) {
+    return oldDelegate.cropBoxSize != cropBoxSize ||
+        oldDelegate.offsetX != offsetX ||
+        oldDelegate.offsetY != offsetY;
   }
 }
 
