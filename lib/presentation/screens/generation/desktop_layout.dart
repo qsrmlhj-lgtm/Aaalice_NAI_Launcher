@@ -1,26 +1,15 @@
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/shortcuts/default_shortcuts.dart';
 import '../../../core/utils/app_logger.dart';
-import '../../../data/services/metadata/unified_metadata_parser.dart';
-import '../../../data/services/image_metadata_service.dart';
 import '../../../data/models/queue/replication_task.dart';
-import '../../../data/repositories/gallery_folder_repository.dart';
-import '../../../data/services/alias_resolver_service.dart';
 import '../../providers/character_panel_dock_provider.dart';
 import '../../providers/character_prompt_provider.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/layout_state_provider.dart';
-import '../../providers/local_gallery_provider.dart';
 import '../../providers/prompt_maximize_provider.dart';
-import '../../providers/queue_execution_provider.dart';
 import '../../providers/replication_queue_provider.dart';
 import '../../router/app_router.dart';
 import '../../widgets/common/app_toast.dart';
@@ -33,7 +22,6 @@ import 'widgets/upscale_dialog.dart';
 import 'services/generation_save_service.dart';
 import 'widgets/generation_controls/index.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
-import 'package:nai_launcher/l10n/app_localizations.dart';
 
 /// 桌面端三栏布局
 class DesktopGenerationLayout extends ConsumerStatefulWidget {

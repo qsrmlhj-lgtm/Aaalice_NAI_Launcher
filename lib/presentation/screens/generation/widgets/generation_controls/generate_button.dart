@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../../l10n/app_localizations.dart';
-import '../../../../providers/image_generation_provider.dart';
-import '../../../../widgets/anlas/anlas_balance_chip.dart';
-import '../../../../widgets/common/themed_button.dart';
+import 'package:nai_launcher/core/utils/localization_extension.dart';
+import 'package:nai_launcher/presentation/providers/image_generation_provider.dart';
+import 'package:nai_launcher/presentation/widgets/common/themed_button.dart';
+import 'package:nai_launcher/presentation/widgets/common/anlas_cost_badge.dart';
 
 /// 集成价格徽章的生成按钮
 class GenerateButtonWithCost extends ConsumerWidget {

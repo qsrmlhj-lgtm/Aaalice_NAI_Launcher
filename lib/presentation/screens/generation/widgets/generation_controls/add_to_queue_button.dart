@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../../../l10n/app_localizations.dart';
+import 'package:nai_launcher/core/utils/localization_extension.dart';
 
 /// 加入队列按钮（仅图标）
 class AddToQueueIconButton extends StatelessWidget {

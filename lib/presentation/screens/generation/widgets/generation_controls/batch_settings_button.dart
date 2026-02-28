@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../../l10n/app_localizations.dart';
-import '../../../../providers/image_generation_provider.dart';
-import '../../../../widgets/common/themed_divider.dart';
+import 'package:nai_launcher/core/utils/localization_extension.dart';
+import 'package:nai_launcher/l10n/app_localizations.dart';
+import 'package:nai_launcher/presentation/providers/image_generation_provider.dart';
+import 'package:nai_launcher/presentation/widgets/common/themed_divider.dart';
 
 /// 批量设置按钮（批次大小）
 class BatchSettingsButton extends ConsumerWidget {
@@ -14,7 +15,7 @@ class BatchSettingsButton extends ConsumerWidget {
     final theme = Theme.of(context);
     final batchSize = ref.watch(imagesPerRequestProvider);
     final batchCount = ref.watch(generationParamsNotifierProvider).nSamples;
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = context.l10n;
 
     return IconButton(
       tooltip: l10n.batchSize_tooltip(batchSize),
