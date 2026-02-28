@@ -19,6 +19,8 @@ import 'widgets/prompt_input.dart';
 import 'widgets/image_preview.dart';
 import 'widgets/history_panel.dart';
 import 'widgets/upscale_dialog.dart';
+import 'widgets/resize_handle.dart';
+import 'widgets/collapsed_panel.dart';
 import 'services/generation_save_service.dart';
 import 'widgets/generation_controls/index.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
@@ -145,8 +147,7 @@ class _DesktopGenerationLayoutState
 
         // 左侧拖拽分隔条
         if (layoutState.leftPanelExpanded)
-          _buildResizeHandle(
-            theme,
+          ResizeHandle(
             onDragStart: () => setState(() => _isResizingLeft = true),
             onDragEnd: () => setState(() => _isResizingLeft = false),
             onDrag: (dx) {
@@ -199,7 +200,16 @@ class _DesktopGenerationLayoutState
 
                 // 提示词区域拖拽分隔条（最大化时隐藏）
                 if (!isPromptMaximized)
-                  _buildVerticalResizeHandle(theme, layoutState),
+                  VerticalResizeHandle(
+                    onDrag: (dy) {
+                      final currentHeight = ref.read(layoutStateNotifierProvider).promptAreaHeight;
+                      final newHeight = (currentHeight + dy)
+                          .clamp(_promptAreaMinHeight, _promptAreaMaxHeight);
+                      ref
+                          .read(layoutStateNotifierProvider.notifier)
+                          .setPromptAreaHeight(newHeight);
+                    },
+                  ),
 
                 // 中间图像预览区（最大化时隐藏）
                 if (!isPromptMaximized)
@@ -228,8 +238,7 @@ class _DesktopGenerationLayoutState
 
         // 右侧拖拽分隔条
         if (layoutState.rightPanelExpanded)
-          _buildResizeHandle(
-            theme,
+          ResizeHandle(
             onDragStart: () => setState(() => _isResizingRight = true),
             onDragEnd: () => setState(() => _isResizingRight = false),
             onDrag: (dx) {
@@ -270,8 +279,7 @@ class _DesktopGenerationLayoutState
               Positioned(
                 top: 8,
                 right: 8,
-                child: _buildCollapseButton(
-                  theme,
+                child: CollapseButton(
                   icon: Icons.chevron_left,
                   onTap: () => ref
                       .read(layoutStateNotifierProvider.notifier)
@@ -280,8 +288,7 @@ class _DesktopGenerationLayoutState
               ),
             ],
           )
-        : _buildCollapsedPanel(
-            theme,
+        : CollapsedPanel(
             icon: Icons.tune,
             label: context.l10n.generation_params,
             onTap: () => ref
@@ -320,8 +327,7 @@ class _DesktopGenerationLayoutState
     );
     final child = layoutState.rightPanelExpanded
         ? const HistoryPanel()
-        : _buildCollapsedPanel(
-            theme,
+        : CollapsedPanel(
             icon: Icons.history,
             label: context.l10n.generation_history,
             onTap: () => ref
@@ -346,141 +352,5 @@ class _DesktopGenerationLayoutState
     );
   }
 
-  Widget _buildCollapseButton(
-    ThemeData theme, {
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Icon(
-            icon,
-            size: 16,
-            color: theme.colorScheme.onSurface.withOpacity(0.6),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCollapsedPanel(
-    ThemeData theme, {
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 20,
-              color: theme.colorScheme.onSurface.withOpacity(0.6),
-            ),
-            const SizedBox(height: 8),
-            RotatedBox(
-              quarterTurns: 1,
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.onSurface.withOpacity(0.6),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildResizeHandle(
-    ThemeData theme, {
-    required void Function(double) onDrag,
-    VoidCallback? onDragStart,
-    VoidCallback? onDragEnd,
-  }) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeColumn,
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onHorizontalDragStart:
-            onDragStart != null ? (_) => onDragStart() : null,
-        onHorizontalDragEnd: onDragEnd != null ? (_) => onDragEnd() : null,
-        onHorizontalDragUpdate: (details) {
-          final delta = details.primaryDelta ?? details.delta.dx;
-          if (delta == 0) return;
-          onDrag(delta);
-        },
-        child: Container(
-          width: 8,
-          color: Colors.transparent,
-          child: Center(
-            child: Container(
-              width: 2,
-              height: 40,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.outline.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVerticalResizeHandle(ThemeData theme, LayoutState layoutState) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeRow,
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onVerticalDragStart: (_) {
-          // 开始拖拽时标记，避免其他组件干扰
-        },
-        onVerticalDragUpdate: (details) {
-          // 使用 primaryDelta 提高精度，直接更新避免延迟
-          final delta = details.primaryDelta ?? details.delta.dy;
-          if (delta == 0) return;
-          
-          final currentHeight = ref.read(layoutStateNotifierProvider).promptAreaHeight;
-          final newHeight = (currentHeight + delta)
-              .clamp(_promptAreaMinHeight, _promptAreaMaxHeight);
-          
-          // 使用 notifier 直接设置，避免重复读取 state
-          ref
-              .read(layoutStateNotifierProvider.notifier)
-              .setPromptAreaHeight(newHeight);
-        },
-        child: Container(
-          height: 8,
-          color: Colors.transparent,
-          child: Center(
-            child: Container(
-              width: 40,
-              height: 2,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.outline.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
