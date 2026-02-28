@@ -777,12 +777,13 @@ class _ImportDialogState extends ConsumerState<ImportDialog> {
           ? ' (导入)'
           : null;
 
-      // 导入条目
+      // 导入条目（使用更新后的缩略图路径）
       await notifier.importEntries(
         entriesToImport,
         categoryIdMapping: categoryIdMapping,
         keepIds: entriesNeedKeepIds,
         nameSuffix: entryNameSuffix,
+        updatedEntries: result.updatedEntries,
       );
 
       if (mounted) {

@@ -656,11 +656,13 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
   /// [categoryIdMapping] 分类ID映射（旧ID -> 新ID）
   /// [keepIds] 是否保留原始ID（用于替换场景）
   /// [nameSuffix] 名称后缀（用于重命名场景）
+  /// [updatedEntries] 更新缩略图路径后的条目映射（原始ID -> 更新后的条目）
   Future<int> importEntries(
     List<TagLibraryEntry> entries, {
     Map<String, String>? categoryIdMapping,
     bool keepIds = false,
     String? nameSuffix,
+    Map<String, TagLibraryEntry>? updatedEntries,
   }) async {
     final newEntries = <TagLibraryEntry>[];
     var startSortOrder = state.entries.length;
@@ -675,10 +677,13 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
           ? '${entry.name}$nameSuffix'
           : entry.name;
 
+      // 使用更新后的条目数据（包含正确的缩略图路径）
+      final sourceEntry = updatedEntries?[entry.id] ?? entry;
+
       if (keepIds) {
         // 保留原始ID（替换场景）
         newEntries.add(
-          entry.copyWith(
+          sourceEntry.copyWith(
             name: newName,
             categoryId: mappedCategoryId ?? entry.categoryId,
             sortOrder: startSortOrder++,
@@ -690,12 +695,12 @@ class TagLibraryPageNotifier extends _$TagLibraryPageNotifier {
         newEntries.add(
           TagLibraryEntry.create(
             name: newName,
-            content: entry.content,
-            thumbnail: entry.thumbnail,
-            tags: entry.tags,
+            content: sourceEntry.content,
+            thumbnail: sourceEntry.thumbnail,
+            tags: sourceEntry.tags,
             categoryId: mappedCategoryId ?? entry.categoryId,
             sortOrder: startSortOrder++,
-            isFavorite: entry.isFavorite,
+            isFavorite: sourceEntry.isFavorite,
           ),
         );
       }

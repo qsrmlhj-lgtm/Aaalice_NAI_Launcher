@@ -324,6 +324,9 @@ class TagLibraryIOService {
       currentStep++;
     }
 
+    // 存储更新后的条目（key: 原始条目ID, value: 更新后的条目）
+    final updatedEntries = <String, TagLibraryEntry>{};
+
     // 导入条目
     for (final entry in preview.entries) {
       if (!selectedEntryIds.contains(entry.id)) continue;
@@ -337,12 +340,13 @@ class TagLibraryIOService {
         continue;
       }
 
-      // 提取预览图
+      // 提取预览图并更新缩略图路径
+      String? newThumbnailPath;
       if (entry.hasThumbnail) {
         for (final file in archive.files) {
           if (file.name.startsWith('thumbnails/${entry.id}')) {
             final ext = path.extension(file.name);
-            final newThumbnailPath =
+            newThumbnailPath =
                 path.join(thumbnailsDir.path, '${entry.id}$ext');
             final thumbnailFile = File(newThumbnailPath);
             await thumbnailFile.writeAsBytes(file.content as List<int>);
@@ -350,6 +354,12 @@ class TagLibraryIOService {
           }
         }
       }
+
+      // 创建更新后的条目（使用新的缩略图路径）
+      final updatedEntry = entry.copyWith(
+        thumbnail: newThumbnailPath ?? entry.thumbnail,
+      );
+      updatedEntries[entry.id] = updatedEntry;
 
       if (resolution == ConflictResolution.overwrite) {
         overwrittenCount++;
@@ -371,6 +381,7 @@ class TagLibraryIOService {
       renamedCount: renamedCount,
       errors: errors,
       success: errors.isEmpty,
+      updatedEntries: updatedEntries,
     );
   }
 

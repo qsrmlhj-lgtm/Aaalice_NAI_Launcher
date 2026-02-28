@@ -139,6 +139,9 @@ class ImportResult with _$ImportResult {
 
     /// 是否成功
     @Default(true) bool success,
+
+    /// 更新缩略图路径后的条目列表（key: 原始条目ID, value: 更新后的条目）
+    @Default({}) Map<String, TagLibraryEntry> updatedEntries,
   }) = _ImportResult;
 
   factory ImportResult.fromJson(Map<String, dynamic> json) =>
