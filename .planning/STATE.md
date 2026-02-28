@@ -28,15 +28,15 @@ progress:
 
 ## Current
 - Phase: 3 — 清理待办功能实现
-- Active Work: PLAN-03 已完成
-- Last Action: 完成 detail_metadata_panel 的 Vibe 保存对话框
+- Active Work: PLAN-05 已完成
+- Last Action: 完成代码清理和静态分析验证
 
 ## Phase Status
 | Phase | Status | Verifier |
 |-------|--------|----------|
 | 1 | ✅ Completed | - |
 | 2 | ✅ Completed | - |
-| 3 | Active | - |
+| 3 | ✅ Completed | - |
 
 ## Phase 3 Plans
 | Plan | Wave | Description | Status |
@@ -45,7 +45,7 @@ progress:
 | PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
 | PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | ✅ 完成 |
 | PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |
-| PLAN-05 | 3 | 测试验证和代码清理 | Ready |
+| PLAN-05 | 3 | 测试验证和代码清理 | ✅ 完成 |
 
 ## Phase 1 Plans
 | Plan | Wave | Description | Status |
@@ -84,13 +84,13 @@ progress:
 - Phase 3 added: 清理待办功能实现（6个TODO：TagLibrary接入、Vibe保存、Prompt预设、Vibe PNG嵌入）
 
 ## Next
-**Phase 3 规划**: 清理6个TODO功能实现
+**Phase 3 已完成**
 
-| 文件 | TODO数量 | 状态 |
-|------|----------|------|
-| add_to_library_dialog.dart | 2 | 基础设施已就绪，待接入TagLibraryProvider |
-| detail_metadata_panel.dart | 1 | ✅ 已完成 Vibe 保存对话框接入 |
-| save_as_preset_dialog.dart | 2 | 基础设施已就绪，待接入promptConfigProvider |
-| vibe_export_handler.dart | 1 | 需要实现PNG iTXt元数据嵌入逻辑（中/高工作量）|
+所有计划已完成：
+- ✅ PLAN-01: add_to_library_dialog TagLibrary 接入
+- ✅ PLAN-02: save_as_preset_dialog 预设保存
+- ✅ PLAN-03: detail_metadata_panel Vibe 保存对话框
+- ⏭️ PLAN-04: PNG 元数据嵌入（用户决定跳过）
+- ✅ PLAN-05: 测试验证和代码清理
 
-**下一步**: `/gsd:plan-phase 3`
+**下一步**: 规划 Phase 4 或进入发布准备阶段

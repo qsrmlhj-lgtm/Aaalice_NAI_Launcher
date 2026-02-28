@@ -68,20 +68,25 @@
 
 **Depends on:** Phase 2
 
-**Status:** 3/5 plans completed
+**Status:** 4/5 plans completed (PLAN-04 用户决定跳过)
 
 | Plan | Wave | Description | Status |
 |------|------|-------------|--------|
 | PLAN-01 | 1 | 实现 add_to_library_dialog 的 TagLibrary 接入 | ✅ 完成 |
 | PLAN-02 | 1 | 实现 save_as_preset_dialog 的预设保存 | ✅ 完成 |
 | PLAN-03 | 2 | 实现 detail_metadata_panel 的 Vibe 保存对话框 | ✅ 完成 |
-| PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| Ready |
-| PLAN-05 | 3 | 测试验证和代码清理 | Ready |
+| PLAN-04 | 3 | 实现 vibe_export_handler 的 PNG 元数据嵌入（可选）| ⏭️ 跳过 |
+| PLAN-05 | 3 | 测试验证和代码清理 | ✅ 完成 |
 
 **TODO 清单**:
 - [x] add_to_library_dialog.dart (2 TODOs) - 接入 TagLibraryProvider
 - [x] save_as_preset_dialog.dart (2 TODOs) - 接入 PromptConfigProvider
 - [x] detail_metadata_panel.dart (1 TODO) - 实现 Vibe 保存对话框
-- [ ] vibe_export_handler.dart (1 TODO) - 实现 PNG iTXt 嵌入（可选）
+- [ ] vibe_export_handler.dart (1 TODO) - 实现 PNG iTXt 嵌入（用户决定跳过）
+
+**完成总结**:
+- flutter analyze: 零错误
+- 代码格式化: 修复 23 处尾随逗号问题
+- 所有已实现功能代码质量达标
 
 ---
