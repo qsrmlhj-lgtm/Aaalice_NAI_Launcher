@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../providers/font_provider.dart';
+import '../../../providers/font_scale_provider.dart';
 import '../../../providers/locale_provider.dart';
 import '../../../providers/theme_provider.dart';
 import '../../../themes/app_theme.dart';
@@ -27,6 +28,7 @@ class _AppearanceSettingsSectionState
     final currentTheme = ref.watch(themeNotifierProvider);
     final currentFont = ref.watch(fontNotifierProvider);
     final currentLocale = ref.watch(localeNotifierProvider);
+    final fontScale = ref.watch(fontScaleNotifierProvider);
 
     return SettingsCard(
       title: context.l10n.settings_appearance,
@@ -51,6 +53,14 @@ class _AppearanceSettingsSectionState
             title: Text(context.l10n.settings_font),
             subtitle: Text(currentFont.displayName),
             onTap: () => _showFontDialog(context, currentFont),
+          ),
+
+          // 字体大小选择
+          ListTile(
+            leading: const Icon(Icons.format_size),
+            title: const Text('字体大小'),
+            subtitle: Text('${(fontScale * 100).round()}%'),
+            onTap: () => _showFontScaleDialog(context, fontScale),
           ),
 
           // 语言选择
