@@ -58,8 +58,9 @@ class _AppearanceSettingsSectionState
           // 字体大小选择
           ListTile(
             leading: const Icon(Icons.format_size),
-            title: const Text('字体大小'),
-            subtitle: Text('${(fontScale * 100).round()}%'),
+            title: Text(context.l10n.settings_fontScale),
+            subtitle: Text(context.l10n.settings_fontScale_description),
+            trailing: Text('${(fontScale * 100).round()}%'),
             onTap: () => _showFontScaleDialog(context, fontScale),
           ),
 
@@ -356,7 +357,7 @@ class _AppearanceSettingsSectionState
             final scalePercent = (currentScale * 100).round();
 
             return AlertDialog(
-              title: const Text('字体大小'),
+              title: Text(context.l10n.settings_fontScale),
               content: SizedBox(
                 width: 320,
                 child: Column(
@@ -374,17 +375,17 @@ class _AppearanceSettingsSectionState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '落霞与孤鹜齐飞',
+                            context.l10n.settings_fontScale_previewSmall,
                             style: textTheme.bodySmall,
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '秋水共长天一色',
+                            context.l10n.settings_fontScale_previewMedium,
                             style: textTheme.bodyMedium,
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '字体大小预览',
+                            context.l10n.settings_fontScale_previewLarge,
                             style: textTheme.titleMedium,
                           ),
                         ],
@@ -465,12 +466,12 @@ class _AppearanceSettingsSectionState
                         .reset();
                   },
                   icon: const Icon(Icons.refresh),
-                  label: const Text('重置'),
+                  label: Text(context.l10n.settings_fontScale_reset),
                 ),
                 // 完成按钮
                 FilledButton(
                   onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('完成'),
+                  child: Text(context.l10n.settings_fontScale_done),
                 ),
               ],
             );
