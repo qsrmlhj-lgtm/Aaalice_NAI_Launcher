@@ -341,4 +341,142 @@ class _AppearanceSettingsSectionState
       },
     );
   }
+
+  void _showFontScaleDialog(
+    BuildContext context,
+    double currentScale,
+  ) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            final theme = Theme.of(context);
+            final textTheme = theme.textTheme;
+            final scalePercent = (currentScale * 100).round();
+
+            return AlertDialog(
+              title: const Text('字体大小'),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // 预览区域
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '落霞与孤鹜齐飞',
+                            style: textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '秋水共长天一色',
+                            style: textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '字体大小预览',
+                            style: textTheme.titleMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // 滑块区域
+                    Row(
+                      children: [
+                        Text(
+                          '80%',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              activeTrackColor: theme.colorScheme.primary,
+                              inactiveTrackColor:
+                                  theme.colorScheme.surfaceContainerHighest,
+                              thumbColor: theme.colorScheme.primary,
+                              overlayColor: theme.colorScheme.primary
+                                  .withOpacity(0.12),
+                            ),
+                            child: Slider(
+                              value: currentScale,
+                              min: 0.8,
+                              max: 1.5,
+                              divisions: 7,
+                              label: '$scalePercent%',
+                              onChanged: (value) {
+                                setState(() {
+                                  currentScale = value;
+                                });
+                                ref
+                                    .read(
+                                      fontScaleNotifierProvider.notifier,
+                                    )
+                                    .setFontScale(value);
+                              },
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '150%',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    // 当前值显示
+                    Center(
+                      child: Text(
+                        '$scalePercent%',
+                        style: textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                // 重置按钮
+                TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      currentScale = 1.0;
+                    });
+                    ref
+                        .read(fontScaleNotifierProvider.notifier)
+                        .reset();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重置'),
+                ),
+                // 完成按钮
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('完成'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 }
