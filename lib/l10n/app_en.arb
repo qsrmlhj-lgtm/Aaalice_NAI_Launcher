@@ -3761,6 +3761,44 @@
   "settings_fontScale_previewMedium": "Autumn water merges with the endless sky",
   "settings_fontScale_previewLarge": "Font Size Preview",
   "settings_fontScale_reset": "Reset",
-  "settings_fontScale_done": "Done"
+  "settings_fontScale_done": "Done",
+
+  "common_justNow": "Just now",
+  "common_minutesAgo": "{minutes} minutes ago",
+  "@common_minutesAgo": {
+    "placeholders": {
+      "minutes": {}
+    }
+  },
+  "common_hoursAgo": "{hours} hours ago",
+  "@common_hoursAgo": {
+    "placeholders": {
+      "hours": {}
+    }
+  },
+
+  "checkForUpdate": "Check for Updates",
+  "neverChecked": "Never checked",
+  "lastCheckedAt": "Last checked: {time}",
+  "@lastCheckedAt": {
+    "placeholders": {
+      "time": {}
+    }
+  },
+  "includePrereleaseUpdates": "Include Prerelease Versions",
+  "includePrereleaseUpdatesDescription": "Include beta/alpha versions when checking for updates",
+
+  "updateAvailable": "Update Available",
+  "updateChecking": "Checking for updates...",
+  "updateUpToDate": "Already up to date",
+  "updateError": "Failed to check for updates",
+  "currentVersion": "Current Version",
+  "latestVersion": "Latest Version",
+  "releaseNotes": "Release Notes",
+  "remindMeLater": "Remind Me Later",
+  "skipThisVersion": "Skip This Version",
+  "goToDownload": "Go to Download",
+  "versionSkipped": "Version skipped",
+  "cannotOpenUrl": "Cannot open link"
 
 }

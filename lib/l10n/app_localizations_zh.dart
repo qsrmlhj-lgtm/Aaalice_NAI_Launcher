@@ -7477,4 +7477,70 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settings_fontScale_done => '完成';
+
+  @override
+  String get common_justNow => '刚刚';
+
+  @override
+  String common_minutesAgo(Object minutes) {
+    return '$minutes分钟前';
+  }
+
+  @override
+  String common_hoursAgo(Object hours) {
+    return '$hours小时前';
+  }
+
+  @override
+  String get checkForUpdate => '检查更新';
+
+  @override
+  String get neverChecked => '从未检查';
+
+  @override
+  String lastCheckedAt(Object time) {
+    return '上次检查: $time';
+  }
+
+  @override
+  String get includePrereleaseUpdates => '包含预发布版本';
+
+  @override
+  String get includePrereleaseUpdatesDescription => '检查更新时包含 beta/alpha 版本';
+
+  @override
+  String get updateAvailable => '发现新版本';
+
+  @override
+  String get updateChecking => '正在检查更新...';
+
+  @override
+  String get updateUpToDate => '已是最新版本';
+
+  @override
+  String get updateError => '检查更新失败';
+
+  @override
+  String get currentVersion => '当前版本';
+
+  @override
+  String get latestVersion => '最新版本';
+
+  @override
+  String get releaseNotes => '更新日志';
+
+  @override
+  String get remindMeLater => '稍后提醒';
+
+  @override
+  String get skipThisVersion => '忽略此版本';
+
+  @override
+  String get goToDownload => '前往下载';
+
+  @override
+  String get versionSkipped => '已忽略此版本';
+
+  @override
+  String get cannotOpenUrl => '无法打开链接';
 }

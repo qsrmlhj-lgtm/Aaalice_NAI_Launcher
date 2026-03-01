@@ -14074,6 +14074,126 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Done'**
   String get settings_fontScale_done;
+
+  /// No description provided for @common_justNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Just now'**
+  String get common_justNow;
+
+  /// No description provided for @common_minutesAgo.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes} minutes ago'**
+  String common_minutesAgo(Object minutes);
+
+  /// No description provided for @common_hoursAgo.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours} hours ago'**
+  String common_hoursAgo(Object hours);
+
+  /// No description provided for @checkForUpdate.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for Updates'**
+  String get checkForUpdate;
+
+  /// No description provided for @neverChecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Never checked'**
+  String get neverChecked;
+
+  /// No description provided for @lastCheckedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Last checked: {time}'**
+  String lastCheckedAt(Object time);
+
+  /// No description provided for @includePrereleaseUpdates.
+  ///
+  /// In en, this message translates to:
+  /// **'Include Prerelease Versions'**
+  String get includePrereleaseUpdates;
+
+  /// No description provided for @includePrereleaseUpdatesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Include beta/alpha versions when checking for updates'**
+  String get includePrereleaseUpdatesDescription;
+
+  /// No description provided for @updateAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Update Available'**
+  String get updateAvailable;
+
+  /// No description provided for @updateChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking for updates...'**
+  String get updateChecking;
+
+  /// No description provided for @updateUpToDate.
+  ///
+  /// In en, this message translates to:
+  /// **'Already up to date'**
+  String get updateUpToDate;
+
+  /// No description provided for @updateError.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed to check for updates'**
+  String get updateError;
+
+  /// No description provided for @currentVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Current Version'**
+  String get currentVersion;
+
+  /// No description provided for @latestVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Latest Version'**
+  String get latestVersion;
+
+  /// No description provided for @releaseNotes.
+  ///
+  /// In en, this message translates to:
+  /// **'Release Notes'**
+  String get releaseNotes;
+
+  /// No description provided for @remindMeLater.
+  ///
+  /// In en, this message translates to:
+  /// **'Remind Me Later'**
+  String get remindMeLater;
+
+  /// No description provided for @skipThisVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Skip This Version'**
+  String get skipThisVersion;
+
+  /// No description provided for @goToDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to Download'**
+  String get goToDownload;
+
+  /// No description provided for @versionSkipped.
+  ///
+  /// In en, this message translates to:
+  /// **'Version skipped'**
+  String get versionSkipped;
+
+  /// No description provided for @cannotOpenUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot open link'**
+  String get cannotOpenUrl;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

@@ -3384,6 +3384,44 @@
   "settings_fontScale_previewMedium": "秋水共长天一色",
   "settings_fontScale_previewLarge": "字体大小预览",
   "settings_fontScale_reset": "重置",
-  "settings_fontScale_done": "完成"
+  "settings_fontScale_done": "完成",
+
+  "common_justNow": "刚刚",
+  "common_minutesAgo": "{minutes}分钟前",
+  "@common_minutesAgo": {
+    "placeholders": {
+      "minutes": {}
+    }
+  },
+  "common_hoursAgo": "{hours}小时前",
+  "@common_hoursAgo": {
+    "placeholders": {
+      "hours": {}
+    }
+  },
+
+  "checkForUpdate": "检查更新",
+  "neverChecked": "从未检查",
+  "lastCheckedAt": "上次检查: {time}",
+  "@lastCheckedAt": {
+    "placeholders": {
+      "time": {}
+    }
+  },
+  "includePrereleaseUpdates": "包含预发布版本",
+  "includePrereleaseUpdatesDescription": "检查更新时包含 beta/alpha 版本",
+
+  "updateAvailable": "发现新版本",
+  "updateChecking": "正在检查更新...",
+  "updateUpToDate": "已是最新版本",
+  "updateError": "检查更新失败",
+  "currentVersion": "当前版本",
+  "latestVersion": "最新版本",
+  "releaseNotes": "更新日志",
+  "remindMeLater": "稍后提醒",
+  "skipThisVersion": "忽略此版本",
+  "goToDownload": "前往下载",
+  "versionSkipped": "已忽略此版本",
+  "cannotOpenUrl": "无法打开链接"
 
 }

@@ -7477,4 +7477,70 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settings_fontScale_done => 'Done';
+
+  @override
+  String get common_justNow => 'Just now';
+
+  @override
+  String common_minutesAgo(Object minutes) {
+    return '$minutes minutes ago';
+  }
+
+  @override
+  String common_hoursAgo(Object hours) {
+    return '$hours hours ago';
+  }
+
+  @override
+  String get checkForUpdate => 'Check for Updates';
+
+  @override
+  String get neverChecked => 'Never checked';
+
+  @override
+  String lastCheckedAt(Object time) {
+    return 'Last checked: $time';
+  }
+
+  @override
+  String get includePrereleaseUpdates => 'Include Prerelease Versions';
+
+  @override
+  String get includePrereleaseUpdatesDescription => 'Include beta/alpha versions when checking for updates';
+
+  @override
+  String get updateAvailable => 'Update Available';
+
+  @override
+  String get updateChecking => 'Checking for updates...';
+
+  @override
+  String get updateUpToDate => 'Already up to date';
+
+  @override
+  String get updateError => 'Failed to check for updates';
+
+  @override
+  String get currentVersion => 'Current Version';
+
+  @override
+  String get latestVersion => 'Latest Version';
+
+  @override
+  String get releaseNotes => 'Release Notes';
+
+  @override
+  String get remindMeLater => 'Remind Me Later';
+
+  @override
+  String get skipThisVersion => 'Skip This Version';
+
+  @override
+  String get goToDownload => 'Go to Download';
+
+  @override
+  String get versionSkipped => 'Version skipped';
+
+  @override
+  String get cannotOpenUrl => 'Cannot open link';
 }

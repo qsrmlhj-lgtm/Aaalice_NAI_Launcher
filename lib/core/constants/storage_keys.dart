@@ -175,6 +175,11 @@ class StorageKeys {
   static const String notificationCustomSoundPath =
       'notification_custom_sound_path';
 
+  // Update Check Keys (更新检查相关)
+  static const String lastUpdateCheckTime = 'last_update_check_time';
+  static const String skippedUpdateVersion = 'skipped_update_version';
+  static const String includePrereleaseUpdates = 'include_prerelease_updates';
+
   // Data Source Cache Settings (数据源缓存设置)
   static const String hfTranslationRefreshInterval =
       'hf_translation_refresh_interval';

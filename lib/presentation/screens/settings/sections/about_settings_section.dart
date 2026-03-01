@@ -4,6 +4,9 @@ import 'package:nai_launcher/core/utils/localization_extension.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_version.dart';
+import '../../../../core/services/update_check_service.dart';
+import '../../../providers/update_provider.dart';
+import '../../../widgets/common/update_check_dialog.dart';
 import '../widgets/settings_card.dart';
 
 /// 关于设置板块
@@ -20,6 +23,10 @@ class AboutSettingsSection extends ConsumerStatefulWidget {
 class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
   @override
   Widget build(BuildContext context) {
+    final updateState = ref.watch(updateStateProvider);
+    final updateNotifier = ref.read(updateStateProvider.notifier);
+    final updateService = ref.watch(updateCheckServiceProvider);
+
     return SettingsCard(
       title: '关于',
       icon: Icons.info,
@@ -29,6 +36,54 @@ class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
             leading: const Icon(Icons.info_outline),
             title: Text(context.l10n.app_title),
             subtitle: Text(context.l10n.settings_version(AppVersion.versionName)),
+          ),
+          // 检查更新按钮
+          FutureBuilder<DateTime?>(
+            future: updateService.getLastCheckTime(),
+            builder: (context, snapshot) {
+              final lastCheckTime = snapshot.data;
+              return ListTile(
+                leading: const Icon(Icons.system_update),
+                title: Text(context.l10n.checkForUpdate),
+                subtitle: Text(
+                  _formatLastCheckTime(context, lastCheckTime),
+                ),
+                trailing: updateState.isChecking
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
+                onTap: updateState.isChecking
+                    ? null
+                    : () async {
+                        await updateNotifier.checkForUpdates();
+                        if (context.mounted) {
+                          await UpdateCheckDialog.show(context);
+                        }
+                      },
+              );
+            },
+          ),
+          // 包含预发布版本开关
+          FutureBuilder<bool>(
+            future: Future.value(updateService.shouldIncludePrerelease()),
+            builder: (context, snapshot) {
+              final includePrerelease = snapshot.data ?? false;
+              return SwitchListTile(
+                secondary: const Icon(Icons.new_releases_outlined),
+                title: Text(context.l10n.includePrereleaseUpdates),
+                subtitle: Text(context.l10n.includePrereleaseUpdatesDescription),
+                value: includePrerelease,
+                onChanged: (value) async {
+                  await updateNotifier.setIncludePrerelease(value);
+                  if (mounted) {
+                    setState(() {}); // Force widget rebuild to refresh value
+                  }
+                },
+              );
+            },
           ),
           ListTile(
             leading: const Icon(Icons.code),
@@ -47,5 +102,31 @@ class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
         ],
       ),
     );
+  }
+
+  /// 格式化上次检查时间
+  String _formatLastCheckTime(BuildContext context, DateTime? lastCheckTime) {
+    if (lastCheckTime == null) {
+      return context.l10n.neverChecked;
+    }
+
+    final now = DateTime.now();
+    final difference = now.difference(lastCheckTime);
+
+    if (difference.inMinutes < 1) {
+      return context.l10n.lastCheckedAt(context.l10n.common_justNow);
+    } else if (difference.inHours < 1) {
+      return context.l10n.lastCheckedAt(
+        context.l10n.common_minutesAgo(difference.inMinutes),
+      );
+    } else if (difference.inDays < 1) {
+      return context.l10n.lastCheckedAt(
+        context.l10n.common_hoursAgo(difference.inHours),
+      );
+    } else {
+      return context.l10n.lastCheckedAt(
+        context.l10n.common_daysAgo(difference.inDays),
+      );
+    }
   }
 }

@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nai_launcher/l10n/app_localizations.dart';
 
 import '../../../app.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/first_launch_detector.dart';
 import '../../providers/locale_provider.dart';
+import '../../providers/update_provider.dart';
 import '../../providers/warmup_provider.dart';
+import '../../widgets/common/update_check_dialog.dart';
 import 'splash_screen.dart';
 
 /// 应用启动引导器
@@ -86,6 +89,36 @@ class _MainAppWrapperState extends ConsumerState<_MainAppWrapper> {
         _checkFirstLaunch();
       });
     }
+
+    // 延迟3秒后执行自动更新检查（不阻塞启动）
+    _scheduleAutoUpdateCheck();
+  }
+
+  /// 调度自动更新检查
+  ///
+  /// 延迟3秒后检查是否需要更新，失败时静默处理
+  void _scheduleAutoUpdateCheck() {
+    Future.delayed(const Duration(seconds: 3), () async {
+      try {
+        // 检查是否应该检查更新（24小时冷却）
+        final shouldCheck = await ref.read(
+          checkUpdateOnStartupProvider.future,
+        );
+        if (!shouldCheck) return;
+
+        // 执行更新检查
+        await ref.read(updateStateProvider.notifier).checkForUpdates();
+
+        // 如果有更新，显示对话框
+        final state = ref.read(updateStateProvider);
+        if (state.hasUpdate && mounted) {
+          await UpdateCheckDialog.show(context);
+        }
+      } catch (e) {
+        // 静默处理错误，不显示错误弹窗
+        AppLogger.d('Auto update check failed: $e', 'AppBootstrap');
+      }
+    });
   }
 
   Future<void> _checkFirstLaunch() async {

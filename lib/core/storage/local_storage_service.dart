@@ -671,6 +671,55 @@ class LocalStorageService {
       await deleteSetting(StorageKeys.floatingButtonBackgroundImage);
     }
   }
+
+  // ==================== Update Check (更新检查相关) ====================
+
+  /// 获取上次更新检查时间
+  DateTime? getLastUpdateCheckTime() {
+    final timestamp = getSetting<int>(StorageKeys.lastUpdateCheckTime);
+    if (timestamp == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(timestamp);
+  }
+
+  /// 保存上次更新检查时间
+  Future<void> setLastUpdateCheckTime(DateTime? time) async {
+    if (time != null) {
+      await setSetting(
+        StorageKeys.lastUpdateCheckTime,
+        time.millisecondsSinceEpoch,
+      );
+    } else {
+      await deleteSetting(StorageKeys.lastUpdateCheckTime);
+    }
+  }
+
+  /// 获取跳过的更新版本
+  String? getSkippedUpdateVersion() {
+    return getSetting<String>(StorageKeys.skippedUpdateVersion);
+  }
+
+  /// 保存跳过的更新版本
+  Future<void> setSkippedUpdateVersion(String? version) async {
+    if (version != null) {
+      await setSetting(StorageKeys.skippedUpdateVersion, version);
+    } else {
+      await deleteSetting(StorageKeys.skippedUpdateVersion);
+    }
+  }
+
+  /// 获取是否包含预发布版本
+  bool getIncludePrereleaseUpdates() {
+    return getSetting<bool>(
+          StorageKeys.includePrereleaseUpdates,
+          defaultValue: false,
+        ) ??
+        false;
+  }
+
+  /// 保存是否包含预发布版本
+  Future<void> setIncludePrereleaseUpdates(bool value) async {
+    await setSetting(StorageKeys.includePrereleaseUpdates, value);
+  }
 }
 
 /// LocalStorageService Provider

@@ -111,6 +111,9 @@ dependencies:
   package_info_plus: ^8.0.0
 
   png_chunks_extract: any
+
+  # 版本号解析
+  pub_semver: ^2.1.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
