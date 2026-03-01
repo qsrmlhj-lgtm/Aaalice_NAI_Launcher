@@ -7456,4 +7456,25 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settings_resetPathConfirm => '重置数据存储路径后，需要重启应用才能生效。\\n\\n默认路径将在下次启动时生效。是否继续？';
+
+  @override
+  String get settings_fontScale => '字体大小';
+
+  @override
+  String get settings_fontScale_description => '调整应用全局字体缩放比例';
+
+  @override
+  String get settings_fontScale_previewSmall => '落霞与孤鹜齐飞';
+
+  @override
+  String get settings_fontScale_previewMedium => '秋水共长天一色';
+
+  @override
+  String get settings_fontScale_previewLarge => '字体大小预览';
+
+  @override
+  String get settings_fontScale_reset => '重置';
+
+  @override
+  String get settings_fontScale_done => '完成';
 }

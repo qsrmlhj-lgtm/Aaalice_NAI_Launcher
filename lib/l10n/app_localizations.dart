@@ -14032,6 +14032,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'After resetting the data storage path, the app needs to restart to take effect.\\n\\nThe default path will take effect on the next startup. Continue?'**
   String get settings_resetPathConfirm;
+
+  /// No description provided for @settings_fontScale.
+  ///
+  /// In en, this message translates to:
+  /// **'Font Size'**
+  String get settings_fontScale;
+
+  /// No description provided for @settings_fontScale_description.
+  ///
+  /// In en, this message translates to:
+  /// **'Adjust global font scale'**
+  String get settings_fontScale_description;
+
+  /// No description provided for @settings_fontScale_previewSmall.
+  ///
+  /// In en, this message translates to:
+  /// **'The setting sun and lone duck fly together'**
+  String get settings_fontScale_previewSmall;
+
+  /// No description provided for @settings_fontScale_previewMedium.
+  ///
+  /// In en, this message translates to:
+  /// **'Autumn water merges with the endless sky'**
+  String get settings_fontScale_previewMedium;
+
+  /// No description provided for @settings_fontScale_previewLarge.
+  ///
+  /// In en, this message translates to:
+  /// **'Font Size Preview'**
+  String get settings_fontScale_previewLarge;
+
+  /// No description provided for @settings_fontScale_reset.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset'**
+  String get settings_fontScale_reset;
+
+  /// No description provided for @settings_fontScale_done.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get settings_fontScale_done;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

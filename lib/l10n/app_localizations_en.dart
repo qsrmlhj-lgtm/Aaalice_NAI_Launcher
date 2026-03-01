@@ -7456,4 +7456,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settings_resetPathConfirm => 'After resetting the data storage path, the app needs to restart to take effect.\\n\\nThe default path will take effect on the next startup. Continue?';
+
+  @override
+  String get settings_fontScale => 'Font Size';
+
+  @override
+  String get settings_fontScale_description => 'Adjust global font scale';
+
+  @override
+  String get settings_fontScale_previewSmall => 'The setting sun and lone duck fly together';
+
+  @override
+  String get settings_fontScale_previewMedium => 'Autumn water merges with the endless sky';
+
+  @override
+  String get settings_fontScale_previewLarge => 'Font Size Preview';
+
+  @override
+  String get settings_fontScale_reset => 'Reset';
+
+  @override
+  String get settings_fontScale_done => 'Done';
 }
