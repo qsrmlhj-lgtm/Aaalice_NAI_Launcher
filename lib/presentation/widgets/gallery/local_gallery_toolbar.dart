@@ -522,7 +522,7 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            dialogTheme: DialogTheme(
+            dialogTheme: DialogThemeData(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -554,7 +554,7 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       builder: (pickerContext, child) {
         return Theme(
           data: Theme.of(pickerContext).copyWith(
-            dialogTheme: DialogTheme(
+            dialogTheme: DialogThemeData(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),

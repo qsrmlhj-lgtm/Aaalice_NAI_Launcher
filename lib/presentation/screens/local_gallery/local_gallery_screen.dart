@@ -1120,7 +1120,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       lastDate: now,
       builder: (pickerContext, child) => Theme(
         data: Theme.of(pickerContext).copyWith(
-          dialogTheme: DialogTheme(
+          dialogTheme: DialogThemeData(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
