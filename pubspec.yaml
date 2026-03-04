@@ -152,5 +152,5 @@ flutter:
       fonts:
         - asset: fonts/LXGWZhenKaiGB-Regular.ttf
 
-  dependency_overrides:
+dependency_overrides:
     intl: ^0.20.2
