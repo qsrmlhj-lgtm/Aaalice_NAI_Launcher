@@ -637,7 +637,7 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            dialogTheme: DialogTheme(
+            dialogTheme: DialogThemeData(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
