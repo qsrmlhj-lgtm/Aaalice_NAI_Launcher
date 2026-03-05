@@ -19,6 +19,7 @@ import '../../../core/utils/permission_utils.dart';
 import '../../../core/utils/sd_to_nai_converter.dart';
 import '../../../core/utils/zip_utils.dart';
 import '../../../data/models/character/character_prompt.dart' as char;
+import '../../../data/models/gallery/gallery_category.dart';
 import '../../../data/models/gallery/local_image_record.dart';
 import '../../../data/models/image/image_params.dart';
 import '../../widgets/metadata/metadata_import_dialog.dart';
@@ -321,10 +322,29 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   }
 
   void _handleCategorySelected(String? id) {
+    // 更新分类选中状态
     ref.read(galleryCategoryNotifierProvider.notifier).selectCategory(id);
-    ref
-        .read(localGalleryNotifierProvider.notifier)
-        .setShowFavoritesOnly(id == 'favorites');
+
+    // 获取分类信息以便应用过滤
+    final categoryState = ref.read(galleryCategoryNotifierProvider);
+    final category = id != null ? categoryState.categories.findById(id) : null;
+
+    // 应用分类过滤
+    if (id == 'favorites') {
+      // 收藏特殊处理
+      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(true);
+    } else if (id != null && category != null) {
+      // 普通分类：按文件夹路径过滤
+      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(false);
+      ref.read(localGalleryNotifierProvider.notifier).setSelectedCategory(
+        id,
+        category.folderPath,
+      );
+    } else {
+      // 全部：清除分类过滤
+      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(false);
+      ref.read(localGalleryNotifierProvider.notifier).setSelectedCategory(null, null);
+    }
   }
 
   Future<void> _handleCategoryDelete(String id) async {
