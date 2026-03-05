@@ -114,19 +114,6 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
       return widget.child;
     }
 
-    final theme = Theme.of(context);
-    final dragData = ImageDragData(
-      record: widget.record,
-      previewBytes: _imageBytes,
-    );
-
-    final feedbackWidget = buildImageDragFeedback(
-      theme,
-      dragData,
-      width: widget.feedbackWidth,
-      hintText: widget.feedbackHint ?? '拖拽以分享',
-    );
-
     return Listener(
       onPointerDown: (_) {
         setState(() => _isDragging = true);
@@ -139,12 +126,37 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
       },
       child: DragItemWidget(
         allowedOperations: () => [DropOperation.copy],
-        dragItemProvider: (request) => _createDragItem(dragData),
+        dragItemProvider: (request) => _createDragItem(),
+        // 关键修复：每次调用时动态构建，确保使用最新的 _imageBytes
         liftBuilder: widget.enableFeedback
-            ? (context, child) => feedbackWidget
+            ? (context, child) {
+                final theme = Theme.of(context);
+                final dragData = ImageDragData(
+                  record: widget.record,
+                  previewBytes: _imageBytes,
+                );
+                return buildImageDragFeedback(
+                  theme,
+                  dragData,
+                  width: widget.feedbackWidth,
+                  hintText: widget.feedbackHint ?? '拖拽以分享',
+                );
+              }
             : null,
         dragBuilder: widget.enableFeedback
-            ? (context, child) => feedbackWidget
+            ? (context, child) {
+                final theme = Theme.of(context);
+                final dragData = ImageDragData(
+                  record: widget.record,
+                  previewBytes: _imageBytes,
+                );
+                return buildImageDragFeedback(
+                  theme,
+                  dragData,
+                  width: widget.feedbackWidth,
+                  hintText: widget.feedbackHint ?? '拖拽以分享',
+                );
+              }
             : null,
         child: DraggableWidget(
           child: Opacity(
@@ -156,9 +168,10 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
     );
   }
 
-  Future<DragItem> _createDragItem(ImageDragData dragData) async {
-    final fileName = dragData.fileName;
-    final filePath = dragData.path;
+  Future<DragItem> _createDragItem() async {
+    final fileName = widget.record.path.split(RegExp(r'[/\\]')).last;
+    final filePath = widget.record.path;
+    final extension = fileName.toLowerCase().split('.').last;
 
     final item = DragItem(
       suggestedName: fileName,
@@ -166,8 +179,8 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
     );
 
     // 添加 PNG 格式数据
-    if (dragData.isPng && dragData.previewBytes != null) {
-      item.add(Formats.png(dragData.previewBytes!));
+    if (extension == 'png' && _imageBytes != null) {
+      item.add(Formats.png(_imageBytes!));
     }
 
     // 添加文件 URI 格式
@@ -265,19 +278,6 @@ class _DragWrapperState extends State<_DragWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final dragData = ImageDragData(
-      record: widget.record,
-      previewBytes: _imageBytes,
-    );
-
-    final feedbackWidget = buildImageDragFeedback(
-      theme,
-      dragData,
-      width: widget.feedbackWidth,
-      hintText: widget.feedbackHint ?? '拖拽以分享',
-    );
-
     return Listener(
       onPointerDown: (_) {
         setState(() => _isDragging = true);
@@ -291,11 +291,36 @@ class _DragWrapperState extends State<_DragWrapper> {
       child: DragItemWidget(
         allowedOperations: () => [DropOperation.copy],
         dragItemProvider: (request) => _createDragItem(),
+        // 关键修复：每次调用时动态构建，确保使用最新的 _imageBytes
         liftBuilder: widget.enableFeedback
-            ? (context, child) => feedbackWidget
+            ? (context, child) {
+                final theme = Theme.of(context);
+                final dragData = ImageDragData(
+                  record: widget.record,
+                  previewBytes: _imageBytes,
+                );
+                return buildImageDragFeedback(
+                  theme,
+                  dragData,
+                  width: widget.feedbackWidth,
+                  hintText: widget.feedbackHint ?? '拖拽以分享',
+                );
+              }
             : null,
         dragBuilder: widget.enableFeedback
-            ? (context, child) => feedbackWidget
+            ? (context, child) {
+                final theme = Theme.of(context);
+                final dragData = ImageDragData(
+                  record: widget.record,
+                  previewBytes: _imageBytes,
+                );
+                return buildImageDragFeedback(
+                  theme,
+                  dragData,
+                  width: widget.feedbackWidth,
+                  hintText: widget.feedbackHint ?? '拖拽以分享',
+                );
+              }
             : null,
         child: DraggableWidget(
           child: Opacity(
