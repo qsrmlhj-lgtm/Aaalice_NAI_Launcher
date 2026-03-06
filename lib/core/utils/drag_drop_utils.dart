@@ -94,6 +94,8 @@ Widget buildImageDragFeedback(
   double width = 80,
   String? hintText,
   bool showHint = true,
+  Widget? previewWidget,
+  ImageProvider? previewProvider,
 }) {
   final colorScheme = theme.colorScheme;
   
@@ -117,7 +119,28 @@ Widget buildImageDragFeedback(
           fit: StackFit.expand,
           children: [
             // 底层：图片占满整个卡片
-            _buildImageSection(theme, dragData),
+            if (previewWidget != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: width,
+                      height: showHint ? 108 : 92,
+                      child: previewWidget,
+                    ),
+                  ),
+                ),
+              )
+            else if (previewProvider != null)
+              Image(
+                image: previewProvider,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => _buildPlaceholder(theme, dragData),
+              )
+            else
+              _buildImageSection(theme, dragData),
             
             // 中层：底部渐变遮罩（让文字更清晰）
             Positioned(
@@ -241,7 +264,8 @@ Widget _buildImageSection(ThemeData theme, ImageDragData dragData) {
   if (dragData.previewBytes != null) {
     return Image.memory(
       dragData.previewBytes!,
-      fit: BoxFit.cover,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
       errorBuilder: (_, __, ___) => _buildPlaceholder(theme, dragData),
     );
   }
@@ -252,7 +276,8 @@ Widget _buildImageSection(ThemeData theme, ImageDragData dragData) {
     if (file.existsSync()) {
       return Image.file(
         file,
-        fit: BoxFit.cover,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
         errorBuilder: (_, __, ___) => _buildPlaceholder(theme, dragData),
       );
     }

@@ -78,6 +78,7 @@ class DraggableImageCard extends StatefulWidget {
 class _DraggableImageCardState extends State<DraggableImageCard> {
   bool _isDragging = false;
   Uint8List? _imageBytes;
+  ImageProvider? _previewProvider;
 
   @override
   void initState() {
@@ -88,7 +89,7 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
   Future<void> _loadImage() async {
     // 如果提供了预览数据，直接使用
     if (widget.previewBytes != null) {
-      setState(() => _imageBytes = widget.previewBytes);
+      _setPreviewBytes(widget.previewBytes!);
       return;
     }
 
@@ -99,13 +100,22 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
           if (mounted) {
-            setState(() => _imageBytes = bytes);
+            _setPreviewBytes(bytes);
           }
         }
       } catch (e) {
         debugPrint('Failed to load image: $e');
       }
     }
+  }
+
+  void _setPreviewBytes(Uint8List bytes) {
+    final provider = MemoryImage(bytes);
+    setState(() {
+      _imageBytes = bytes;
+      _previewProvider = provider;
+    });
+    precacheImage(provider, context);
   }
 
   @override
@@ -131,8 +141,8 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
         liftBuilder: widget.enableFeedback
             ? (context, child) {
                 final theme = Theme.of(context);
-                final dragData = ImageDragData(
-                  record: widget.record,
+                final dragData = ImageDragData.fromRecord(
+                  widget.record,
                   previewBytes: _imageBytes,
                 );
                 return buildImageDragFeedback(
@@ -140,14 +150,15 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
                   dragData,
                   width: widget.feedbackWidth,
                   hintText: widget.feedbackHint ?? '拖拽以分享',
+                  previewProvider: _previewProvider,
                 );
               }
             : null,
         dragBuilder: widget.enableFeedback
             ? (context, child) {
                 final theme = Theme.of(context);
-                final dragData = ImageDragData(
-                  record: widget.record,
+                final dragData = ImageDragData.fromRecord(
+                  widget.record,
                   previewBytes: _imageBytes,
                 );
                 return buildImageDragFeedback(
@@ -155,6 +166,7 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
                   dragData,
                   width: widget.feedbackWidth,
                   hintText: widget.feedbackHint ?? '拖拽以分享',
+                  previewProvider: _previewProvider,
                 );
               }
             : null,
@@ -172,6 +184,22 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
     final fileName = widget.record.path.split(RegExp(r'[/\\]')).last;
     final filePath = widget.record.path;
     final extension = fileName.toLowerCase().split('.').last;
+    Uint8List? dragBytes = _imageBytes;
+
+    // 首次拖拽时 _imageBytes 可能尚未异步加载完成，这里做一次同步兜底读取
+    if (dragBytes == null && extension == 'png' && filePath.isNotEmpty) {
+      try {
+        final file = File(filePath);
+        if (file.existsSync()) {
+          dragBytes = file.readAsBytesSync();
+          if (mounted) {
+            _setPreviewBytes(dragBytes);
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to read image bytes for drag: $e');
+      }
+    }
 
     final item = DragItem(
       suggestedName: fileName,
@@ -179,8 +207,8 @@ class _DraggableImageCardState extends State<DraggableImageCard> {
     );
 
     // 添加 PNG 格式数据
-    if (extension == 'png' && _imageBytes != null) {
-      item.add(Formats.png(_imageBytes!));
+    if (extension == 'png' && dragBytes != null) {
+      item.add(Formats.png(dragBytes));
     }
 
     // 添加文件 URI 格式
@@ -222,6 +250,7 @@ class _DragWrapper extends StatefulWidget {
 class _DragWrapperState extends State<_DragWrapper> {
   bool _isDragging = false;
   Uint8List? _imageBytes;
+  ImageProvider? _previewProvider;
 
   @override
   void initState() {
@@ -231,7 +260,7 @@ class _DragWrapperState extends State<_DragWrapper> {
 
   Future<void> _loadImage() async {
     if (widget.previewBytes != null) {
-      setState(() => _imageBytes = widget.previewBytes);
+      _setPreviewBytes(widget.previewBytes!);
       return;
     }
 
@@ -241,7 +270,7 @@ class _DragWrapperState extends State<_DragWrapper> {
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
           if (mounted) {
-            setState(() => _imageBytes = bytes);
+            _setPreviewBytes(bytes);
           }
         }
       } catch (e) {
@@ -250,9 +279,35 @@ class _DragWrapperState extends State<_DragWrapper> {
     }
   }
 
+  void _setPreviewBytes(Uint8List bytes) {
+    final provider = MemoryImage(bytes);
+    setState(() {
+      _imageBytes = bytes;
+      _previewProvider = provider;
+    });
+    precacheImage(provider, context);
+  }
+
   Future<DragItem> _createDragItem() async {
     final fileName = widget.record.path.split(RegExp(r'[/\\]')).last;
     final filePath = widget.record.path;
+    final extension = fileName.toLowerCase().split('.').last;
+    Uint8List? dragBytes = _imageBytes;
+
+    // 首次拖拽时 _imageBytes 可能尚未异步加载完成，这里做一次同步兜底读取
+    if (dragBytes == null && extension == 'png' && filePath.isNotEmpty) {
+      try {
+        final file = File(filePath);
+        if (file.existsSync()) {
+          dragBytes = file.readAsBytesSync();
+          if (mounted) {
+            _setPreviewBytes(dragBytes);
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to read image bytes for drag: $e');
+      }
+    }
 
     final item = DragItem(
       suggestedName: fileName,
@@ -260,9 +315,8 @@ class _DragWrapperState extends State<_DragWrapper> {
     );
 
     // 添加 PNG 格式数据
-    final extension = fileName.toLowerCase().split('.').last;
-    if (extension == 'png' && _imageBytes != null) {
-      item.add(Formats.png(_imageBytes!));
+    if (extension == 'png' && dragBytes != null) {
+      item.add(Formats.png(dragBytes));
     }
 
     // 添加文件 URI 格式
@@ -295,8 +349,8 @@ class _DragWrapperState extends State<_DragWrapper> {
         liftBuilder: widget.enableFeedback
             ? (context, child) {
                 final theme = Theme.of(context);
-                final dragData = ImageDragData(
-                  record: widget.record,
+                final dragData = ImageDragData.fromRecord(
+                  widget.record,
                   previewBytes: _imageBytes,
                 );
                 return buildImageDragFeedback(
@@ -304,14 +358,15 @@ class _DragWrapperState extends State<_DragWrapper> {
                   dragData,
                   width: widget.feedbackWidth,
                   hintText: widget.feedbackHint ?? '拖拽以分享',
+                  previewProvider: _previewProvider,
                 );
               }
             : null,
         dragBuilder: widget.enableFeedback
             ? (context, child) {
                 final theme = Theme.of(context);
-                final dragData = ImageDragData(
-                  record: widget.record,
+                final dragData = ImageDragData.fromRecord(
+                  widget.record,
                   previewBytes: _imageBytes,
                 );
                 return buildImageDragFeedback(
@@ -319,6 +374,7 @@ class _DragWrapperState extends State<_DragWrapper> {
                   dragData,
                   width: widget.feedbackWidth,
                   hintText: widget.feedbackHint ?? '拖拽以分享',
+                  previewProvider: _previewProvider,
                 );
               }
             : null,
