@@ -6,8 +6,11 @@ import '../../core/utils/app_logger.dart';
 import '../../data/datasources/remote/danbooru_api_service.dart';
 import '../../data/models/online_gallery/danbooru_post.dart';
 import '../../data/services/danbooru_auth_service.dart';
+import 'online_gallery_blacklist_provider.dart';
 
 part 'online_gallery_provider.g.dart';
+
+const Set<String> kAllRatings = {'g', 's', 'q', 'e'};
 
 /// 顶级函数：在 Isolate 中解析帖子数据 (用于 compute)
 ///
@@ -91,7 +94,7 @@ class OnlineGalleryState {
   final String? error;
   final String searchQuery;
   final String source;
-  final String rating;
+  final Set<String> selectedRatings;
 
   /// 视图模式
   final GalleryViewMode viewMode;
@@ -122,7 +125,7 @@ class OnlineGalleryState {
     this.error,
     this.searchQuery = '',
     this.source = 'danbooru',
-    this.rating = 'all',
+    this.selectedRatings = kAllRatings,
     this.viewMode = GalleryViewMode.search,
     this.searchCache = const ModeCache(),
     this.popularCache = const ModeCache(),
@@ -164,7 +167,7 @@ class OnlineGalleryState {
     String? error,
     String? searchQuery,
     String? source,
-    String? rating,
+    Set<String>? selectedRatings,
     GalleryViewMode? viewMode,
     ModeCache? searchCache,
     ModeCache? popularCache,
@@ -184,7 +187,7 @@ class OnlineGalleryState {
       error: clearError ? null : (error ?? this.error),
       searchQuery: searchQuery ?? this.searchQuery,
       source: source ?? this.source,
-      rating: rating ?? this.rating,
+      selectedRatings: Set.unmodifiable(selectedRatings ?? this.selectedRatings),
       viewMode: viewMode ?? this.viewMode,
       searchCache: searchCache ?? this.searchCache,
       popularCache: popularCache ?? this.popularCache,
@@ -341,6 +344,11 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
 
     try {
       // 使用 order:rank 标签搜索实现排行榜功能（替代不稳定的 /explore 端点）
+      await ref
+          .read(onlineGalleryBlacklistNotifierProvider.notifier)
+          .ensureInitialized();
+      final blacklistTags =
+          ref.read(onlineGalleryBlacklistNotifierProvider).effectiveTags;
       final posts = await _apiService.searchPosts(
         tags: 'order:rank',
         page: page,
@@ -348,7 +356,10 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
       );
 
       // 过滤评级
-      final filteredPosts = _filterByRating(posts);
+      final filteredPosts = _filterByBlacklist(
+        _filterByRatings(posts, state.selectedRatings),
+        blacklistTags,
+      );
 
       // 更新缓存
       final newCache = ModeCache(
@@ -413,7 +424,7 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
       final (posts, rawCount) = await _fetchPosts(
         source: state.source,
         query: 'ordfav:${authState.user!.name}',
-        rating: state.rating,
+        selectedRatings: state.selectedRatings,
         page: apiPage,
       );
 
@@ -587,7 +598,7 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
       final (posts, rawCount) = await _fetchPosts(
         source: state.source,
         query: state.searchQuery,
-        rating: state.rating,
+        selectedRatings: state.selectedRatings,
         page: apiPage,
       );
 
@@ -709,13 +720,31 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
     await loadPosts(refresh: true);
   }
 
-  /// 设置评级筛选
-  Future<void> setRating(String rating) async {
-    if (state.rating == rating) return;
-    // 立即取消当前请求，确保快速响应
+  /// 设置评级筛选（多选）
+  Future<void> setRatings(Set<String> selectedRatings) async {
+    final normalized = _normalizeRatings(selectedRatings);
+    if (_setEquals(state.selectedRatings, normalized)) return;
     _cancelCurrentRequest();
-    state = state.copyWith(rating: rating);
+    state = state.copyWith(selectedRatings: normalized);
     await loadPosts(refresh: true);
+  }
+
+  /// 切换单个评级（含“全部”逻辑）
+  Future<void> toggleRating(String rating) async {
+    if (rating == 'all') {
+      await setRatings(kAllRatings);
+      return;
+    }
+
+    if (!kAllRatings.contains(rating)) return;
+    final next = {...state.selectedRatings};
+    if (next.contains(rating)) {
+      if (next.length == 1) return;
+      next.remove(rating);
+    } else {
+      next.add(rating);
+    }
+    await setRatings(next);
   }
 
   /// 设置日期范围筛选（搜索模式）
@@ -745,10 +774,46 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
     await loadPosts(refresh: true);
   }
 
-  /// 根据评级过滤帖子
-  List<DanbooruPost> _filterByRating(List<DanbooruPost> posts) {
-    if (state.rating == 'all') return posts;
-    return posts.where((p) => p.rating == state.rating).toList();
+  /// 根据评级集合过滤帖子
+  List<DanbooruPost> _filterByRatings(
+    List<DanbooruPost> posts,
+    Set<String> selectedRatings,
+  ) {
+    final normalized = _normalizeRatings(selectedRatings);
+    if (normalized.length == kAllRatings.length) return posts;
+    return posts.where((p) => normalized.contains(p.rating)).toList();
+  }
+
+  List<DanbooruPost> _filterByBlacklist(
+    List<DanbooruPost> posts,
+    Set<String> blacklistTags,
+  ) {
+    if (blacklistTags.isEmpty) return posts;
+    return posts.where((post) {
+      for (final tag in post.tags) {
+        if (blacklistTags.contains(_normalizeTagForBlacklist(tag))) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
+
+  String _appendBlacklistToQuery(String tags, Set<String> blacklistTags) {
+    if (blacklistTags.isEmpty) return tags;
+
+    // 请求级过滤仅做前置优化，本地过滤仍是最终兜底。
+    final querySafeTags = blacklistTags
+        .where((tag) => tag.isNotEmpty && !tag.contains(':') && !tag.startsWith('-'))
+        .take(50)
+        .toList();
+    final blacklistExpr = querySafeTags.map((tag) => '-$tag').join(' ');
+    if (blacklistExpr.isEmpty) return tags;
+    return tags.isEmpty ? blacklistExpr : '$tags $blacklistExpr';
+  }
+
+  String _normalizeTagForBlacklist(String input) {
+    return input.trim().toLowerCase().replaceAll(' ', '_');
   }
 
   /// 将网络错误转换为用户友好的提示信息
@@ -783,16 +848,25 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
   Future<(List<DanbooruPost>, int)> _fetchPosts({
     required String source,
     required String query,
-    required String rating,
+    required Set<String> selectedRatings,
     required dynamic page,
   }) async {
+    await ref
+        .read(onlineGalleryBlacklistNotifierProvider.notifier)
+        .ensureInitialized();
     final baseUrl = _getBaseUrl(source);
     final endpoint = _getEndpoint(source);
+    final blacklistTags =
+        ref.read(onlineGalleryBlacklistNotifierProvider).effectiveTags;
 
     // 构建标签查询
     String tags = query;
-    if (rating != 'all') {
-      tags = tags.isEmpty ? 'rating:$rating' : '$tags rating:$rating';
+    final normalizedRatings = _normalizeRatings(selectedRatings);
+    if (normalizedRatings.length < kAllRatings.length) {
+      final ratingExpr = normalizedRatings.length == 1
+          ? 'rating:${normalizedRatings.first}'
+          : normalizedRatings.map((r) => '~rating:$r').join(' ');
+      tags = tags.isEmpty ? ratingExpr : '$tags $ratingExpr';
     }
 
     // 添加日期范围筛选（Danbooru 语法：date:start..end）
@@ -810,27 +884,47 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
       final dateTag = 'date:<=$endStr';
       tags = tags.isEmpty ? dateTag : '$tags $dateTag';
     }
+    final baseTags = tags;
+    final tagsWithBlacklist = _appendBlacklistToQuery(baseTags, blacklistTags);
 
     AppLogger.d(
-      'Fetching from $source: tags="$tags", page=$page',
+      'Fetching from $source: tags="$tagsWithBlacklist", page=$page',
       'OnlineGallery',
     );
 
-    final response = await _dio.get(
-      '$baseUrl$endpoint',
-      queryParameters: {
-        'tags': tags,
-        'page': page,
-        'limit': _pageSize,
-      },
-      options: Options(
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'NAI-Launcher/1.0',
+    Future<Response<dynamic>> requestWithTags(String requestTags) {
+      return _dio.get(
+        '$baseUrl$endpoint',
+        queryParameters: {
+          'tags': requestTags,
+          'page': page,
+          'limit': _pageSize,
         },
-      ),
-      cancelToken: _cancelToken,
-    );
+        options: Options(
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'NAI-Launcher/1.0',
+          },
+        ),
+        cancelToken: _cancelToken,
+      );
+    }
+
+    Response<dynamic> response;
+    try {
+      response = await requestWithTags(tagsWithBlacklist);
+    } on DioException catch (e) {
+      final statusCode = e.response?.statusCode;
+      if (statusCode == 422 && blacklistTags.isNotEmpty) {
+        AppLogger.w(
+          '422 with blacklist query, fallback to request without blacklist and filter locally',
+          'OnlineGallery',
+        );
+        response = await requestWithTags(baseTags);
+      } else {
+        rethrow;
+      }
+    }
 
     if (response.data is List) {
       final rawList = response.data as List;
@@ -840,12 +934,16 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
         parsePostsInIsolate,
         {'rawList': rawList, 'source': source},
       );
+      final filteredPosts = _filterByBlacklist(
+        _filterByRatings(posts, normalizedRatings),
+        blacklistTags,
+      );
 
       AppLogger.d(
-        'Fetched ${rawList.length} raw posts, ${posts.length} after filter',
+        'Fetched ${rawList.length} raw posts, ${filteredPosts.length} after filter',
         'OnlineGallery',
       );
-      return (posts, rawList.length);
+      return (filteredPosts, rawList.length);
     }
 
     return (<DanbooruPost>[], 0);
@@ -854,6 +952,17 @@ class OnlineGalleryNotifier extends _$OnlineGalleryNotifier {
   /// 格式化日期为 Danbooru 查询格式 (yyyy-MM-dd)
   String _formatDateForQuery(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  Set<String> _normalizeRatings(Set<String> ratings) {
+    final normalized = ratings.where(kAllRatings.contains).toSet();
+    return Set.unmodifiable(normalized.isEmpty ? {...kAllRatings} : normalized);
+  }
+
+  bool _setEquals(Set<String> a, Set<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    return a.containsAll(b);
   }
 
   /// 获取基础 URL

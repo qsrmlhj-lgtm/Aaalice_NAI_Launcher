@@ -33,6 +33,10 @@ class FilterCriteria {
   final int? maxFileSize;
   final List<String> metadataStatuses;
 
+  /// 分类过滤
+  final String? categoryId;
+  final String? categoryFolderPath;
+
   const FilterCriteria({
     this.searchQuery = '',
     this.dateStart,
@@ -53,6 +57,8 @@ class FilterCriteria {
     this.minFileSize,
     this.maxFileSize,
     this.metadataStatuses = const [],
+    this.categoryId,
+    this.categoryFolderPath,
   });
 
   FilterCriteria copyWith({
@@ -90,6 +96,10 @@ class FilterCriteria {
     bool clearMaxHeight = false,
     bool clearMinFileSize = false,
     bool clearMaxFileSize = false,
+    String? categoryId,
+    String? categoryFolderPath,
+    bool clearCategoryId = false,
+    bool clearCategoryFolderPath = false,
   }) {
     return FilterCriteria(
       searchQuery: searchQuery ?? this.searchQuery,
@@ -111,6 +121,8 @@ class FilterCriteria {
       minFileSize: clearMinFileSize ? null : (minFileSize ?? this.minFileSize),
       maxFileSize: clearMaxFileSize ? null : (maxFileSize ?? this.maxFileSize),
       metadataStatuses: metadataStatuses ?? this.metadataStatuses,
+      categoryId: clearCategoryId ? null : (categoryId ?? this.categoryId),
+      categoryFolderPath: clearCategoryFolderPath ? null : (categoryFolderPath ?? this.categoryFolderPath),
     );
   }
 
@@ -133,7 +145,9 @@ class FilterCriteria {
       maxHeight != null ||
       minFileSize != null ||
       maxFileSize != null ||
-      metadataStatuses.isNotEmpty;
+      metadataStatuses.isNotEmpty ||
+      categoryId != null ||
+      categoryFolderPath != null;
 
   bool get hasMetadataFilters =>
       filterModel != null ||
@@ -175,6 +189,8 @@ class FilterCriteria {
       if (minFileSize != null) 'minFS:$minFileSize',
       if (maxFileSize != null) 'maxFS:$maxFileSize',
       if (metadataStatuses.isNotEmpty) 'meta:${metadataStatuses.join(",")}',
+      if (categoryId != null) 'catId:$categoryId',
+      if (categoryFolderPath != null) 'catPath:$categoryFolderPath',
     ];
     return parts.join('|');
   }
@@ -421,6 +437,14 @@ class GalleryFilterService {
       AppLogger.d('_applyLocalFilters after fav filter: ${filtered.length} files', 'GalleryFilterService');
     }
 
+    if (cancelToken.isCancelled) return [];
+
+    // 分类过滤（按文件夹路径）
+    if (criteria.categoryFolderPath != null) {
+      filtered = await _filterByCategory(filtered, criteria.categoryFolderPath!, cancelToken);
+      AppLogger.d('_applyLocalFilters after category filter: ${filtered.length} files', 'GalleryFilterService');
+    }
+
     AppLogger.d('_applyLocalFilters END: ${filtered.length} files', 'GalleryFilterService');
     return filtered;
   }
@@ -516,6 +540,35 @@ class GalleryFilterService {
       }).toList();
     } catch (e) {
       AppLogger.w('Failed to filter favorites: $e', 'GalleryFilterService');
+      return files;
+    }
+  }
+
+  /// 按分类路径过滤
+  ///
+  /// 根据分类的文件夹路径过滤文件
+  Future<List<File>> _filterByCategory(
+    List<File> files,
+    String categoryFolderPath,
+    CancelToken cancelToken,
+  ) async {
+    try {
+      // 规范化路径分隔符并转换为小写以便比较
+      final normalizedCategoryPath = categoryFolderPath.replaceAll('\\', '/').toLowerCase();
+
+      return files.where((file) {
+        if (cancelToken.isCancelled) return false;
+
+        // 规范化文件路径
+        final normalizedFilePath = file.path.replaceAll('\\', '/').toLowerCase();
+
+        // 检查文件路径是否包含分类文件夹路径
+        // 使用 / 确保精确匹配文件夹名（如 "test_batch/" 不匹配 "test_batch_2/"）
+        return normalizedFilePath.contains('$normalizedCategoryPath/') ||
+            normalizedFilePath.endsWith('/$normalizedCategoryPath');
+      }).toList();
+    } catch (e) {
+      AppLogger.w('Failed to filter by category: $e', 'GalleryFilterService');
       return files;
     }
   }

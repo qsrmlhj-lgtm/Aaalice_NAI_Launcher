@@ -38,6 +38,7 @@ import 'data/services/search_index_service.dart';
 import 'data/services/temp_image_service.dart';
 import 'data/services/thumbnail_service.dart';
 import 'presentation/providers/data_source_cache_provider.dart';
+import 'presentation/providers/online_gallery_blacklist_provider.dart';
 import 'presentation/screens/splash/app_bootstrap.dart';
 
 /// Get localized strings based on the stored locale setting
@@ -444,6 +445,17 @@ void main() async {
     } catch (e) {
       AppLogger.w('Artist tags auto-sync failed: $e', 'Main');
       // 同步失败不影响应用启动
+    }
+  });
+
+  // 启动时自动同步在线画廊黑名单（不阻塞启动）
+  Future.delayed(const Duration(seconds: 8), () async {
+    try {
+      await container
+          .read(onlineGalleryBlacklistNotifierProvider.notifier)
+          .syncOnStartup();
+    } catch (e) {
+      AppLogger.w('Online gallery blacklist auto-sync failed: $e', 'Main');
     }
   });
 

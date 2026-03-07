@@ -58,6 +58,22 @@ class DanbooruApiService {
     return 'Basic ${base64Encode(utf8.encode(credentialsStr))}';
   }
 
+  Map<String, String> _getAuthQueryParams() {
+    final header = _authHeader;
+    if (header == null || !header.startsWith('Basic ')) return const {};
+    try {
+      final decoded = utf8.decode(base64Decode(header.substring(6).trim()));
+      final idx = decoded.indexOf(':');
+      if (idx <= 0 || idx >= decoded.length - 1) return const {};
+      return {
+        'login': decoded.substring(0, idx),
+        'api_key': decoded.substring(idx + 1),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
   // ==================== 用户认证 ====================
 
   Future<DanbooruUser?> verifyCredentials(DanbooruCredentials credentials) async {
@@ -111,6 +127,83 @@ class DanbooruApiService {
       return DanbooruUser.fromJson(response.data as Map<String, dynamic>);
     }
     return null;
+  }
+
+  // ==================== 用户黑名单 ====================
+
+  Future<List<String>> fetchBlacklistedTags() async {
+    if (_authHeader == null) return [];
+
+    final response = await _dio.get(
+      '$_baseUrl$_profileEndpoint',
+      options: Options(
+        receiveTimeout: _timeout,
+        sendTimeout: _timeout,
+        headers: _getHeaders(),
+      ),
+    );
+
+    if (response.data is! Map<String, dynamic>) return [];
+    final profile = response.data as Map<String, dynamic>;
+    final raw = (profile['blacklisted_tags'] ?? '').toString();
+    if (raw.trim().isEmpty) return [];
+
+    return raw
+        .split(RegExp(r'[\s,]+'))
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toList();
+  }
+
+  Future<bool> updateBlacklistedTags(List<String> tags) async {
+    if (_authHeader == null) return false;
+
+    final normalized = tags
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    final user = await getCurrentUser();
+    if (user == null) return false;
+
+    final payload = {
+      'user[blacklisted_tags]': normalized.join('\n'),
+    };
+    final queryAuth = _getAuthQueryParams();
+    final userEndpoint = '$_baseUrl/users/${user.id}.json';
+
+    try {
+      await _dio.put(
+        userEndpoint,
+        queryParameters: queryAuth.isEmpty ? null : queryAuth,
+        data: payload,
+        options: Options(
+          receiveTimeout: _timeout,
+          sendTimeout: _timeout,
+          headers: _getHeaders(),
+          contentType: Headers.formUrlEncodedContentType,
+        ),
+      );
+      return true;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404 || e.response?.statusCode == 405) {
+        await _dio.patch(
+          userEndpoint,
+          queryParameters: queryAuth.isEmpty ? null : queryAuth,
+          data: payload,
+          options: Options(
+            receiveTimeout: _timeout,
+            sendTimeout: _timeout,
+            headers: _getHeaders(),
+            contentType: Headers.formUrlEncodedContentType,
+          ),
+        );
+        return true;
+      }
+      rethrow;
+    }
   }
 
   Future<DanbooruUser?> getUserByName(String username) async {

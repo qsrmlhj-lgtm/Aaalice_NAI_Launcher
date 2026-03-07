@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../widgets/data_source_cache_settings.dart';
+import '../../../widgets/online_gallery/blacklist_settings_panel.dart';
 
 /// 数据源设置板块
 ///
@@ -26,6 +27,15 @@ class _DataSourceSettingsSectionState
   Widget build(BuildContext context) {
     // DataSourceCacheSettings 已有自己的卡片容器样式
     // 不需要使用 SettingsCard 包装，避免双重卡片
-    return const DataSourceCacheSettings();
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DataSourceCacheSettings(),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: OnlineGalleryBlacklistSettingsPanel(),
+        ),
+      ],
+    );
   }
 }

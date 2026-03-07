@@ -213,4 +213,16 @@ class StorageKeys {
 
   // 数据源后台刷新相关
   static const String pendingDataSourceRefresh = 'pending_data_source_refresh';
+
+  // 在线画廊黑名单设置
+  static const String onlineGalleryBlacklistTags =
+      'online_gallery_blacklist_tags';
+  static const String onlineGalleryRemoteBlacklistTags =
+      'online_gallery_remote_blacklist_tags';
+  static const String onlineGalleryBlacklistAutoSync =
+      'online_gallery_blacklist_auto_sync';
+  static const String onlineGalleryBlacklistLastSyncAt =
+      'online_gallery_blacklist_last_sync_at';
+  static const String onlineGalleryBlacklistLastSyncError =
+      'online_gallery_blacklist_last_sync_error';
 }

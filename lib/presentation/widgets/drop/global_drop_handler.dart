@@ -67,6 +67,17 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       formats: Formats.standardFormats,
       hitTestBehavior: HitTestBehavior.opaque,
       onDropOver: (event) {
+        // 检查是否是应用内部拖拽（本地画廊拖拽图片）
+        // 内部拖拽包含 localData，外部拖拽没有
+        final isInternalDrag = event.session.items.any((item) =>
+          item.localData != null,
+        );
+
+        // 如果是内部拖拽，不显示全局覆盖层
+        if (isInternalDrag) {
+          return DropOperation.none;
+        }
+
         // 检查是否包含文件
         if (event.session.allowedOperations.contains(DropOperation.copy)) {
           if (!_isDragging) {

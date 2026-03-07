@@ -539,6 +539,32 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
     await _applyFilters();
   }
 
+  /// 设置选中的分类
+  ///
+  /// [categoryId] 分类ID（null表示全部）
+  /// [categoryFolderPath] 分类的文件夹路径
+  Future<void> setSelectedCategory(String? categoryId, String? categoryFolderPath) async {
+    final criteria = state.filterCriteria;
+
+    // 检查是否有变化
+    if (criteria.categoryId == categoryId &&
+        criteria.categoryFolderPath == categoryFolderPath) {
+      return;
+    }
+
+    _setState(state.copyWith(
+      filterCriteria: criteria.copyWith(
+        categoryId: categoryId,
+        categoryFolderPath: categoryFolderPath,
+        clearCategoryId: categoryId == null,
+        clearCategoryFolderPath: categoryFolderPath == null,
+      ),
+      currentPage: 0,
+    ),);
+
+    await _applyFilters();
+  }
+
   /// 设置分组视图
   Future<void> setGroupedView(bool value) async {
     _setState(state.copyWith(isGroupedView: value));

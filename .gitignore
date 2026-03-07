@@ -170,6 +170,7 @@ logs/security/
 .playwright-mcp/
 .spec-workflow/
 .qoder/
+.codex/
 .kiro
 .claude/
 .gemini/
@@ -235,6 +236,7 @@ VERIFICATION_*.md
 mask_upload_*.md
 flutter/
 flutter_windows.zip
+dist/*.zip
 .claude_settings.json
 docs/plans
 .worktrees/
