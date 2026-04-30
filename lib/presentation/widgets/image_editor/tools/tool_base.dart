@@ -27,6 +27,9 @@ abstract class EditorTool {
   /// 是否是绘画工具
   bool get isPaintTool => false;
 
+  /// 工具是否自行处理 Alt 键（跳过临时拾色器切换）
+  bool get handlesAltKey => false;
+
   /// 指针按下
   void onPointerDown(PointerDownEvent event, EditorState state);
 

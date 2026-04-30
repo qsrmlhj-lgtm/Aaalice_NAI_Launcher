@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -12,6 +11,7 @@ import '../../../core/utils/image_share_sanitizer.dart';
 import '../../../data/models/gallery/local_image_record.dart';
 import '../../../data/services/thumbnail_service.dart';
 import '../../providers/share_image_settings_provider.dart';
+import '../../services/image_workflow_launcher.dart';
 import '../../themes/theme_extension.dart';
 import '../common/app_toast.dart';
 import '../common/floating_action_buttons.dart';
@@ -31,6 +31,7 @@ class LocalImageCard3D extends ConsumerStatefulWidget {
   final bool showFavoriteIndicator;
   final VoidCallback? onFavoriteToggle;
   final VoidCallback? onSendToHome;
+  final VoidCallback? onSendToImg2Img;
   final bool isVisible;
   final int priority;
 
@@ -51,6 +52,7 @@ class LocalImageCard3D extends ConsumerStatefulWidget {
     this.showFavoriteIndicator = true,
     this.onFavoriteToggle,
     this.onSendToHome,
+    this.onSendToImg2Img,
     this.isVisible = false,
     this.priority = 5,
     this.dragWrapper,
@@ -137,15 +139,6 @@ class _LocalImageCard3DState extends ConsumerState<LocalImageCard3D>
         return;
       }
 
-      // 先显示原图，后台生成缩略图
-      // AppLogger.i('[CardLoad] Using original image: $fileName', 'LocalImageCard3D');
-      if (mounted) {
-        setState(() {
-          _displayPath = path;
-          _loadState = _ImageLoadState.loaded;
-        });
-      }
-
       final thumbnailService = ThumbnailService.instance;
       await thumbnailService.initialize();
       thumbnailService.updateVisibility(
@@ -154,24 +147,26 @@ class _LocalImageCard3DState extends ConsumerState<LocalImageCard3D>
         priority: widget.priority,
       );
 
-      // 后台生成缩略图（但不切换到缩略图，避免闪烁）
-      unawaited(
-        thumbnailService
-            .getThumbnail(path,
-                size: ThumbnailSize.small, priority: widget.priority)
-            .then((generatedPath) {
-          if (generatedPath != null && mounted) {
-            final shouldPromoteThumbnail =
-                _displayPath == null || _displayPath == path;
-            setState(() {
-              _thumbnailPath = generatedPath;
-              if (shouldPromoteThumbnail) {
-                _displayPath = generatedPath;
-              }
-            });
-          }
-        }),
+      final generatedPath = await thumbnailService.getThumbnail(
+        path,
+        size: ThumbnailSize.small,
+        priority: widget.priority,
       );
+
+      if (!mounted || widget.record.path != path) return;
+
+      if (generatedPath != null) {
+        setState(() {
+          _thumbnailPath = generatedPath;
+          _displayPath = generatedPath;
+          _loadState = _ImageLoadState.loaded;
+        });
+      } else {
+        setState(() {
+          _displayPath = path;
+          _loadState = _ImageLoadState.loaded;
+        });
+      }
     } catch (e, stack) {
       AppLogger.e('[CardLoad] ERROR: $fileName', e, stack, 'LocalImageCard3D');
       if (mounted) {
@@ -194,6 +189,18 @@ class _LocalImageCard3DState extends ConsumerState<LocalImageCard3D>
     setState(() => _isHovered = false);
   }
 
+  Future<void> _openUpscale() async {
+    try {
+      final bytes = await File(widget.record.path).readAsBytes();
+      if (mounted) {
+        ImageWorkflowLauncher.openUpscale(ref, bytes);
+        AppToast.info(context, '已载入图生图超分面板');
+      }
+    } catch (e) {
+      if (mounted) AppToast.error(context, '读取图像失败: $e');
+    }
+  }
+
   Future<void> _copyImageToClipboard() async {
     File? tempFile;
     try {
@@ -203,8 +210,9 @@ class _LocalImageCard3DState extends ConsumerState<LocalImageCard3D>
         return;
       }
 
-      final stripMetadata =
-          ref.read(shareImageSettingsProvider).stripMetadataForCopyAndDrag;
+      final stripMetadata = ref
+          .read(shareImageSettingsProvider)
+          .effectiveStripMetadataForCopyAndDrag;
       final sourceParts = sourceFile.path.split(RegExp(r'[/\\]'));
       final sourceName =
           sourceParts.isNotEmpty ? sourceParts.last : 'shared.png';
@@ -515,7 +523,8 @@ $image = [System.Drawing.Image]::FromFile("''';
         FloatingActionButtonData(
           icon: Icons.send,
           onTap: () => _showSendToHomeMenu(context),
-          visible: widget.onSendToHome != null,
+          visible:
+              widget.onSendToHome != null || widget.onSendToImg2Img != null,
         ),
       ],
     );
@@ -547,13 +556,15 @@ $image = [System.Drawing.Image]::FromFile("''';
                 widget.onSendToHome!();
               }
             : null,
-        onSendToImg2Img: () {
-          Navigator.of(dialogContext).pop();
-          AppToast.info(dialogContext, '图生图功能制作中');
-        },
+        onSendToImg2Img: widget.onSendToImg2Img != null
+            ? () {
+                Navigator.of(dialogContext).pop();
+                widget.onSendToImg2Img!();
+              }
+            : null,
         onUpscale: () {
           Navigator.of(dialogContext).pop();
-          AppToast.info(dialogContext, '放大功能制作中');
+          _openUpscale();
         },
       ),
     );
@@ -881,8 +892,8 @@ class _SendToHomeMenu extends StatelessWidget {
                     context,
                     icon: Icons.image,
                     label: '图生图',
-                    subtitle: '制作中',
-                    enabled: false,
+                    subtitle: onSendToImg2Img == null ? '不可用' : '载入源图',
+                    enabled: onSendToImg2Img != null,
                     onTap: onSendToImg2Img,
                   ),
                   Divider(height: 1, color: theme.colorScheme.outlineVariant),
@@ -890,8 +901,7 @@ class _SendToHomeMenu extends StatelessWidget {
                     context,
                     icon: Icons.zoom_in,
                     label: '放大',
-                    subtitle: '制作中',
-                    enabled: false,
+                    subtitle: '超分放大',
                     onTap: onUpscale,
                   ),
                 ],

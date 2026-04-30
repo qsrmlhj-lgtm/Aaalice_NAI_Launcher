@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:logger/logger.dart';
@@ -17,6 +18,7 @@ class AppLogger {
   static FileOutput? _fileOutput;
   static bool _initialized = false;
   static bool _isTestEnvironment = false;
+  static bool _fileLoggingEnabled = false;
 
   /// 日志文件最大数量
   static const int _maxLogFiles = 3;
@@ -33,36 +35,128 @@ class AppLogger {
   /// 初始化日志系统
   ///
   /// [isTestEnvironment] - 是否为测试环境（影响日志文件名前缀）
-  static Future<void> initialize({bool isTestEnvironment = false}) async {
-    if (_initialized) return;
+  /// [enableFileLogging] - 是否写入日志文件。应用启动时由设置项控制。
+  static Future<void> initialize({
+    bool isTestEnvironment = false,
+    bool enableFileLogging = true,
+  }) async {
+    if (_initialized) {
+      final environmentChanged = isTestEnvironment != _isTestEnvironment;
+      _isTestEnvironment = isTestEnvironment;
+
+      if (enableFileLogging != _fileLoggingEnabled) {
+        await setFileLoggingEnabled(enableFileLogging);
+      } else if (environmentChanged && _fileLoggingEnabled) {
+        await _recreateFileOutput();
+      }
+      return;
+    }
 
     _isTestEnvironment = isTestEnvironment;
+    _fileLoggingEnabled = enableFileLogging;
 
-    // 设置日志目录
-    await _setupLogDirectory();
+    if (_fileLoggingEnabled) {
+      _fileLoggingEnabled = await _enableFileOutput();
+    }
 
-    // 清理旧日志文件（超大小或超数量）
-    await _cleanupOldLogs();
-
-    // 创建新的日志文件
-    await _createNewLogFile();
-
-    // 初始化 Logger - 同时输出到控制台和文件
-    _logger = Logger(
-      filter: ProductionFilter(), // Release 模式下也能输出日志
-      printer: SimplePrinter(printTime: true),
-      level: Level.all,
-      output: MultiOutput([
-        ConsoleOutput(),  // 控制台输出
-        _fileOutput!,     // 文件输出
-      ]),
-    );
+    _logger = _buildLogger();
 
     _initialized = true;
 
     i('日志系统初始化完成', 'AppLogger');
-    i('日志文件: $_currentLogFile', 'AppLogger');
+    if (_fileLoggingEnabled) {
+      i('日志文件: $_currentLogFile', 'AppLogger');
+    } else {
+      i('文件日志记录已关闭', 'AppLogger');
+    }
     i('运行环境: ${_isTestEnvironment ? "测试" : "正式"}', 'AppLogger');
+  }
+
+  static Logger _buildLogger() {
+    final outputs = <LogOutput>[ConsoleOutput()];
+    if (_fileLoggingEnabled && _fileOutput != null) {
+      outputs.add(_fileOutput!);
+    }
+
+    return Logger(
+      filter: ProductionFilter(), // Release 模式下也能输出日志
+      printer: SimplePrinter(printTime: true),
+      level: Level.all,
+      output: outputs.length == 1 ? outputs.first : MultiOutput(outputs),
+    );
+  }
+
+  static Future<bool> _enableFileOutput() async {
+    try {
+      await _setupLogDirectory();
+      await _cleanupOldLogs();
+      await _createNewLogFile();
+      return _fileOutput != null;
+    } catch (_) {
+      await _fileOutput?.destroy();
+      _fileOutput = null;
+      _currentLogFile = null;
+      return false;
+    }
+  }
+
+  static Future<void> _recreateFileOutput() async {
+    final oldFileOutput = _fileOutput;
+    _fileOutput = null;
+    _currentLogFile = null;
+
+    await oldFileOutput?.destroy();
+
+    _fileLoggingEnabled = await _enableFileOutput();
+    _logger = _buildLogger();
+
+    if (_fileLoggingEnabled) {
+      i('日志文件: $_currentLogFile', 'AppLogger');
+    } else {
+      w('文件日志记录重新初始化失败，已回退到控制台日志', 'AppLogger');
+    }
+  }
+
+  /// 当前是否启用文件日志记录。
+  static bool get fileLoggingEnabled => _fileLoggingEnabled;
+
+  /// 即时开启或关闭文件日志记录。
+  static Future<void> setFileLoggingEnabled(bool enabled) async {
+    if (!_initialized) {
+      await initialize(
+        isTestEnvironment: _isTestEnvironment,
+        enableFileLogging: enabled,
+      );
+      return;
+    }
+
+    if (enabled == _fileLoggingEnabled) return;
+
+    if (enabled) {
+      _fileLoggingEnabled = true;
+      _fileLoggingEnabled = await _enableFileOutput();
+      _logger = _buildLogger();
+
+      if (_fileLoggingEnabled) {
+        i('文件日志记录已开启', 'AppLogger');
+        i('日志文件: $_currentLogFile', 'AppLogger');
+      } else {
+        w('文件日志记录开启失败，已回退到控制台日志', 'AppLogger');
+      }
+      return;
+    }
+
+    i('文件日志记录即将关闭', 'AppLogger');
+    await flush();
+
+    final oldFileOutput = _fileOutput;
+    _fileOutput = null;
+    _currentLogFile = null;
+    _fileLoggingEnabled = false;
+    _logger = _buildLogger();
+
+    await oldFileOutput?.destroy();
+    i('文件日志记录已关闭', 'AppLogger');
   }
 
   /// 设置日志目录
@@ -201,7 +295,11 @@ class AppLogger {
 
   /// 检查并轮转日志文件（如果超过100MB则创建新文件）
   static void _checkAndRotateLogFile() {
-    if (_currentLogFile == null) return;
+    if (!_fileLoggingEnabled ||
+        _currentLogFile == null ||
+        _logDirectory == null) {
+      return;
+    }
 
     try {
       final file = File(_currentLogFile!);
@@ -225,15 +323,7 @@ class AppLogger {
           _fileOutput!.init();
 
           // 更新 logger 的输出 - 同时输出到控制台和文件
-          _logger = Logger(
-            filter: ProductionFilter(),
-            printer: SimplePrinter(printTime: true),
-            level: Level.all,
-            output: MultiOutput([
-              ConsoleOutput(),  // 控制台输出
-              _fileOutput!,     // 文件输出
-            ]),
-          );
+          _logger = _buildLogger();
         }
       }
     } catch (e) {
@@ -289,6 +379,19 @@ class AppLogger {
     _ensureInitialized();
     final tagPrefix = tag != null ? '[$tag] ' : '';
     _logger!.e('$tagPrefix$message', error: error, stackTrace: stackTrace);
+    unawaited(flush());
+  }
+
+  /// Flush buffered file logs. This is intentionally explicit so normal
+  /// debug/info logging stays buffered and cheap.
+  static Future<void> flush() async {
+    if (!_fileLoggingEnabled) return;
+
+    try {
+      await _fileOutput?.flush();
+    } catch (_) {
+      // Logging must never become the source of application failures.
+    }
   }
 
   /// 网络请求日志
@@ -377,7 +480,7 @@ class AppLogger {
 }
 
 /// 文件日志输出
-/// 
+///
 /// 【修复】使用同步写入 + 定时刷新，避免日志截断和格式问题
 class FileOutput extends LogOutput {
   final File file;
@@ -405,7 +508,7 @@ class FileOutput extends LogOutput {
   @override
   void output(OutputEvent event) {
     if (_sink == null || _isDestroyed) return;
-    
+
     try {
       // 【修复】逐行写入，避免 join 导致的格式问题
       for (final line in event.lines) {

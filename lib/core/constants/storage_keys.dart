@@ -34,6 +34,7 @@ class StorageKeys {
   static const String fontFamily = 'font_family';
   static const String fontScale = 'font_scale';
   static const String locale = 'locale';
+  static const String fileLoggingEnabled = 'file_logging_enabled';
 
   // Window State Keys (窗口状态)
   static const String windowWidth = 'window_width';
@@ -166,6 +167,8 @@ class StorageKeys {
   static const String tagLibraryEntriesData = 'tag_library_entries_data';
   static const String tagLibraryCategoriesData = 'tag_library_categories_data';
   static const String tagLibraryViewMode = 'tag_library_view_mode';
+  static const String tagLibraryPickerCategoryId =
+      'tag_library_picker_category_id';
 
   // Statistics Cache (统计数据缓存)
   static const String statisticsCacheBox = 'statistics_cache';
@@ -200,23 +203,27 @@ class StorageKeys {
       'enable_cooccurrence_recommendation';
 
   // Prompt Assistant
-  static const String promptAssistantConfigJson = 'prompt_assistant_config_json';
-  static const String promptAssistantApiKeyPrefix =
-      'prompt_assistant_api_key_';
+  static const String promptAssistantConfigJson =
+      'prompt_assistant_config_json';
+  static const String promptAssistantApiKeyPrefix = 'prompt_assistant_api_key_';
 
   // Danbooru 画师同步设置
   // 分类阈值配置（V2新增）
-  static const String danbooruCategoryThresholds = 'danbooru_category_thresholds';
-  
+  static const String danbooruCategoryThresholds =
+      'danbooru_category_thresholds';
+
   // 五个类别的独立热度阈值
   static const String danbooruGeneralThreshold = 'danbooru_general_threshold';
   static const String danbooruArtistThreshold = 'danbooru_artist_threshold';
-  static const String danbooruCharacterThreshold = 'danbooru_character_threshold';
-  static const String danbooruCopyrightThreshold = 'danbooru_copyright_threshold';
+  static const String danbooruCharacterThreshold =
+      'danbooru_character_threshold';
+  static const String danbooruCopyrightThreshold =
+      'danbooru_copyright_threshold';
   static const String danbooruMetaThreshold = 'danbooru_meta_threshold';
 
   // 共现数据刷新间隔
-  static const String cooccurrenceRefreshInterval = 'cooccurrence_refresh_interval';
+  static const String cooccurrenceRefreshInterval =
+      'cooccurrence_refresh_interval';
 
   // 数据源后台刷新相关
   static const String pendingDataSourceRefresh = 'pending_data_source_refresh';
@@ -232,4 +239,51 @@ class StorageKeys {
       'online_gallery_blacklist_last_sync_at';
   static const String onlineGalleryBlacklistLastSyncError =
       'online_gallery_blacklist_last_sync_error';
+
+  // ComfyUI 设置
+  static const String comfyuiEnabled = 'comfyui_enabled';
+  static const String comfyuiServerUrl = 'comfyui_server_url';
+  static const String comfyuiUpscaleModel = 'comfyui_upscale_model';
+  static const String comfyuiUpscaleRegularModel =
+      'comfyui_upscale_regular_model';
+  static const String comfyuiUpscaleSeedvr2Model =
+      'comfyui_upscale_seedvr2_model';
+  static const String comfyuiUpscaleScale = 'comfyui_upscale_scale';
+  static const String comfyuiUpscaleBackend = 'comfyui_upscale_backend';
+  static const String comfyuiUpscaleModule = 'comfyui_upscale_module';
+  static const String comfyuiSeedvr2VaeTileSize =
+      'comfyui_seedvr2_vae_tile_size';
+  static const String comfyuiSeedvr2Tiled = 'comfyui_seedvr2_tiled';
+  static const String comfyuiSeedvr2TileSize = 'comfyui_seedvr2_tile_size';
+
+  // 工作流设置
+  static const String workflowEnhanceMagnitude = 'workflow_enhance_magnitude';
+  static const String workflowEnhanceShowIndividualSettings =
+      'workflow_enhance_show_individual_settings';
+  static const String workflowEnhanceUpscaleFactor =
+      'workflow_enhance_upscale_factor';
+  static const String workflowEnhanceStrength = 'workflow_enhance_strength';
+  static const String workflowEnhanceNoise = 'workflow_enhance_noise';
+
+  // 反推/本地模型设置
+  static const String reversePromptStateJson = 'reverse_prompt_state_json';
+  static const String reversePromptCharacterConfigJson =
+      'reverse_prompt_character_config_json';
+  static const String onnxTaggerModelDirectory = 'onnx_tagger_model_directory';
+
+  // 保护模式设置
+  static const String protectionMode = 'protection_mode';
+  static const String protectionConfirmDangerousActions =
+      'protection_confirm_dangerous_actions';
+  static const String protectionWarnExternalImageSend =
+      'protection_warn_external_image_send';
+  static const String protectionPreventOverwrite =
+      'protection_prevent_overwrite';
+  static const String protectionWarnHighAnlasCost =
+      'protection_warn_high_anlas_cost';
+  static const String protectionHighAnlasCostThreshold =
+      'protection_high_anlas_cost_threshold';
+
+  // 旧版资产保护 key，保留读取兼容。
+  static const String assetProtectionMode = 'asset_protection_mode';
 }

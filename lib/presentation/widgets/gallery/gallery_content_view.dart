@@ -2,11 +2,16 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../data/models/gallery/local_image_record.dart';
 import '../../providers/local_gallery_provider.dart';
+import '../../providers/reverse_prompt_provider.dart';
+import '../../router/app_router.dart';
+import '../../services/image_workflow_launcher.dart';
 import '../../providers/selection_mode_provider.dart';
+import '../common/app_toast.dart';
 import '../../widgets/grouped_grid_view.dart';
 import '../../utils/image_detail_opener.dart';
 import 'local_image_card_3d.dart';
@@ -88,6 +93,7 @@ class GenericGalleryContentView<T> extends ConsumerStatefulWidget {
   final GlobalKey<GroupedGridViewState>? groupedGridViewKey;
   final Gallery3DViewConfig<T>? view3DConfig;
   final void Function(LocalImageRecord record)? onSendToHome;
+  final void Function(LocalImageRecord record)? onSendToImg2Img;
   final String? emptyTitle;
   final String? emptySubtitle;
   final IconData? emptyIcon;
@@ -115,6 +121,7 @@ class GenericGalleryContentView<T> extends ConsumerStatefulWidget {
     this.groupedGridViewKey,
     this.view3DConfig,
     this.onSendToHome,
+    this.onSendToImg2Img,
     this.emptyTitle,
     this.emptySubtitle,
     this.emptyIcon,
@@ -299,6 +306,9 @@ class _GenericGalleryContentViewState<T>
             onSendToHome: widget.onSendToHome != null
                 ? () => widget.onSendToHome!(record)
                 : null,
+            onSendToImg2Img: widget.onSendToImg2Img != null
+                ? () => widget.onSendToImg2Img!(record)
+                : null,
           ),
         );
       },
@@ -428,6 +438,9 @@ class _GenericGalleryContentViewState<T>
       onSendToHome: widget.onSendToHome != null
           ? (record, index) => widget.onSendToHome!(record)
           : null,
+      onSendToImg2Img: widget.onSendToImg2Img != null
+          ? (record, index) => widget.onSendToImg2Img!(record)
+          : null,
     );
   }
 
@@ -547,6 +560,36 @@ class LocalGalleryContentView extends ConsumerWidget {
           onFavoriteToggle: (data) => ref
               .read(localGalleryNotifierProvider.notifier)
               .toggleFavorite((data as LocalImageDetailData).record.path),
+          onSendToImg2Img: (data) async {
+            try {
+              final bytes = await data.getImageBytes();
+              ImageWorkflowLauncher.openImageToImage(ref, bytes);
+              if (!context.mounted) return;
+              Navigator.of(context).pop();
+              context.go(AppRoutes.home);
+              AppToast.success(context, '图片已发送到图生图');
+            } catch (e) {
+              if (context.mounted) {
+                AppToast.error(context, '发送失败: $e');
+              }
+            }
+          },
+          onSendToReversePrompt: (data) async {
+            try {
+              await ref.read(reversePromptProvider.notifier).addImage(
+                    await data.getImageBytes(),
+                    name: data.fileInfo?.fileName ?? 'gallery-image',
+                  );
+              if (!context.mounted) return;
+              Navigator.of(context).pop();
+              context.go(AppRoutes.home);
+              AppToast.success(context, '图片已发送到反推模块');
+            } catch (e) {
+              if (context.mounted) {
+                AppToast.error(context, '发送失败: $e');
+              }
+            }
+          },
         ),
       );
     }
@@ -572,6 +615,8 @@ class LocalGalleryContentView extends ConsumerWidget {
             .toggleFavorite(record.path),
         onSendToHome:
             onReuseMetadata != null ? () => onReuseMetadata!(record) : null,
+        onSendToImg2Img:
+            onSendToImg2Img != null ? () => onSendToImg2Img!(record) : null,
       ),
       onSelectionToggle: (record) => ref
           .read(localGallerySelectionNotifierProvider.notifier)
@@ -596,6 +641,7 @@ class LocalGalleryContentView extends ConsumerWidget {
         showDetailViewer: showImageDetailViewer,
       ),
       onSendToHome: onReuseMetadata,
+      onSendToImg2Img: onSendToImg2Img,
     );
   }
 }

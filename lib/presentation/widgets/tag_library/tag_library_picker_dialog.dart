@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 
+import '../../../core/constants/storage_keys.dart';
+import '../../../core/storage/local_storage_service.dart';
 import '../../../data/models/tag_library/tag_library_category.dart';
 import '../../../data/models/tag_library/tag_library_entry.dart';
 import '../../providers/tag_library_page_provider.dart';
@@ -28,6 +32,17 @@ class _TagLibraryPickerDialogState
     extends ConsumerState<TagLibraryPickerDialog> {
   String _searchQuery = '';
   String? _selectedCategoryId;
+
+  @override
+  void initState() {
+    super.initState();
+    final savedCategoryId = ref
+        .read(localStorageServiceProvider)
+        .getSetting<String>(StorageKeys.tagLibraryPickerCategoryId);
+    if (savedCategoryId != null && savedCategoryId.isNotEmpty) {
+      _selectedCategoryId = savedCategoryId;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +107,7 @@ class _TagLibraryPickerDialogState
   }
 
   Widget _buildFilterBar(ThemeData theme, TagLibraryPageState state) {
+    final selectedCategoryId = _effectiveSelectedCategoryId(state);
     return Row(
       children: [
         // 搜索框
@@ -121,7 +137,7 @@ class _TagLibraryPickerDialogState
         Expanded(
           flex: 1,
           child: DropdownButtonFormField<String?>(
-            value: _selectedCategoryId,
+            value: selectedCategoryId,
             decoration: InputDecoration(
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
@@ -148,9 +164,7 @@ class _TagLibraryPickerDialogState
                 ),
               ),
             ],
-            onChanged: (value) {
-              setState(() => _selectedCategoryId = value);
-            },
+            onChanged: _setSelectedCategory,
           ),
         ),
       ],
@@ -160,12 +174,13 @@ class _TagLibraryPickerDialogState
   Widget _buildEntryGrid(ThemeData theme, TagLibraryPageState state) {
     // 过滤条目
     var entries = state.entries.toList();
+    final selectedCategoryId = _effectiveSelectedCategoryId(state);
 
     // 按分类筛选
-    if (_selectedCategoryId != null) {
+    if (selectedCategoryId != null) {
       final categoryIds = {
-        _selectedCategoryId!,
-        ...state.categories.getDescendantIds(_selectedCategoryId!),
+        selectedCategoryId,
+        ...state.categories.getDescendantIds(selectedCategoryId),
       };
       entries =
           entries.where((e) => categoryIds.contains(e.categoryId)).toList();
@@ -175,6 +190,7 @@ class _TagLibraryPickerDialogState
     if (_searchQuery.isNotEmpty) {
       entries = entries.search(_searchQuery);
     }
+    entries = _sortFavoritesFirst(entries);
 
     if (entries.isEmpty) {
       return Center(
@@ -230,6 +246,42 @@ class _TagLibraryPickerDialogState
       ],
     );
   }
+
+  String? _effectiveSelectedCategoryId(TagLibraryPageState state) {
+    final selected = _selectedCategoryId;
+    if (selected == null) return null;
+    return state.categories.any((category) => category.id == selected)
+        ? selected
+        : null;
+  }
+
+  void _setSelectedCategory(String? value) {
+    setState(() => _selectedCategoryId = value);
+    final storage = ref.read(localStorageServiceProvider);
+    if (value == null) {
+      unawaited(storage.deleteSetting(StorageKeys.tagLibraryPickerCategoryId));
+    } else {
+      unawaited(
+        storage.setSetting(StorageKeys.tagLibraryPickerCategoryId, value),
+      );
+    }
+  }
+
+  List<TagLibraryEntry> _sortFavoritesFirst(List<TagLibraryEntry> entries) {
+    if (!entries.any((entry) => entry.isFavorite)) {
+      return entries;
+    }
+    final favorites = <TagLibraryEntry>[];
+    final others = <TagLibraryEntry>[];
+    for (final entry in entries) {
+      if (entry.isFavorite) {
+        favorites.add(entry);
+      } else {
+        others.add(entry);
+      }
+    }
+    return [...favorites, ...others];
+  }
 }
 
 /// 条目选择卡片
@@ -267,14 +319,14 @@ class _EntrySelectCardState extends State<_EntrySelectCard> {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: _isHovering
-                  ? theme.colorScheme.primary.withOpacity(0.5)
-                  : theme.colorScheme.outlineVariant.withOpacity(0.2),
+                  ? theme.colorScheme.primary.withValues(alpha: 0.5)
+                  : theme.colorScheme.outlineVariant.withValues(alpha: 0.2),
               width: 1.5,
             ),
             boxShadow: _isHovering
                 ? [
                     BoxShadow(
-                      color: theme.colorScheme.primary.withOpacity(0.15),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.15),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -333,7 +385,7 @@ class _EntrySelectCardState extends State<_EntrySelectCard> {
               borderRadius:
                   const BorderRadius.vertical(top: Radius.circular(11)),
               child: Container(
-                color: theme.colorScheme.primary.withOpacity(0.1),
+                color: theme.colorScheme.primary.withValues(alpha: 0.1),
                 child: Center(
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -398,7 +450,7 @@ class _EntrySelectCardState extends State<_EntrySelectCard> {
         child: Icon(
           Icons.image_outlined,
           size: 32,
-          color: theme.colorScheme.outline.withOpacity(0.5),
+          color: theme.colorScheme.outline.withValues(alpha: 0.5),
         ),
       ),
     );

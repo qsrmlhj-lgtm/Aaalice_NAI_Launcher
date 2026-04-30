@@ -10,6 +10,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint_service.dart';
 import '../../../core/network/request_builders/nai_image_request_builder.dart';
 import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/focused_inpaint_utils.dart';
@@ -26,8 +27,13 @@ part 'nai_image_generation_api_service.g.dart';
 class NAIImageGenerationApiService {
   final Dio _dio;
   final NAIImageEnhancementApiService _enhancementService;
+  final NaiApiEndpointService _endpointService;
 
-  NAIImageGenerationApiService(this._dio, this._enhancementService);
+  NAIImageGenerationApiService(
+    this._dio,
+    this._enhancementService,
+    this._endpointService,
+  );
 
   // ==================== 采样器映射 ====================
 
@@ -251,7 +257,7 @@ class NAIImageGenerationApiService {
 
       // 5. 发送请求
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.generateImageEndpoint}',
+        _endpointService.imageUrl(ApiConstants.generateImageEndpoint),
         data: requestData,
         cancelToken: _currentCancelToken,
         onReceiveProgress: onProgress,
@@ -463,7 +469,7 @@ class NAIImageGenerationApiService {
 
       // 3. 发送流式请求
       final response = await _dio.post<ResponseBody>(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.generateImageStreamEndpoint}',
+        _endpointService.imageUrl(ApiConstants.generateImageStreamEndpoint),
         data: requestData,
         cancelToken: _currentCancelToken,
         options: Options(
@@ -784,5 +790,10 @@ class NAIImageGenerationApiService {
 NAIImageGenerationApiService naiImageGenerationApiService(Ref ref) {
   final dio = ref.watch(dioClientProvider);
   final enhancementService = ref.watch(naiImageEnhancementApiServiceProvider);
-  return NAIImageGenerationApiService(dio, enhancementService);
+  final endpointService = ref.watch(naiApiEndpointServiceProvider);
+  return NAIImageGenerationApiService(
+    dio,
+    enhancementService,
+    endpointService,
+  );
 }

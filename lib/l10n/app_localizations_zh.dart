@@ -1313,6 +1313,36 @@ class AppLocalizationsZh extends AppLocalizations {
   String get img2img_directorApplied => '已将导演工具结果设为新的源图';
 
   @override
+  String get img2img_directorDefry => 'Defry';
+
+  @override
+  String get img2img_directorDefryHint => '降低结果中的噪声或过饱和程度（0 = 关闭，5 = 最强）';
+
+  @override
+  String get img2img_directorEmotionLevel => '表情强度';
+
+  @override
+  String get img2img_directorEmotionLevelHint => 'AI 改变表情的力度（0 = 轻微，5 = 强烈）';
+
+  @override
+  String get img2img_directorEmotionPresets => '快速预设';
+
+  @override
+  String get img2img_directorApplyAsSource => '设为源图';
+
+  @override
+  String get img2img_directorSave => '保存';
+
+  @override
+  String get img2img_directorSourceImage => '源图';
+
+  @override
+  String get img2img_directorCompare => '对比';
+
+  @override
+  String get img2img_variationsStarted => '正在生成变体...';
+
+  @override
   String get img2img_directorRemoveBackground => '背景移除';
 
   @override
@@ -1350,6 +1380,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editor_done => '完成';
+
+  @override
+  String get editor_tolerance => '容差';
+
+  @override
+  String get editor_intensity => '强度';
+
+  @override
+  String get editor_sourcePoint => 'Alt+点击设置源点';
 
   @override
   String get editor_saveAndClose => '保存并关闭';
@@ -7442,6 +7481,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get selection_invert_selection => '反转选区';
+
+  @override
+  String get selection_cut_to_layer => '剪切到新图层';
 
   @override
   String get search_results => '搜索结果';

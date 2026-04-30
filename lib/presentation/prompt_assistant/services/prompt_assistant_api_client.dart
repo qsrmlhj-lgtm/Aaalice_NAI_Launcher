@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/utils/app_logger.dart';
 import '../models/prompt_assistant_models.dart';
 
 class PromptAssistantApiClient {
@@ -73,11 +74,7 @@ class PromptAssistantApiClient {
     required String sessionId,
     required ProviderConfig provider,
     required String model,
-    required List<Map<String, String>> messages,
-    required double temperature,
-    required double topP,
-    required int maxTokens,
-    required bool advancedParams,
+    required List<Map<String, dynamic>> messages,
     required String? apiKey,
   }) async* {
     _cancelTokens.remove(sessionId)?.cancel('replaced by new request');
@@ -87,15 +84,9 @@ class PromptAssistantApiClient {
     final endpoint = _resolveEndpoint(provider);
     final payload = <String, dynamic>{
       'model': model,
-      'stream': true,
+      'stream': false,
       'messages': messages,
     };
-
-    if (advancedParams) {
-      payload['temperature'] = temperature;
-      payload['top_p'] = topP;
-      payload['max_tokens'] = maxTokens;
-    }
 
     final headers = <String, dynamic>{
       'Content-Type': 'application/json',
@@ -105,13 +96,16 @@ class PromptAssistantApiClient {
     }
 
     try {
-      Response<ResponseBody> response;
+      AppLogger.d(
+        'request start provider=${provider.id} type=${provider.type.name} model=$model endpoint=$endpoint messages=${messages.length} stream=false',
+        'PromptAssistant',
+      );
+      Response<dynamic> response;
       try {
-        response = await _dio.post<ResponseBody>(
+        response = await _dio.post<dynamic>(
           endpoint,
           data: payload,
           options: Options(
-            responseType: ResponseType.stream,
             headers: headers,
             sendTimeout: const Duration(seconds: 30),
             receiveTimeout: const Duration(minutes: 2),
@@ -123,14 +117,13 @@ class PromptAssistantApiClient {
         if (e.response?.statusCode == 400) {
           final degradedPayload = {
             'model': model,
-            'stream': true,
+            'stream': false,
             'messages': messages,
           };
-          response = await _dio.post<ResponseBody>(
+          response = await _dio.post<dynamic>(
             endpoint,
             data: degradedPayload,
             options: Options(
-              responseType: ResponseType.stream,
               headers: headers,
               sendTimeout: const Duration(seconds: 30),
               receiveTimeout: const Duration(minutes: 2),
@@ -142,42 +135,22 @@ class PromptAssistantApiClient {
         }
       }
 
-      final stream = response.data?.stream;
-      if (stream == null) {
-        yield const StreamingChunk(delta: '', done: true);
-        return;
+      final content = _extractResponseContent(response.data).trim();
+      if (content.isEmpty) {
+        AppLogger.w(
+          'empty non-stream response provider=${provider.id} model=$model status=${response.statusCode} body=${_previewBody(response.data.toString())}',
+          'PromptAssistant',
+        );
+        throw StateError(
+          'LLM 服务返回空内容：provider=${provider.name}, model=$model, status=${response.statusCode}',
+        );
       }
 
-      final buffer = StringBuffer();
-
-      await for (final bytes in stream) {
-        final text = utf8.decode(bytes, allowMalformed: true);
-        buffer.write(text);
-        var content = buffer.toString();
-        var breakIndex = content.indexOf('\n');
-        while (breakIndex >= 0) {
-          final line = content.substring(0, breakIndex).trim();
-          content = content.substring(breakIndex + 1);
-          if (line.startsWith('data:')) {
-            final data = line.substring(5).trim();
-            if (data == '[DONE]') {
-              yield const StreamingChunk(delta: '', done: true);
-              return;
-            }
-            if (data.isNotEmpty) {
-              final delta = _extractDelta(data);
-              if (delta.isNotEmpty) {
-                yield StreamingChunk(delta: delta);
-              }
-            }
-          }
-          breakIndex = content.indexOf('\n');
-        }
-        buffer
-          ..clear()
-          ..write(content);
-      }
-
+      AppLogger.d(
+        'response done provider=${provider.id} model=$model outputLen=${content.length} output=${_previewBody(content)}',
+        'PromptAssistant',
+      );
+      yield StreamingChunk(delta: content);
       yield const StreamingChunk(delta: '', done: true);
     } finally {
       if (identical(_cancelTokens[sessionId], cancelToken)) {
@@ -204,26 +177,128 @@ class PromptAssistantApiClient {
   String _extractDelta(String jsonLine) {
     try {
       final obj = jsonDecode(jsonLine) as Map<String, dynamic>;
+      final error = _extractErrorMessage(obj);
+      if (error != null) {
+        throw StateError('LLM 服务返回错误：$error');
+      }
       final choices = obj['choices'];
       if (choices is List && choices.isNotEmpty) {
         final first = choices.first;
         if (first is Map<String, dynamic>) {
           final delta = first['delta'];
           if (delta is Map<String, dynamic>) {
-            return (delta['content'] as String?) ?? '';
+            return _contentToText(delta['content']);
           }
           final message = first['message'];
           if (message is Map<String, dynamic>) {
-            return (message['content'] as String?) ?? '';
+            return _contentToText(message['content']);
           }
+          return _contentToText(first['text']);
         }
       }
+      final message = obj['message'];
+      if (message is Map<String, dynamic>) {
+        return _contentToText(message['content']);
+      }
       final text = obj['text'];
-      if (text is String) return text;
+      final textContent = _contentToText(text);
+      if (textContent.isNotEmpty) return textContent;
+      final response = obj['response'];
+      final responseContent = _contentToText(response);
+      if (responseContent.isNotEmpty) return responseContent;
+      final outputText = obj['output_text'];
+      return _contentToText(outputText);
+    } on StateError {
+      rethrow;
     } catch (_) {
       // ignore parse errors in incomplete frames
     }
     return '';
+  }
+
+  ({String delta, bool done}) _parseStreamLine(String line) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) {
+      return (delta: '', done: false);
+    }
+
+    final data =
+        trimmed.startsWith('data:') ? trimmed.substring(5).trim() : trimmed;
+    if (data == '[DONE]') {
+      return (delta: '', done: true);
+    }
+    if (data.isEmpty || !data.startsWith('{')) {
+      return (delta: '', done: false);
+    }
+
+    return (delta: _extractDelta(data), done: false);
+  }
+
+  String _extractFullContent(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) {
+      return '';
+    }
+
+    final deltas = <String>[];
+    for (final line in const LineSplitter().convert(text)) {
+      final parsed = _parseStreamLine(line);
+      if (parsed.delta.isNotEmpty) {
+        deltas.add(parsed.delta);
+      }
+    }
+    if (deltas.isNotEmpty) {
+      return deltas.join();
+    }
+
+    return _extractDelta(text);
+  }
+
+  String _extractResponseContent(dynamic raw) {
+    if (raw is Map) {
+      return _extractDelta(jsonEncode(raw));
+    }
+    if (raw is String) {
+      return _extractFullContent(raw);
+    }
+    return _contentToText(raw);
+  }
+
+  String? _extractErrorMessage(Map<String, dynamic> obj) {
+    final error = obj['error'];
+    if (error is String && error.trim().isNotEmpty) {
+      return error.trim();
+    }
+    if (error is Map<String, dynamic>) {
+      final message = error['message'] ?? error['error'] ?? error['type'];
+      if (message is String && message.trim().isNotEmpty) {
+        return message.trim();
+      }
+    }
+    return null;
+  }
+
+  String _contentToText(dynamic content) {
+    if (content is String) {
+      return content;
+    }
+    if (content is List) {
+      return content.map(_contentToText).where((e) => e.isNotEmpty).join();
+    }
+    if (content is Map) {
+      return _contentToText(
+        content['text'] ?? content['content'] ?? content['value'],
+      );
+    }
+    return '';
+  }
+
+  String _previewBody(String raw) {
+    final normalized = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.length <= 300) {
+      return normalized;
+    }
+    return '${normalized.substring(0, 300)}...';
   }
 
   String _normalizedBase(ProviderConfig provider) {

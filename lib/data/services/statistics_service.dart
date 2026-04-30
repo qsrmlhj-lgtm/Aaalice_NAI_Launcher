@@ -85,7 +85,7 @@ class StatisticsService {
     for (final record in records) {
       final width = record.metadata?.width;
       final height = record.metadata?.height;
-      if (width != null && height != null) {
+      if (width != null && height != null && width > 0 && height > 0) {
         final resolution = '${width}x$height';
         counts[resolution] = (counts[resolution] ?? 0) + 1;
       }
@@ -94,8 +94,8 @@ class StatisticsService {
     return _sortedStatistics<ResolutionStatistics>(
       counts,
       totalImages,
-      (label, count, percentage) =>
-          ResolutionStatistics(label: label, count: count, percentage: percentage),
+      (label, count, percentage) => ResolutionStatistics(
+          label: label, count: count, percentage: percentage),
     );
   }
 
@@ -109,8 +109,8 @@ class StatisticsService {
     return _sortedStatistics<ModelStatistics>(
       counts,
       totalImages,
-      (label, count, percentage) =>
-          ModelStatistics(modelName: label, count: count, percentage: percentage),
+      (label, count, percentage) => ModelStatistics(
+          modelName: label, count: count, percentage: percentage),
     );
   }
 
@@ -132,8 +132,8 @@ class StatisticsService {
     return _sortedStatistics<SamplerStatistics>(
       counts,
       totalImages,
-      (label, count, percentage) =>
-          SamplerStatistics(samplerName: label, count: count, percentage: percentage),
+      (label, count, percentage) => SamplerStatistics(
+          samplerName: label, count: count, percentage: percentage),
     );
   }
 
@@ -175,7 +175,8 @@ class StatisticsService {
         .replaceAll('k_', '')
         .replaceAll('_', ' ')
         .split(' ')
-        .map((word) => word.isNotEmpty ? word[0].toUpperCase() + word.substring(1) : '')
+        .map((word) =>
+            word.isNotEmpty ? word[0].toUpperCase() + word.substring(1) : '')
         .join(' ');
   }
 
@@ -260,7 +261,8 @@ class StatisticsService {
       'Statistics',
     );
 
-    return compute(_computeTimeTrendsIsolate, _TimeTrendParams(records, groupBy));
+    return compute(
+        _computeTimeTrendsIsolate, _TimeTrendParams(records, groupBy));
   }
 
   /// 异步计算标签使用统计
@@ -273,7 +275,8 @@ class StatisticsService {
       'Statistics',
     );
 
-    return compute(_computeTagStatisticsIsolate, _TagStatisticsParams(records, limit));
+    return compute(
+        _computeTagStatisticsIsolate, _TagStatisticsParams(records, limit));
   }
 
   /// 异步计算参数分布统计
@@ -324,7 +327,8 @@ class StatisticsService {
       'Statistics',
     );
 
-    return compute(_computeRecentActivityIsolate, _RecentActivityParams(records, days));
+    return compute(
+        _computeRecentActivityIsolate, _RecentActivityParams(records, days));
   }
 }
 
@@ -482,7 +486,8 @@ List<ParameterStatistics> _computeParameterDistributionIsolate(
       final value = _getParamValue(metadata, paramName);
       if (value != null && value.isNotEmpty) {
         paramCounts.putIfAbsent(paramName, () => {});
-        paramCounts[paramName]![value] = (paramCounts[paramName]![value] ?? 0) + 1;
+        paramCounts[paramName]![value] =
+            (paramCounts[paramName]![value] ?? 0) + 1;
       }
     }
   }
@@ -546,7 +551,8 @@ Map<String, dynamic> _computeFavoritesStatisticsIsolate(
     'totalSizeBytes': totalSize,
     'averageSizeBytes': averageSize,
     'favoriteByDate': favoriteByDate,
-    'percentage': records.isNotEmpty ? (favoriteCount / records.length) * 100 : 0.0,
+    'percentage':
+        records.isNotEmpty ? (favoriteCount / records.length) * 100 : 0.0,
   };
 }
 

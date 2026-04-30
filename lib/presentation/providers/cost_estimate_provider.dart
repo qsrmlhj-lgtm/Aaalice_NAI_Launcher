@@ -2,11 +2,77 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/services/anlas_calculator.dart';
+import '../../core/utils/focused_inpaint_utils.dart';
 import '../../data/models/image/image_params.dart';
 import 'image_generation_provider.dart';
+import 'generation/image_workflow_controller.dart';
 import 'subscription_provider.dart';
 
 part 'cost_estimate_provider.g.dart';
+
+class _GenerationCostInput {
+  const _GenerationCostInput({
+    required this.width,
+    required this.height,
+    required this.strength,
+  });
+
+  final int width;
+  final int height;
+  final double strength;
+}
+
+int _resolvePreciseReferenceExtraCost(ImageParams params) {
+  if (!params.model.contains('diffusion-4-5')) {
+    return 0;
+  }
+  return params.preciseReferences.length * 5;
+}
+
+_GenerationCostInput _resolveGenerationCostInput(
+  ImageParams params,
+  ImageWorkflowState workflow,
+) {
+  if (workflow.focusedInpaintEnabled && params.isInpainting) {
+    final focusedSelectionRect = workflow.focusedSelectionRect;
+    final focusedRequestSize = focusedSelectionRect == null
+        ? null
+        : FocusedInpaintUtils.resolveRequestSizeForSelection(
+            sourceWidth: workflow.sourceWidth ?? params.width,
+            sourceHeight: workflow.sourceHeight ?? params.height,
+            selectionRect: focusedSelectionRect,
+            minContextMegaPixels: workflow.minimumContextMegaPixels,
+          );
+    if (focusedRequestSize != null) {
+      return _GenerationCostInput(
+        width: focusedRequestSize.$1,
+        height: focusedRequestSize.$2,
+        strength: 1.0,
+      );
+    }
+
+    final focusedRequest = FocusedInpaintUtils.prepareRequest(
+      sourceImage: params.sourceImage!,
+      maskImage: params.maskImage!,
+      focusedSelectionRect: focusedSelectionRect,
+      minContextMegaPixels: workflow.minimumContextMegaPixels,
+    );
+    if (focusedRequest != null) {
+      return _GenerationCostInput(
+        width: focusedRequest.targetWidth,
+        height: focusedRequest.targetHeight,
+        strength: 1.0,
+      );
+    }
+  }
+
+  return _GenerationCostInput(
+    width: params.width,
+    height: params.height,
+    strength:
+        params.action == ImageGenerationAction.img2img ? params.strength : 1.0,
+  );
+}
 
 /// 预估消耗 Provider
 ///
@@ -18,45 +84,47 @@ part 'cost_estimate_provider.g.dart';
 @riverpod
 int estimatedCost(Ref ref) {
   final params = ref.watch(generationParamsNotifierProvider);
+  final workflow = ref.watch(imageWorkflowControllerProvider);
   final imagesPerRequest = ref.watch(imagesPerRequestProvider);
-  
-  // 使用 select 来减少不必要的重建 - 只关注 isOpus 的变化
-  final isOpus = ref.watch(
-    subscriptionNotifierProvider.select((s) => s.isOpus),
+  final subscription = ref.watch(
+    subscriptionNotifierProvider.select((state) => state.subscription),
   );
 
-  // nSamples = 批次数量（应用内循环次数，每次独立请求）
-  // imagesPerRequest = 批次大小（单次请求的图片数）
-  final batchCount = params.nSamples;
-  final batchSize = imagesPerRequest;
+  if (workflow.isUpscale) {
+    if (workflow.upscale.backend == UpscaleBackend.comfyui) {
+      return 0;
+    }
 
-  if (batchCount <= 0 || batchSize <= 0) return 0;
-
-  // 计算单次请求的消耗
-  // 单次请求内：只有第一张可能享受 Opus 免费
-  int singleRequestCost = 0;
-  for (int i = 0; i < batchSize; i++) {
-    final isFirstImageInRequest = i == 0;
-    singleRequestCost += AnlasCalculator.calculateFromValues(
-      width: params.width,
-      height: params.height,
-      steps: params.steps,
-      nSamples: 1,
-      smea: params.smea,
-      smeaDyn: params.smeaDyn,
-      model: params.model,
-      isOpus: isOpus && isFirstImageInRequest,
-      strength: params.action == ImageGenerationAction.img2img
-          ? params.strength
-          : 1.0,
+    final inputWidth = workflow.sourceWidth ?? params.width;
+    final inputHeight = workflow.sourceHeight ?? params.height;
+    return AnlasCalculator.calculateNovelAiUpscaleCost(
+      inputWidth: inputWidth,
+      inputHeight: inputHeight,
+      scale: 4,
+      subscriptionTier: subscription?.tier ?? 0,
     );
   }
 
-  // 总消耗 = 单次请求消耗 × 批次数量
-  // 每次独立请求都可享受 Opus 免费（如果符合条件）
-  final totalCost = singleRequestCost * batchCount;
+  final batchCount = params.nSamples;
+  final batchSize = imagesPerRequest;
+  if (batchCount <= 0 || batchSize <= 0) {
+    return 0;
+  }
 
-  return totalCost;
+  final requestInput = _resolveGenerationCostInput(params, workflow);
+  return AnlasCalculator.calculateRequestCost(
+    width: requestInput.width,
+    height: requestInput.height,
+    steps: params.steps,
+    batchCount: batchCount,
+    batchSize: batchSize,
+    smea: params.smea,
+    smeaDyn: params.smeaDyn,
+    model: params.model,
+    subscriptionTier: subscription?.tier ?? 0,
+    strength: requestInput.strength,
+    extraPerSampleCost: _resolvePreciseReferenceExtraCost(params),
+  );
 }
 
 /// 是否免费生成 Provider

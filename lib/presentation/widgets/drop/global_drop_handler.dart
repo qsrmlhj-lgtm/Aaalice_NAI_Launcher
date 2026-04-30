@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 import 'package:nai_launcher/l10n/app_localizations.dart';
-import 'package:super_clipboard/super_clipboard.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import '../../../core/constants/api_constants.dart';
@@ -29,18 +27,11 @@ import '../../providers/image_generation_provider.dart';
 import '../../providers/replication_queue_provider.dart';
 import '../../providers/vibe_library_provider.dart';
 import '../../router/app_router.dart';
+import '../../utils/dropped_file_reader.dart';
 import '../common/app_toast.dart';
 import '../metadata/metadata_import_dialog.dart';
 import 'image_destination_dialog.dart';
 import 'tag_library_drop_handler.dart';
-
-/// 文件读取结果
-class _FileData {
-  final String fileName;
-  final Uint8List bytes;
-
-  const _FileData({required this.fileName, required this.bytes});
-}
 
 /// 全局拖拽处理器
 ///
@@ -215,14 +206,23 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     _showProcessingIndicator();
 
     try {
+      var handledAny = false;
       for (final item in event.session.items) {
         final reader = item.dataReader;
         if (reader == null) continue;
 
-        final fileData = await _readFileData(reader);
+        final fileData = await DroppedFileReader.read(
+          reader,
+          allowVibeFiles: true,
+          logTag: 'DropHandler',
+        );
         if (fileData != null) {
+          handledAny = true;
           await _processDroppedFile(fileData.fileName, fileData.bytes);
         }
+      }
+      if (!handledAny && mounted) {
+        _showError('拖入源未提供可读取的图片文件或图片链接');
       }
     } finally {
       // 关闭处理中提示
@@ -240,157 +240,6 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
   void _hideProcessingIndicator() {
     if (!mounted) return;
     setState(() => _isProcessing = false);
-  }
-
-  /// 文件读取参数（用于 Isolate）
-  static Future<_FileData?> _readFileInIsolate(_FileReadParams params) async {
-    try {
-      final file = File(params.filePath);
-      final bytes = await file.readAsBytes();
-      return _FileData(fileName: params.fileName, bytes: bytes);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  Future<_FileData?> _readFileData(DataReader reader) async {
-    // 尝试获取文件 URI
-    if (reader.canProvide(Formats.fileUri)) {
-      final uri = await _getFileUri(reader);
-      if (uri != null) {
-        try {
-          final filePath = uri.toFilePath();
-          final fileName = filePath.split(Platform.pathSeparator).last;
-
-          // 使用 compute 将文件读取移到 Isolate，避免阻塞 UI
-          final result = await compute(
-            _readFileInIsolate,
-            _FileReadParams(filePath: filePath, fileName: fileName),
-          );
-
-          if (result == null) {
-            _showError('读取文件失败');
-          }
-          return result;
-        } catch (e) {
-          if (kDebugMode) {
-            AppLogger.d('Error reading dropped file: $e', 'DropHandler');
-          }
-          _showError(e.toString());
-        }
-      }
-      return null;
-    }
-
-    // 尝试获取图片数据（从拖放的原始数据，不是文件系统）
-    final imageFormat = _getSupportedImageFormat(reader);
-    if (imageFormat != null) {
-      try {
-        final file = await _getImageFile(reader, imageFormat);
-        if (file == null) {
-          AppLogger.w('无法读取拖放的图片文件', 'DropHandler');
-          return null;
-        }
-        final bytes = await file.readAll();
-        final extension = imageFormat == Formats.png ? 'png' : 'jpg';
-        final fileName = file.fileName ?? 'dropped_image.$extension';
-        return _FileData(fileName: fileName, bytes: bytes);
-      } catch (e) {
-        if (kDebugMode) {
-          AppLogger.d('Error reading dropped image: $e', 'DropHandler');
-        }
-        _showError(e.toString());
-      }
-    }
-
-    return null;
-  }
-
-  Future<Uri?> _getFileUri(DataReader reader) async {
-    final completer = Completer<Uri?>();
-
-    // 关键检查：如果 getValue 返回 null，说明格式不可用，直接返回 null
-    final progress = reader.getValue(
-      Formats.fileUri,
-      (uri) {
-        if (!completer.isCompleted) {
-          completer.complete(uri);
-        }
-      },
-      onError: (e) {
-        AppLogger.w('获取文件URI错误: $e', 'DropHandler');
-        if (!completer.isCompleted) {
-          completer.complete(null);
-        }
-      },
-    );
-
-    if (progress == null) {
-      // 格式不可用，不需要等待回调
-      return null;
-    }
-
-    // 添加超时保护，防止某些拖拽源不触发回调导致永久挂起
-    try {
-      return await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          AppLogger.w('获取文件URI超时', 'DropHandler');
-          return null;
-        },
-      );
-    } catch (e) {
-      AppLogger.w('获取文件URI失败: $e', 'DropHandler');
-      return null;
-    }
-  }
-
-  FileFormat? _getSupportedImageFormat(DataReader reader) {
-    if (reader.canProvide(Formats.png)) return Formats.png;
-    if (reader.canProvide(Formats.jpeg)) return Formats.jpeg;
-    return null;
-  }
-
-  Future<DataReaderFile?> _getImageFile(
-    DataReader reader,
-    FileFormat format,
-  ) async {
-    final completer = Completer<DataReaderFile?>();
-
-    // 关键检查：如果 getFile 返回 null，说明格式不可用，直接返回 null
-    final progress = reader.getFile(
-      format,
-      (file) {
-        if (!completer.isCompleted) {
-          completer.complete(file);
-        }
-      },
-      onError: (e) {
-        AppLogger.w('获取图片文件错误: $e', 'DropHandler');
-        if (!completer.isCompleted) {
-          completer.complete(null);
-        }
-      },
-    );
-
-    if (progress == null) {
-      // 格式不可用，不需要等待回调
-      return null;
-    }
-
-    // 添加超时保护，防止某些拖拽源不触发回调导致永久挂起
-    try {
-      return await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          AppLogger.w('获取图片文件超时', 'DropHandler');
-          return null;
-        },
-      );
-    } catch (e) {
-      AppLogger.w('获取图片文件失败: $e', 'DropHandler');
-      return null;
-    }
   }
 
   Future<void> _processDroppedFile(String fileName, Uint8List bytes) async {
@@ -676,7 +525,8 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
-            isBundle ? '保存 Vibe Bundle (${vibes.length} 个)' : '保存到 Vibe 库'),
+          isBundle ? '保存 Vibe Bundle (${vibes.length} 个)' : '保存到 Vibe 库',
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1191,12 +1041,4 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     if (!mounted) return;
     AppToast.error(context, message);
   }
-}
-
-/// 文件读取参数（用于 Isolate）
-class _FileReadParams {
-  final String filePath;
-  final String fileName;
-
-  _FileReadParams({required this.filePath, required this.fileName});
 }

@@ -12,6 +12,9 @@ class ThemedInput extends StatefulWidget {
   /// 文本控制器
   final TextEditingController? controller;
 
+  /// 原生撤销栈控制器
+  final UndoHistoryController? undoController;
+
   /// 焦点节点
   final FocusNode? focusNode;
 
@@ -110,12 +113,18 @@ class ThemedInput extends StatefulWidget {
   final bool clearNeedsConfirm;
 
   /// 自定义上下文菜单构建器
-  final Widget Function(BuildContext context, EditableTextState editableTextState)?
-      contextMenuBuilder;
+  final Widget Function(
+    BuildContext context,
+    EditableTextState editableTextState,
+  )? contextMenuBuilder;
+
+  /// Whether to add a native Ctrl+Y redo shortcut for plain text fields.
+  final bool enableNativeRedoShortcut;
 
   const ThemedInput({
     super.key,
     this.controller,
+    this.undoController,
     this.focusNode,
     this.hintText,
     this.helperText,
@@ -152,12 +161,14 @@ class ThemedInput extends StatefulWidget {
     this.onClearPressed,
     this.clearNeedsConfirm = false,
     this.contextMenuBuilder,
+    this.enableNativeRedoShortcut = true,
   });
 
   /// 创建多行输入框
   const ThemedInput.multiline({
     super.key,
     this.controller,
+    this.undoController,
     this.focusNode,
     this.hintText,
     this.helperText,
@@ -191,6 +202,7 @@ class ThemedInput extends StatefulWidget {
     this.onClearPressed,
     this.clearNeedsConfirm = false,
     this.contextMenuBuilder,
+    this.enableNativeRedoShortcut = true,
   });
 
   @override
@@ -324,8 +336,9 @@ class _ThemedInputState extends State<ThemedInput> {
       );
     }
 
-    final textField = TextField(
+    final field = TextField(
       controller: _effectiveController,
+      undoController: widget.undoController,
       focusNode: widget.focusNode,
       maxLines: widget.maxLines,
       minLines: widget.minLines,
@@ -350,6 +363,16 @@ class _ThemedInputState extends State<ThemedInput> {
       decoration: inputDecoration,
       contextMenuBuilder: widget.contextMenuBuilder,
     );
+
+    final textField = widget.enableNativeRedoShortcut
+        ? Shortcuts(
+            shortcuts: const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.keyY, control: true):
+                  RedoTextIntent(SelectionChangedCause.keyboard),
+            },
+            child: field,
+          )
+        : field;
 
     Widget content = textField;
 
@@ -409,7 +432,7 @@ class _ClearButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Material(
-      color: colorScheme.surfaceContainerHighest.withOpacity(0.8),
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
       shape: const CircleBorder(),
       child: InkWell(
         onTap: onPressed,

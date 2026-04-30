@@ -12,8 +12,10 @@ class AuthModeSwitcher extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final currentMode = ref.watch(authModeProvider);
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 12,
+      runSpacing: 12,
       children: [
         _buildModeButton(
           context: context,
@@ -26,7 +28,6 @@ class AuthModeSwitcher extends ConsumerWidget {
                 .switchMode(AuthMode.credentials);
           },
         ),
-        const SizedBox(width: 16),
         _buildModeButton(
           context: context,
           label: context.l10n.auth_tokenLogin,
@@ -36,6 +37,17 @@ class AuthModeSwitcher extends ConsumerWidget {
             ref
                 .read(authModeNotifierProvider.notifier)
                 .switchMode(AuthMode.token);
+          },
+        ),
+        _buildModeButton(
+          context: context,
+          label: '第三方站点',
+          icon: Icons.public_outlined,
+          isSelected: currentMode == AuthMode.thirdParty,
+          onTap: () {
+            ref
+                .read(authModeNotifierProvider.notifier)
+                .switchMode(AuthMode.thirdParty);
           },
         ),
       ],
@@ -59,12 +71,14 @@ class AuthModeSwitcher extends ConsumerWidget {
         decoration: BoxDecoration(
           color: isSelected
               ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+              : theme.colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.5,
+                ),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected
                 ? theme.colorScheme.primary
-                : theme.colorScheme.outline.withOpacity(0.3),
+                : theme.colorScheme.outline.withValues(alpha: 0.3),
             width: isSelected ? 2 : 1,
           ),
         ),

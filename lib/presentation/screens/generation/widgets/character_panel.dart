@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../data/models/image/image_params.dart';
+import '../../../providers/generation/generation_params_selectors.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../widgets/common/themed_divider.dart';
 import '../../../widgets/common/themed_slider.dart';
@@ -22,9 +23,11 @@ class _CharacterPanelState extends ConsumerState<CharacterPanel> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final params = ref.watch(generationParamsNotifierProvider);
-    final hasCharacters = params.characters.isNotEmpty;
-    final isV4Model = params.isV4Model;
+    final panelData = ref.watch(
+      generationParamsNotifierProvider.select(selectCharacterPanelViewData),
+    );
+    final hasCharacters = panelData.characters.isNotEmpty;
+    final isV4Model = panelData.isV4Model;
 
     // 非 V4 模型不显示此面板
     if (!isV4Model) {
@@ -71,7 +74,7 @@ class _CharacterPanelState extends ConsumerState<CharacterPanel> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${params.characters.length}/6',
+                        '${panelData.characters.length}/6',
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: theme.colorScheme.onPrimaryContainer,
                         ),
@@ -113,10 +116,10 @@ class _CharacterPanelState extends ConsumerState<CharacterPanel> {
 
                   // 角色列表
                   if (hasCharacters) ...[
-                    ...List.generate(params.characters.length, (index) {
+                    ...List.generate(panelData.characters.length, (index) {
                       return _CharacterItem(
                         index: index,
-                        character: params.characters[index],
+                        character: panelData.characters[index],
                         onUpdate: (char) => _updateCharacter(index, char),
                         onRemove: () => _removeCharacter(index),
                       );
@@ -125,7 +128,7 @@ class _CharacterPanelState extends ConsumerState<CharacterPanel> {
                   ],
 
                   // 添加按钮
-                  if (params.characters.length < 6)
+                  if (panelData.characters.length < 6)
                     OutlinedButton.icon(
                       onPressed: _addCharacter,
                       icon: const Icon(Icons.person_add, size: 18),

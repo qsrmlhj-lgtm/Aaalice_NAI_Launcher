@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,8 +23,10 @@ import 'core/shortcuts/shortcut_storage.dart';
 import 'core/database/database_manager.dart';
 import 'core/services/data_migration_service.dart';
 import 'core/services/sqflite_bootstrap_service.dart';
+import 'core/utils/app_error_reporter.dart';
 import 'core/utils/app_logger.dart';
 import 'core/utils/hive_storage_helper.dart';
+import 'core/utils/window_focus_tracker.dart';
 import 'data/datasources/local/nai_tags_data_source.dart';
 import 'data/models/gallery/nai_image_metadata.dart';
 import 'data/repositories/collection_repository.dart';
@@ -52,6 +55,12 @@ AppLocalizations _getLocalizedStrings() {
   return AppLocalizationsZh();
 }
 
+Future<void> _openHiveBoxIfNeeded<E>(String name) async {
+  if (!Hive.isBoxOpen(name)) {
+    await Hive.openBox<E>(name);
+  }
+}
+
 /// 窗口状态观察者，用于保存窗口位置和大小
 class WindowStateObserver extends WidgetsBindingObserver {
   @override
@@ -78,6 +87,7 @@ class WindowStateObserver extends WidgetsBindingObserver {
           'Window state saved: ${size.width}x${size.height} at (${position.dx}, ${position.dy})',
           'Main',
         );
+        await AppLogger.flush();
       } catch (e) {
         AppLogger.e('Failed to save window state: $e', 'Main');
       }
@@ -131,6 +141,7 @@ class AppTrayListener extends TrayListener {
         await windowManager.setPreventClose(false);
         await windowManager.destroy();
         AppLogger.d('Application exited via tray menu', 'TrayListener');
+        await AppLogger.flush();
         // 强制退出进程，确保 dart.exe 不会残留
         exit(0);
       }
@@ -160,7 +171,15 @@ class AppWindowListener extends WindowListener {
   @override
   Future<void> onWindowFocus() async {
     // 窗口获得焦点时的处理
+    WindowFocusTracker.markFocused();
     AppLogger.d('Window focused', 'WindowListener');
+  }
+
+  @override
+  Future<void> onWindowBlur() async {
+    // 窗口失焦时记录时间，用于规避外部截图工具引发的焦点抖动
+    WindowFocusTracker.markBlurred();
+    AppLogger.d('Window blurred', 'WindowListener');
   }
 
   @override
@@ -249,14 +268,35 @@ void setupWindowsWakeUpChannel() {
   });
 }
 
-void main() async {
+void main() {
+  final bootstrap = runZonedGuarded<Future<void>>(
+    _bootstrapApplication,
+    (error, stackTrace) {
+      AppErrorReporter.reportError(
+        error,
+        stackTrace,
+        source: 'runZonedGuarded',
+        fatal: true,
+      );
+    },
+  );
+  if (bootstrap != null) {
+    unawaited(bootstrap);
+  }
+}
+
+Future<void> _bootstrapApplication() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppErrorReporter.installGlobalHandlers();
 
   // 初始化 Semantics 以避免 Windows 桌面端的 accessibility_bridge 错误刷屏
   SemanticsBinding.instance.ensureSemantics();
 
-  // 初始化日志系统（必须在其他操作之前）
-  await AppLogger.initialize(isTestEnvironment: false);
+  // 先初始化控制台日志；文件日志稍后读取设置后按需开启，默认关闭。
+  await AppLogger.initialize(
+    isTestEnvironment: false,
+    enableFileLogging: false,
+  );
   AppLogger.i('Application starting', 'Main');
 
   // 初始化版本信息（从 pubspec.yaml 读取）
@@ -287,6 +327,13 @@ void main() async {
   if (!Hive.isAdapterRegistered(25)) {
     Hive.registerAdapter(CharacterPromptInfoAdapter());
   }
+
+  await _openHiveBoxIfNeeded(StorageKeys.settingsBox);
+  final settingsBox = Hive.box(StorageKeys.settingsBox);
+  final fileLoggingEnabled =
+      settingsBox.get(StorageKeys.fileLoggingEnabled, defaultValue: false) ==
+          true;
+  await AppLogger.setFileLoggingEnabled(fileLoggingEnabled);
 
   // 在 Hive 初始化之后执行文件迁移
   try {
@@ -330,21 +377,21 @@ void main() async {
   }
 
   // 预先打开 Hive boxes (确保 LocalStorageService 可用)
-  await Hive.openBox(StorageKeys.settingsBox);
-  await Hive.openBox(StorageKeys.historyBox);
-  await Hive.openBox(StorageKeys.tagCacheBox);
-  await Hive.openBox(StorageKeys.galleryBox);
+  await _openHiveBoxIfNeeded(StorageKeys.settingsBox);
+  await _openHiveBoxIfNeeded(StorageKeys.historyBox);
+  await _openHiveBoxIfNeeded(StorageKeys.tagCacheBox);
+  await _openHiveBoxIfNeeded(StorageKeys.galleryBox);
   // Local Gallery 新功能所需的 Hive boxes
-  await Hive.openBox(StorageKeys.localFavoritesBox);
-  await Hive.openBox(StorageKeys.tagsBox);
-  await Hive.openBox(StorageKeys.searchIndexBox);
+  await _openHiveBoxIfNeeded(StorageKeys.localFavoritesBox);
+  await _openHiveBoxIfNeeded(StorageKeys.tagsBox);
+  await _openHiveBoxIfNeeded(StorageKeys.searchIndexBox);
   // 统计数据缓存 Box
-  await Hive.openBox(StorageKeys.statisticsCacheBox);
+  await _openHiveBoxIfNeeded(StorageKeys.statisticsCacheBox);
   // 收藏集合 Box
-  await Hive.openBox(StorageKeys.collectionsBox);
+  await _openHiveBoxIfNeeded(StorageKeys.collectionsBox);
   // 队列相关 Box（预加载以避免首次打开队列管理页面时的延迟）
-  await Hive.openBox<String>(StorageKeys.replicationQueueBox);
-  await Hive.openBox<String>(StorageKeys.queueExecutionStateBox);
+  await _openHiveBoxIfNeeded<String>(StorageKeys.replicationQueueBox);
+  await _openHiveBoxIfNeeded<String>(StorageKeys.queueExecutionStateBox);
 
   // 初始化图像元数据服务（包含持久化缓存，用于详情页快速加载）
   await ImageMetadataService().initialize();

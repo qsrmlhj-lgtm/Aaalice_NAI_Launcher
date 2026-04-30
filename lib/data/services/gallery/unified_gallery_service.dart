@@ -99,7 +99,7 @@ abstract class LocalGalleryService {
   /// 可能抛出：
   /// - [GalleryScanException] 扫描失败
   Future<void> refresh();
-  
+
   /// 立即添加新图像到画廊（不触发全量扫描）
   ///
   /// 用于图像生成后即时显示新保存的图像，避免等待全量扫描
@@ -108,7 +108,8 @@ abstract class LocalGalleryService {
   /// [metadata] 可选的图像元数据
   ///
   /// 返回是否成功添加
-  Future<bool> addNewImageImmediately(String filePath, {NaiImageMetadata? metadata});
+  Future<bool> addNewImageImmediately(String filePath,
+      {NaiImageMetadata? metadata});
 
   /// 获取当前过滤后的文件总数
   int get filteredCount;
@@ -168,16 +169,14 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   bool get isInitialized => _isInitialized;
 
   List<File> get _effectiveFiles =>
-      _filteredFiles.isEmpty ? _allFiles : _filteredFiles;
+      _currentFilter.hasFilters ? _filteredFiles : _allFiles;
 
   @override
-  int get filteredCount => 
+  int get filteredCount =>
       _currentFilter.hasFilters ? _filteredFiles.length : totalCount;
 
-  int _dbImageCount = 0;
-
   @override
-  int get totalCount => _dbImageCount > 0 ? _dbImageCount : _allFiles.length;
+  int get totalCount => _allFiles.length;
 
   @override
   FilterCriteria get currentFilter => _currentFilter;
@@ -193,8 +192,10 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   Future<List<File>> initialize() async {
     // ✅ 防止并发初始化
     if (_isInitializing) {
-      AppLogger.d('Gallery initialization already in progress, waiting...',
-          'LocalGalleryService',);
+      AppLogger.d(
+        'Gallery initialization already in progress, waiting...',
+        'LocalGalleryService',
+      );
       // 等待初始化完成
       while (_isInitializing) {
         await Future.delayed(const Duration(milliseconds: 100));
@@ -212,13 +213,13 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       // 1. 从文件系统获取所有图片
       final files = await _getAllImageFiles();
       _allFiles = files;
-      
-      // 1.5 同时获取数据库计数（用于统一统计显示）
-      _dbImageCount = await _dataSource.countImages();
+
       _filteredFiles = files;
 
-      AppLogger.i('Found ${files.length} image files in file system',
-          'LocalGalleryService',);
+      AppLogger.i(
+        'Found ${files.length} image files in file system',
+        'LocalGalleryService',
+      );
 
       _isInitialized = true;
 
@@ -258,7 +259,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
 
     var files = <File>[];
     const supportedExtensions = {'.png', '.jpg', '.jpeg', '.webp'};
-    
+
     // 使用 ScanConfig 的缩略图检测配置
     const scanConfig = ScanConfig();
 
@@ -312,21 +313,26 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   Future<void> _initializeIndexInBackground() async {
     // ✅ 防止并发后台扫描
     if (_isBackgroundScanning) {
-      AppLogger.d('Background scan already in progress, skipping',
-          'LocalGalleryService',);
+      AppLogger.d(
+        'Background scan already in progress, skipping',
+        'LocalGalleryService',
+      );
       return;
     }
 
     _isBackgroundScanning = true;
     AppLogger.i(
-        'Starting background index initialization', 'LocalGalleryService',);
+      'Starting background index initialization',
+      'LocalGalleryService',
+    );
 
     try {
       // 检查是否需要完整扫描
       final existingCount = await _dataSource.countImages();
       AppLogger.i(
-          'Database has $existingCount images, file system has ${_allFiles.length} images',
-          'LocalGalleryService',);
+        'Database has $existingCount images, file system has ${_allFiles.length} images',
+        'LocalGalleryService',
+      );
 
       if (existingCount > 0 && existingCount == _allFiles.length) {
         // 执行快速增量扫描
@@ -334,21 +340,37 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
         await _performIncrementalScan();
       } else {
         // 执行完整扫描（分批处理）
-        AppLogger.i('Performing full scan (${_allFiles.length} files)',
-            'LocalGalleryService',);
+        AppLogger.i(
+          'Performing full scan (${_allFiles.length} files)',
+          'LocalGalleryService',
+        );
         await _performFullScan();
       }
 
       AppLogger.i(
-          'Background index initialization completed', 'LocalGalleryService',);
+        'Background index initialization completed',
+        'LocalGalleryService',
+      );
     } catch (e, stack) {
-      AppLogger.e('Background index initialization failed', e, stack,
-          'LocalGalleryService',);
+      AppLogger.e(
+        'Background index initialization failed',
+        e,
+        stack,
+        'LocalGalleryService',
+      );
       // 打印更详细的错误信息
       AppLogger.e(
-          'Error details: ${e.toString()}', null, null, 'LocalGalleryService',);
-      AppLogger.e('Stack trace: ${stack.toString()}', null, null,
-          'LocalGalleryService',);
+        'Error details: ${e.toString()}',
+        null,
+        null,
+        'LocalGalleryService',
+      );
+      AppLogger.e(
+        'Stack trace: ${stack.toString()}',
+        null,
+        null,
+        'LocalGalleryService',
+      );
       // 后台错误不影响主流程
     } finally {
       _isBackgroundScanning = false;
@@ -359,28 +381,32 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   Future<void> _performIncrementalScan() async {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
-      AppLogger.w('[UGS] _performIncrementalScan: rootPath is null', 'LocalGalleryService');
+      AppLogger.w('[UGS] _performIncrementalScan: rootPath is null',
+          'LocalGalleryService');
       return;
     }
 
     // 检查是否已有扫描在进行中
     final scanManager = ScanStateManager.instance;
-    AppLogger.i('[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath', 'LocalGalleryService');
-    
+    AppLogger.i(
+        '[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath',
+        'LocalGalleryService');
+
     if (scanManager.isScanning) {
       AppLogger.w('[UGS] 增量扫描请求被忽略：已有扫描在进行中', 'LocalGalleryService');
       return;
     }
 
     final dir = Directory(rootPath);
-    
+
     AppLogger.i('[UGS] 开始执行流式扫描', 'LocalGalleryService');
-    
+
     // 使用新的流式扫描器：真正的单文件流水线
     final scanner = GalleryStreamScanner(dataSource: _dataSource);
-    
+
     await scanner.startScanning(
       dir,
+      retryMissingMetadata: true,
       // 【扫描时日志太频繁，禁用】
       // onFileProcessed: (result, stats) {
       //   // 每处理一个文件就更新状态
@@ -391,17 +417,18 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       //   );
       // },
     );
-    
+
     AppLogger.i('[UGS] 流式扫描完成', 'LocalGalleryService');
   }
 
   /// 执行完整扫描
-  /// 
+  ///
   /// 使用统一的 GalleryStreamScanner，与增量扫描使用同一套逻辑
   Future<void> _performFullScan() async {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
-      AppLogger.w('[UGS] _performFullScan: rootPath is null', 'LocalGalleryService');
+      AppLogger.w(
+          '[UGS] _performFullScan: rootPath is null', 'LocalGalleryService');
       return;
     }
 
@@ -413,14 +440,15 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     }
 
     final dir = Directory(rootPath);
-    
+
     AppLogger.i('[UGS] 开始执行全量流式扫描', 'LocalGalleryService');
-    
+
     // 使用新的流式扫描器：真正的单文件流水线
     final scanner = GalleryStreamScanner(dataSource: _dataSource);
-    
+
     await scanner.startScanning(
       dir,
+      retryMissingMetadata: true,
       // 【扫描时日志太频繁，禁用】
       // onFileProcessed: (result, stats) {
       //   // 每处理一个文件就更新状态
@@ -431,7 +459,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       //   );
       // },
     );
-    
+
     AppLogger.i('[UGS] 全量流式扫描完成', 'LocalGalleryService');
   }
 
@@ -540,7 +568,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
         );
       } catch (e) {
         AppLogger.w(
-            'Failed to load record for ${file.path}', 'LocalGalleryService',);
+          'Failed to load record for ${file.path}',
+          'LocalGalleryService',
+        );
         records.add(
           LocalImageRecord(
             path: file.path,
@@ -568,7 +598,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
         ImageMetadataService().preloadBatch(images);
       } catch (e) {
         AppLogger.w(
-            'Failed to preload metadata batch: $e', 'LocalGalleryService',);
+          'Failed to preload metadata batch: $e',
+          'LocalGalleryService',
+        );
       }
     });
   }
@@ -694,7 +726,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
         );
       } catch (e) {
         AppLogger.w(
-            'Failed to load record for ${file.path}', 'LocalGalleryService',);
+          'Failed to load record for ${file.path}',
+          'LocalGalleryService',
+        );
         // 跳过加载失败的记录
       }
     }
@@ -839,41 +873,44 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   // ============================================================
   // 添加新图像（即时显示优化）
   // ============================================================
-  
+
   /// 立即添加新图像到画廊（不触发全量扫描）
-  /// 
+  ///
   /// 用于图像生成后即时显示新保存的图像，避免等待全量扫描
-  /// 
+  ///
   /// [filePath] 新图像的文件路径
   /// [metadata] 可选的图像元数据
-  /// 
+  ///
   /// 返回是否成功添加
   @override
-  Future<bool> addNewImageImmediately(String filePath, {NaiImageMetadata? metadata}) async {
+  Future<bool> addNewImageImmediately(String filePath,
+      {NaiImageMetadata? metadata}) async {
     _ensureInitialized();
-    
+
     try {
       final file = File(filePath);
       if (!await file.exists()) {
-        AppLogger.w('[AddNewImage] File does not exist: $filePath', 'LocalGalleryService');
+        AppLogger.w('[AddNewImage] File does not exist: $filePath',
+            'LocalGalleryService');
         return false;
       }
-      
+
       // 检查是否已存在
       final existingIndex = _allFiles.indexWhere((f) => f.path == filePath);
       if (existingIndex != -1) {
-        AppLogger.d('[AddNewImage] File already exists in gallery: $filePath', 'LocalGalleryService');
+        AppLogger.d('[AddNewImage] File already exists in gallery: $filePath',
+            'LocalGalleryService');
         return false;
       }
-      
+
       final stat = await file.stat();
       final fileName = filePath.split(Platform.pathSeparator).last;
-      
+
       // 1. 插入/更新数据库（使用 upsert）
       final metadataStatus = metadata != null && metadata.hasData
           ? MetadataStatus.success
           : MetadataStatus.none;
-      
+
       final imageId = await _dataSource.upsertImage(
         filePath: filePath,
         fileName: fileName,
@@ -889,30 +926,30 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
         lastScannedAt: DateTime.now(),
         metadataStatus: metadataStatus,
       );
-      
+
       // 2. 如果有元数据，保存到数据库
       if (metadata != null && metadata.hasData) {
         await _dataSource.upsertMetadata(imageId, metadata);
         ImageMetadataService().cacheMetadata(filePath, metadata);
       }
-      
+
       // 3. 添加到 _allFiles 列表开头（因为是新文件，修改时间最新）
       _allFiles.insert(0, file);
-      
-      // 4. 更新数据库计数
-      _dbImageCount = await _dataSource.countImages();
-      
-      // 5. 重新应用过滤（如果有过滤条件）
+
+      // 4. 重新应用过滤（如果有过滤条件）
       if (_currentFilter.hasFilters) {
         await applyFilter(_currentFilter);
       } else {
         _filteredFiles = _allFiles;
       }
-      
-      AppLogger.i('[AddNewImage] Added new image immediately: $fileName (ID: $imageId)', 'LocalGalleryService');
+
+      AppLogger.i(
+          '[AddNewImage] Added new image immediately: $fileName (ID: $imageId)',
+          'LocalGalleryService');
       return true;
     } catch (e, stack) {
-      AppLogger.e('[AddNewImage] Failed to add new image: $filePath', e, stack, 'LocalGalleryService');
+      AppLogger.e('[AddNewImage] Failed to add new image: $filePath', e, stack,
+          'LocalGalleryService');
       return false;
     }
   }
@@ -927,16 +964,15 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
 
     // ✅ 如果正在后台扫描，跳过刷新以避免重置 _allFiles
     if (_isBackgroundScanning) {
-      AppLogger.d('Refresh skipped: background scanning in progress',
-          'LocalGalleryService',);
+      AppLogger.d(
+        'Refresh skipped: background scanning in progress',
+        'LocalGalleryService',
+      );
       return;
     }
 
     try {
       final files = await _getAllImageFiles();
-      
-      // 更新数据库计数
-      _dbImageCount = await _dataSource.countImages();
 
       // ✅ 检查文件数量是否变化（可能由于扩展名修复导致）
       final previousCount = _allFiles.length;
@@ -949,8 +985,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       // ✅ 如果文件数量变化很大，执行完整扫描而非增量扫描
       if (countChanged && (files.length - previousCount).abs() > 100) {
         AppLogger.i(
-            'File count changed significantly ($previousCount -> ${files.length}), performing full scan',
-            'LocalGalleryService',);
+          'File count changed significantly ($previousCount -> ${files.length}), performing full scan',
+          'LocalGalleryService',
+        );
         await _performFullScan();
       } else {
         // 后台扫描新文件（使用 await 确保扫描完成）
@@ -968,7 +1005,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   // ============================================================
   // 工具方法
   // ============================================================
-  
+
   /// 计算宽高比
   double? _calculateAspectRatio(int? width, int? height) {
     if (width != null && height != null && height > 0) {
@@ -1051,7 +1088,11 @@ class GalleryService extends _$GalleryService {
       state = ErrorGalleryService(error: '扫描图片失败: ${e.message}');
     } catch (e) {
       AppLogger.e(
-          'Failed to initialize gallery service', e, null, 'GalleryService',);
+        'Failed to initialize gallery service',
+        e,
+        null,
+        'GalleryService',
+      );
       // 创建错误状态的服务，让调用方知道初始化失败
       state = ErrorGalleryService(error: '画廊初始化失败: $e');
     }
@@ -1114,7 +1155,9 @@ class ErrorGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwError();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath, {NaiImageMetadata? metadata}) => _throwError();
+  Future<bool> addNewImageImmediately(String filePath,
+          {NaiImageMetadata? metadata}) =>
+      _throwError();
 
   @override
   Future<void> setSearchQuery(String query) => _throwError();
@@ -1185,7 +1228,9 @@ class _PlaceholderGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwNotInitialized();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath, {NaiImageMetadata? metadata}) => _throwNotInitialized();
+  Future<bool> addNewImageImmediately(String filePath,
+          {NaiImageMetadata? metadata}) =>
+      _throwNotInitialized();
 
   @override
   Future<void> setSearchQuery(String query) => _throwNotInitialized();

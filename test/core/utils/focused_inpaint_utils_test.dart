@@ -161,5 +161,43 @@ void main() {
       expect(crop.width, equals(296));
       expect(crop.height, equals(272));
     });
+
+    test(
+        'resolveRequestSizeForSelection should match focused request target size without decoding images',
+        () {
+      const selectionRect = Rect.fromLTWH(420, 180, 120, 96);
+      final requestSize = FocusedInpaintUtils.resolveRequestSizeForSelection(
+        sourceWidth: 1200,
+        sourceHeight: 800,
+        selectionRect: selectionRect,
+        minContextMegaPixels: 88,
+      );
+
+      final source = img.Image(width: 1200, height: 800);
+      img.fill(source, color: img.ColorRgb8(0, 0, 0));
+      final mask = img.Image(width: 1200, height: 800);
+      img.fill(mask, color: img.ColorRgb8(0, 0, 0));
+      for (var y = selectionRect.top.toInt();
+          y < selectionRect.bottom.toInt();
+          y++) {
+        for (var x = selectionRect.left.toInt();
+            x < selectionRect.right.toInt();
+            x++) {
+          mask.setPixelRgb(x, y, 255, 255, 255);
+        }
+      }
+
+      final request = FocusedInpaintUtils.prepareRequest(
+        sourceImage: Uint8List.fromList(img.encodePng(source)),
+        maskImage: Uint8List.fromList(img.encodePng(mask)),
+        focusedSelectionRect: selectionRect,
+        minContextMegaPixels: 88,
+      );
+
+      expect(requestSize, isNotNull);
+      expect(request, isNotNull);
+      expect(requestSize!.$1, equals(request!.targetWidth));
+      expect(requestSize.$2, equals(request.targetHeight));
+    });
   });
 }

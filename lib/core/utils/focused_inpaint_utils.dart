@@ -160,6 +160,55 @@ class FocusedInpaintUtils {
     );
   }
 
+  static FocusedInpaintFrame? resolvePreviewFrameForSelection({
+    required int sourceWidth,
+    required int sourceHeight,
+    required Rect selectionRect,
+    required double minContextMegaPixels,
+  }) {
+    final selectionBounds = _resolveSelectionBounds(
+      selectionRect,
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+    );
+    if (selectionBounds == null) {
+      return null;
+    }
+
+    return FocusedInpaintFrame(
+      focusBounds: selectionBounds,
+      contextCrop: _resolveCrop(
+        sourceWidth: sourceWidth,
+        sourceHeight: sourceHeight,
+        bounds: selectionBounds,
+        minContextMegaPixels: minContextMegaPixels,
+      ),
+    );
+  }
+
+  static (int, int)? resolveRequestSizeForSelection({
+    required int sourceWidth,
+    required int sourceHeight,
+    required Rect selectionRect,
+    required double minContextMegaPixels,
+  }) {
+    final crop = resolveContextCropForSelection(
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+      selectionRect: selectionRect,
+      minContextMegaPixels: minContextMegaPixels,
+    );
+    if (crop == null) {
+      return null;
+    }
+
+    return _resolveTargetSize(
+      cropWidth: crop.width,
+      cropHeight: crop.height,
+      minContextMegaPixels: minContextMegaPixels,
+    );
+  }
+
   static FocusedInpaintRequest? prepareRequest({
     required Uint8List sourceImage,
     required Uint8List maskImage,

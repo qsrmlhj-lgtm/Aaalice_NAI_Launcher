@@ -115,6 +115,8 @@ dependencies:
 
   # 版本号解析
   pub_semver: ^2.1.4
+  web_socket_channel: ^3.0.3
+  onnxruntime: ^1.4.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

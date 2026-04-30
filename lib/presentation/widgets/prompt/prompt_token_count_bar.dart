@@ -38,7 +38,26 @@ class PromptTokenCountBar extends StatelessWidget {
   }
 
   String _buildTooltipMessage() {
-    return usage.breakdown
+    final displayBreakdown = usage.breakdown.toList(growable: false);
+    if (displayBreakdown.isNotEmpty) {
+      final breakdownTotal = displayBreakdown.fold<int>(
+        0,
+        (sum, entry) => sum + entry.tokens,
+      );
+      final adjustment = usage.usedTokens - breakdownTotal;
+      if (adjustment != 0) {
+        final fixedTagIndex = displayBreakdown.indexWhere(
+          (entry) => entry.label == '固定词',
+        );
+        final targetIndex = fixedTagIndex >= 0 ? fixedTagIndex : 0;
+        final targetEntry = displayBreakdown[targetIndex];
+        displayBreakdown[targetIndex] = PromptTokenBreakdownEntry(
+          label: targetEntry.label,
+          tokens: targetEntry.tokens + adjustment,
+        );
+      }
+    }
+    return displayBreakdown
         .map((entry) => '${entry.label} ${entry.tokens}')
         .join('\n');
   }

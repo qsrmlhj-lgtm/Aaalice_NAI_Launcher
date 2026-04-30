@@ -14,6 +14,7 @@ import '../../data/services/tag_translation_service.dart';
 import '../providers/character_prompt_provider.dart';
 import '../providers/pending_prompt_provider.dart';
 import '../providers/replication_queue_provider.dart';
+import '../providers/reverse_prompt_provider.dart';
 import 'common/card_action_buttons.dart';
 
 import 'common/app_toast.dart';
@@ -474,6 +475,39 @@ class _DanbooruPostCardState extends State<DanbooruPostCard> {
                               },
                             ),
                             CardActionButtonConfig(
+                              icon: Icons.manage_search_rounded,
+                              tooltip: '发送到反推',
+                              onPressed: () async {
+                                final imageUrl = widget.post.sampleUrl ??
+                                    widget.post.fileUrl ??
+                                    widget.post.previewUrl;
+                                if (imageUrl.isEmpty) {
+                                  AppToast.warning(context, '此图片没有可用地址');
+                                  return;
+                                }
+                                try {
+                                  final file = await DanbooruImageCacheManager
+                                      .instance
+                                      .getSingleFile(imageUrl);
+                                  final bytes = await file.readAsBytes();
+                                  await ref
+                                      .read(reversePromptProvider.notifier)
+                                      .addImage(
+                                        bytes,
+                                        name: 'danbooru_${widget.post.id}',
+                                      );
+                                  if (context.mounted) {
+                                    context.go('/');
+                                    AppToast.info(context, '已发送到反推模块');
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    AppToast.error(context, '发送反推失败: $e');
+                                  }
+                                }
+                              },
+                            ),
+                            CardActionButtonConfig(
                               icon: Icons.copy,
                               tooltip: '复制标签',
                               onPressed: () async {
@@ -818,7 +852,8 @@ class _TagRowState extends State<_TagRow> {
   }
 
   Future<void> _loadTranslations() async {
-    final translations = await widget.translationService.translateBatch(widget.tags);
+    final translations =
+        await widget.translationService.translateBatch(widget.tags);
     if (mounted) {
       setState(() => _translations = translations);
     }

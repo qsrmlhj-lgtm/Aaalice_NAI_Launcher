@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../data/models/image/image_params.dart';
 import '../../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../../data/models/vibe/vibe_reference.dart';
 import '../../../providers/image_generation_provider.dart';
@@ -25,8 +24,8 @@ class VibeTransferContent extends ConsumerStatefulWidget {
   /// Vibe 引用列表
   final List<VibeReference> vibes;
 
-  /// 生成参数
-  final ImageParams params;
+  /// 是否标准化多个 Vibe 强度
+  final bool normalizeVibeStrength;
 
   /// 是否显示背景模式（折叠状态）
   final bool showBackground;
@@ -77,7 +76,7 @@ class VibeTransferContent extends ConsumerStatefulWidget {
   const VibeTransferContent({
     super.key,
     required this.vibes,
-    required this.params,
+    required this.normalizeVibeStrength,
     required this.showBackground,
     required this.onAddVibe,
     required this.onAddLibraryVibe,
@@ -184,7 +183,7 @@ class _VibeTransferContentState extends ConsumerState<VibeTransferContent> {
     ThemeData theme,
     bool showBackground,
   ) {
-    final isChecked = widget.params.normalizeVibeStrength;
+    final isChecked = widget.normalizeVibeStrength;
 
     void toggleNormalize() {
       ref

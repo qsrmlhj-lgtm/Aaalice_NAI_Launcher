@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint_service.dart';
 import '../../../core/utils/app_logger.dart';
 
 part 'nai_user_info_api_service.g.dart';
@@ -13,8 +14,9 @@ class NAIUserInfoApiService {
   static const Duration _timeout = Duration(seconds: 30);
 
   final Dio _dio;
+  final NaiApiEndpointService _endpointService;
 
-  NAIUserInfoApiService(this._dio);
+  NAIUserInfoApiService(this._dio, this._endpointService);
 
   /// 获取用户订阅信息（包含 Anlas 余额）
   Future<Map<String, dynamic>> getUserSubscription({
@@ -23,7 +25,7 @@ class NAIUserInfoApiService {
   }) async {
     try {
       final response = await _dio.get(
-        '${ApiConstants.baseUrl}${ApiConstants.userSubscriptionEndpoint}',
+        _endpointService.mainUrl(ApiConstants.userSubscriptionEndpoint),
         options: Options(
           receiveTimeout: receiveTimeout ?? _timeout,
           sendTimeout: sendTimeout ?? _timeout,
@@ -43,5 +45,6 @@ class NAIUserInfoApiService {
 NAIUserInfoApiService naiUserInfoApiService(Ref ref) {
   // 使用全局 dioClient，它已经配置了 AuthInterceptor 来自动添加认证头
   final dio = ref.watch(dioClientProvider);
-  return NAIUserInfoApiService(dio);
+  final endpointService = ref.watch(naiApiEndpointServiceProvider);
+  return NAIUserInfoApiService(dio, endpointService);
 }

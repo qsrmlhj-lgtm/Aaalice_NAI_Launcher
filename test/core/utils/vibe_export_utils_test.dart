@@ -27,6 +27,38 @@ void main() {
       expect(candidates.first.label, equals('原始图片'));
     });
 
+    test('buildEmbeddedPngExportPlans should use first candidate and skip entries without images',
+        () {
+      final firstCarrier = _createInMemoryPngBytes();
+      final secondCarrier = Uint8List.fromList(
+        List<int>.generate(16, (index) => index + 1),
+      );
+      final entries = [
+        VibeLibraryEntry.create(
+          name: 'With Image',
+          vibeDisplayName: 'With Image',
+          vibeEncoding: 'ZW5jb2RlZA==',
+        ).copyWith(
+          rawImageData: firstCarrier,
+          vibeThumbnail: secondCarrier,
+        ),
+        VibeLibraryEntry.create(
+          name: 'No Image',
+          vibeDisplayName: 'No Image',
+          vibeEncoding: 'bm8taW1hZ2U=',
+        ),
+      ];
+
+      final plans = VibeExportUtils.buildEmbeddedPngExportPlans(entries);
+
+      expect(plans, hasLength(1));
+      expect(plans.single.entryId, equals(entries.first.id));
+      expect(plans.single.fileName, equals('With Image_vibe.png'));
+      expect(plans.single.carrierImageBytes, same(firstCarrier));
+      expect(plans.single.vibes, hasLength(1));
+      expect(plans.single.vibes.single.displayName, equals('With Image'));
+    });
+
     test('buildEmbeddedPngBytes should embed all selected vibes into carrier image',
         () async {
       final pngBytes = _createInMemoryPngBytes();

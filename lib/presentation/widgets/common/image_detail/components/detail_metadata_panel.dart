@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -81,64 +79,83 @@ class _DetailMetadataPanelState extends State<DetailMetadataPanel> {
   void _startMetadataLoading() {
     final image = widget.currentImage;
     if (image == null) {
-      AppLogger.w('[MetadataFlow] _startMetadataLoading: image is null',
-          'DetailMetadataPanel',);
+      AppLogger.w(
+        '[MetadataFlow] _startMetadataLoading: image is null',
+        'DetailMetadataPanel',
+      );
       return;
     }
 
     AppLogger.i(
-        '[MetadataFlow] _startMetadataLoading: identifier=${image.identifier}, type=${image.runtimeType}',
-        'DetailMetadataPanel',);
+      '[MetadataFlow] _startMetadataLoading: identifier=${image.identifier}, type=${image.runtimeType}',
+      'DetailMetadataPanel',
+    );
 
     // 1. 先检查同步可用的元数据
     final syncMetadata = image.metadata;
     AppLogger.d(
-        '[MetadataFlow] syncMetadata check: hasData=${syncMetadata?.hasData}, has prompt="${syncMetadata?.fullPrompt.isNotEmpty == true}"',
-        'DetailMetadataPanel',);
+      '[MetadataFlow] syncMetadata check: hasData=${syncMetadata?.hasData}, has prompt="${syncMetadata?.fullPrompt.isNotEmpty == true}"',
+      'DetailMetadataPanel',
+    );
 
     if (syncMetadata != null && syncMetadata.hasData) {
-      AppLogger.i('[MetadataFlow] Using sync metadata (cache hit)',
-          'DetailMetadataPanel',);
+      AppLogger.i(
+        '[MetadataFlow] Using sync metadata (cache hit)',
+        'DetailMetadataPanel',
+      );
       _loadedMetadata = syncMetadata;
       _metadataFuture = null;
       return;
     }
 
     // 2. 异步加载元数据（支持所有数据源）
-    AppLogger.i('[MetadataFlow] Cache miss, starting async load...',
-        'DetailMetadataPanel',);
+    AppLogger.i(
+      '[MetadataFlow] Cache miss, starting async load...',
+      'DetailMetadataPanel',
+    );
     Future<NaiImageMetadata?>? future;
     if (image is FileImageDetailData) {
-      AppLogger.d('[MetadataFlow] Using FileImageDetailData.getMetadataAsync()',
-          'DetailMetadataPanel',);
+      AppLogger.d(
+        '[MetadataFlow] Using FileImageDetailData.getMetadataAsync()',
+        'DetailMetadataPanel',
+      );
       future = image.getMetadataAsync();
     } else if (image is GeneratedImageDetailData) {
       AppLogger.d(
-          '[MetadataFlow] Using GeneratedImageDetailData.getMetadataAsync()',
-          'DetailMetadataPanel',);
+        '[MetadataFlow] Using GeneratedImageDetailData.getMetadataAsync()',
+        'DetailMetadataPanel',
+      );
       future = image.getMetadataAsync();
     } else if (image is LocalImageDetailData) {
       AppLogger.d(
-          '[MetadataFlow] Using LocalImageDetailData.getMetadataAsync()',
-          'DetailMetadataPanel',);
+        '[MetadataFlow] Using LocalImageDetailData.getMetadataAsync()',
+        'DetailMetadataPanel',
+      );
       future = image.getMetadataAsync();
     } else {
-      AppLogger.w('[MetadataFlow] Unknown image type: ${image.runtimeType}',
-          'DetailMetadataPanel',);
+      AppLogger.w(
+        '[MetadataFlow] Unknown image type: ${image.runtimeType}',
+        'DetailMetadataPanel',
+      );
     }
 
     if (future != null) {
       _metadataFuture = future.then((metadata) {
         AppLogger.i(
-            '[MetadataFlow] Async load completed: hasData=${metadata?.hasData}, prompt length=${metadata?.fullPrompt.length ?? 0}',
-            'DetailMetadataPanel',);
+          '[MetadataFlow] Async load completed: hasData=${metadata?.hasData}, prompt length=${metadata?.fullPrompt.length ?? 0}',
+          'DetailMetadataPanel',
+        );
         if (mounted) {
           setState(() => _loadedMetadata = metadata);
         }
         return metadata;
       }).catchError((e, stack) {
-        AppLogger.e('[MetadataFlow] Async load failed', e, stack,
-            'DetailMetadataPanel',);
+        AppLogger.e(
+          '[MetadataFlow] Async load failed',
+          e,
+          stack,
+          'DetailMetadataPanel',
+        );
         throw e;
       });
     } else {
@@ -171,20 +188,19 @@ class _DetailMetadataPanelState extends State<DetailMetadataPanel> {
           bottomLeft: Radius.circular(16),
         ),
       ),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          color: colorScheme.surface.withOpacity(0.92),
-          // 使用 OverflowBox 允许子组件按固定宽度布局，避免动画过程中的溢出警告
-          child: OverflowBox(
-            maxWidth: widget.expandedWidth,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: widget.expandedWidth,
-              child: _isExpanded
-                  ? _buildExpandedPanel(theme)
-                  : _buildCollapsedPanel(theme),
-            ),
+      child: Container(
+        // Windows Flutter 在大图预览 + 窗口焦点切换时对 BackdropFilter
+        // 合成层存在原生崩溃风险；这里保留半透明面板，避免实时背景模糊。
+        color: colorScheme.surface.withValues(alpha: 0.96),
+        // 使用 OverflowBox 允许子组件按固定宽度布局，避免动画过程中的溢出警告
+        child: OverflowBox(
+          maxWidth: widget.expandedWidth,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: widget.expandedWidth,
+            child: _isExpanded
+                ? _buildExpandedPanel(theme)
+                : _buildCollapsedPanel(theme),
           ),
         ),
       ),
@@ -416,28 +432,34 @@ class _MetadataContent extends StatelessWidget {
           children: [
             if (metadata.model != null)
               _InfoRow(
-                  label: context.l10n.gallery_metaModel,
-                  value: metadata.model!,),
+                label: context.l10n.gallery_metaModel,
+                value: metadata.model!,
+              ),
             if (metadata.seed != null)
               _InfoRow(
-                  label: context.l10n.gallery_metaSeed,
-                  value: metadata.seed.toString(),),
+                label: context.l10n.gallery_metaSeed,
+                value: metadata.seed.toString(),
+              ),
             if (metadata.steps != null)
               _InfoRow(
-                  label: context.l10n.gallery_metaSteps,
-                  value: metadata.steps.toString(),),
+                label: context.l10n.gallery_metaSteps,
+                value: metadata.steps.toString(),
+              ),
             if (metadata.scale != null)
               _InfoRow(
-                  label: context.l10n.gallery_metaCfgScale,
-                  value: metadata.scale.toString(),),
+                label: context.l10n.gallery_metaCfgScale,
+                value: metadata.scale.toString(),
+              ),
             if (metadata.sampler != null)
               _InfoRow(
-                  label: context.l10n.gallery_metaSampler,
-                  value: metadata.displaySampler,),
+                label: context.l10n.gallery_metaSampler,
+                value: metadata.displaySampler,
+              ),
             if (metadata.sizeString.isNotEmpty)
               _InfoRow(
-                  label: context.l10n.gallery_metaResolution,
-                  value: metadata.sizeString,),
+                label: context.l10n.gallery_metaResolution,
+                value: metadata.sizeString,
+              ),
             if (metadata.smea == true || metadata.smeaDyn == true)
               _InfoRow(
                 label: context.l10n.gallery_metaSmea,
@@ -518,7 +540,9 @@ class _MetadataContent extends StatelessWidget {
               initiallyExpanded: false,
               showAddToLibrary: true,
               onAddToLibrary: () => _showAddToLibraryDialog(
-                  context, metadata.qualityTags.join(', '),),
+                context,
+                metadata.qualityTags.join(', '),
+              ),
             ),
           ],
           // 角色提示词详细卡片
@@ -648,7 +672,9 @@ class _MetadataContent extends StatelessWidget {
 
   /// 显示添加到词库对话框
   Future<void> _showAddToLibraryDialog(
-      BuildContext context, String content,) async {
+    BuildContext context,
+    String content,
+  ) async {
     await AddToLibraryDialog.show(
       context,
       content: content,
@@ -658,7 +684,9 @@ class _MetadataContent extends StatelessWidget {
 
   /// 显示保存 Vibe 对话框
   Future<void> _showSaveVibeDialog(
-      BuildContext context, VibeReference vibe,) async {
+    BuildContext context,
+    VibeReference vibe,
+  ) async {
     await SaveVibeDialog.show(
       context,
       vibe: vibe,
@@ -813,7 +841,9 @@ class _ActionButtons extends StatelessWidget {
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: metadata.fullPrompt));
                     AppToast.success(
-                        context, context.l10n.gallery_promptCopied,);
+                      context,
+                      context.l10n.gallery_promptCopied,
+                    );
                   },
                 ),
               ),
@@ -828,7 +858,9 @@ class _ActionButtons extends StatelessWidget {
                         ClipboardData(text: metadata.seed.toString()),
                       );
                       AppToast.success(
-                          context, context.l10n.gallery_seedCopied,);
+                        context,
+                        context.l10n.gallery_seedCopied,
+                      );
                     },
                   ),
                 ),

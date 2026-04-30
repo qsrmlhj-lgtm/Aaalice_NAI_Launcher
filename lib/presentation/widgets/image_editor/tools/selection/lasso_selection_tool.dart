@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,8 +8,10 @@ import 'base_selection_tool.dart';
 
 /// 套索选区工具（自由选区）
 class LassoSelectionTool extends BaseSelectionTool {
-  /// 采集的点
   final List<Offset> _points = [];
+
+  bool _isDraggingSelection = false;
+  Offset? _dragLastPoint;
 
   @override
   String get id => 'lasso_selection';
@@ -26,21 +30,44 @@ class LassoSelectionTool extends BaseSelectionTool {
 
   @override
   void onPointerDown(PointerDownEvent event, EditorState state) {
-    // 开始绘制时清除旧选区
+    final pos = event.localPosition;
+
+    if (state.selectionManager.isTransforming) {
+      final bounds = state.selectionManager.transformedBounds;
+      if (bounds != null && bounds.contains(pos)) {
+        _isDraggingSelection = true;
+        _dragLastPoint = pos;
+        return;
+      }
+      state.selectionManager.commitTransform();
+    }
+
+    if (state.selectionManager.hasSelection &&
+        state.selectionManager.hitTestSelection(pos)) {
+      state.selectionManager.enterTransform(_createPlaceholderImage());
+      _isDraggingSelection = true;
+      _dragLastPoint = pos;
+      return;
+    }
+
     state.clearSelection(saveHistory: false);
     state.clearPreview();
     _points.clear();
-    final point = event.localPosition;
-    _points.add(point);
+    _points.add(pos);
     _updatePreviewPath(state);
   }
 
   @override
   void onPointerMove(PointerMoveEvent event, EditorState state) {
+    if (_isDraggingSelection && _dragLastPoint != null) {
+      final delta = event.localPosition - _dragLastPoint!;
+      state.selectionManager.updateTransformOffset(delta);
+      _dragLastPoint = event.localPosition;
+      return;
+    }
+
     if (_points.isNotEmpty) {
       final point = event.localPosition;
-
-      // 简化路径：只有距离足够远才添加新点
       if (_points.isEmpty || (_points.last - point).distance > 3) {
         _points.add(point);
         _updatePreviewPath(state);
@@ -50,10 +77,16 @@ class LassoSelectionTool extends BaseSelectionTool {
 
   @override
   void onPointerUp(PointerUpEvent event, EditorState state) {
+    if (_isDraggingSelection) {
+      _isDraggingSelection = false;
+      _dragLastPoint = null;
+      return;
+    }
+
     if (_points.length >= 3) {
       final path = _createPath();
-      path.close(); // 闭合路径
-      state.setSelection(path); // 确认选区（自动清除预览）
+      path.close();
+      state.setSelection(path);
     } else {
       state.clearPreview();
     }
@@ -63,6 +96,15 @@ class LassoSelectionTool extends BaseSelectionTool {
   @override
   void onSelectionCancel() {
     _points.clear();
+    _isDraggingSelection = false;
+    _dragLastPoint = null;
+  }
+
+  static ui.Image _createPlaceholderImage() {
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawPaint(Paint()..color = const Color(0x00000000));
+    final picture = recorder.endRecording();
+    return picture.toImageSync(1, 1);
   }
 
   void _updatePreviewPath(EditorState state) {
@@ -72,7 +114,6 @@ class LassoSelectionTool extends BaseSelectionTool {
     }
 
     final path = _createPath();
-    // 添加回到起点的虚线预览
     path.lineTo(_points.first.dx, _points.first.dy);
     state.setPreviewPath(path);
   }
@@ -83,7 +124,6 @@ class LassoSelectionTool extends BaseSelectionTool {
 
     path.moveTo(_points.first.dx, _points.first.dy);
 
-    // 使用平滑曲线连接点
     if (_points.length <= 2) {
       for (int i = 1; i < _points.length; i++) {
         path.lineTo(_points[i].dx, _points[i].dy);

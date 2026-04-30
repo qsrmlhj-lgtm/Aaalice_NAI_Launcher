@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/focused_inpaint_utils.dart';
@@ -13,7 +13,9 @@ import '../../../core/utils/localization_extension.dart';
 import '../../widgets/common/app_toast.dart';
 import 'core/canvas_controller.dart';
 import 'core/editor_state.dart';
+import 'effects/editor_effects.dart';
 import 'core/focused_selection_state.dart';
+import 'core/history_manager.dart';
 import 'layers/layer.dart';
 import 'painters/focused_overlay_painter.dart';
 import 'tools/tool_base.dart';
@@ -146,6 +148,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
   static const Set<String> _inpaintToolIds = {
     'brush',
     'eraser',
+    'fill',
     'rect_selection',
     'ellipse_selection',
     'lasso_selection',
@@ -407,6 +410,12 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
               onPressed: _loadMask,
               tooltip: '加载蒙版',
             ),
+          if (!_isInpaintMode)
+            IconButton(
+              icon: const Icon(Icons.tune_rounded),
+              onPressed: _showEffectsDialog,
+              tooltip: 'Effects',
+            ),
           // 导出按钮
           IconButton(
             icon: const Icon(Icons.check),
@@ -463,6 +472,13 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           Text(widget.title, style: theme.textTheme.titleSmall),
 
           const Spacer(),
+
+          if (!_isInpaintMode)
+            TextButton.icon(
+              icon: const Icon(Icons.tune_rounded, size: 18),
+              label: const Text('Effects'),
+              onPressed: _showEffectsDialog,
+            ),
 
           // 画布尺寸按钮（使用细粒度监听）
           TextButton.icon(
@@ -754,6 +770,703 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showEffectsDialog() async {
+    final layer = _state.layerManager.activeLayer;
+    if (layer == null || layer.locked || !layer.hasContent) {
+      AppToast.warning(context, '请选择一个非锁定且有内容的图层');
+      return;
+    }
+
+    final sourceBytes = await _readLayerPng(layer);
+    if (!mounted) return;
+    if (sourceBytes == null) {
+      AppToast.error(context, '无法读取当前图层');
+      return;
+    }
+
+    var effectType = EditorEffectType.brightness;
+    var intensity = 0.25;
+    var previewBytes = sourceBytes;
+    var previewLoading = false;
+    var previewError = '';
+    var previewVersion = 0;
+    var previewInitialized = false;
+    var dialogOpen = true;
+    Timer? previewDebounce;
+
+    Future<void> refreshPreview(StateSetter setDialogState) async {
+      previewDebounce?.cancel();
+      final version = ++previewVersion;
+      setDialogState(() {
+        previewLoading = true;
+        previewError = '';
+      });
+
+      previewDebounce = Timer(const Duration(milliseconds: 180), () async {
+        try {
+          final cropRect = _selectionCropRect();
+          final job = EditorEffectJob(
+            imageBytes: sourceBytes,
+            effectType: effectType,
+            intensity: intensity,
+            maxPreviewDimension: 768,
+            cropRect: cropRect,
+          );
+          final resultMessage = await compute(
+            runEditorEffectJobMessage,
+            job.toMessage(),
+            debugLabel: 'image_editor_effect_preview',
+          );
+          final result = EditorEffectResult.fromMessage(
+            resultMessage,
+          );
+          if (!dialogOpen || !mounted || version != previewVersion) {
+            return;
+          }
+          setDialogState(() {
+            previewBytes = result.bytes;
+            previewLoading = false;
+          });
+        } catch (e) {
+          if (!dialogOpen || !mounted || version != previewVersion) {
+            return;
+          }
+          setDialogState(() {
+            previewLoading = false;
+            previewError = e.toString();
+          });
+        }
+      });
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            if (!previewInitialized) {
+              previewInitialized = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (dialogOpen && mounted) {
+                  unawaited(refreshPreview(setState));
+                }
+              });
+            }
+            final media = MediaQuery.of(context);
+            final horizontalInset = media.size.width < 820 ? 12.0 : 32.0;
+            final dialogWidth = (media.size.width - horizontalInset * 2)
+                .clamp(360.0, 1120.0)
+                .toDouble();
+            final previewHeight =
+                (media.size.height * 0.48).clamp(320.0, 520.0).toDouble();
+
+            void selectEffect(EditorEffectType value) {
+              setState(() {
+                effectType = value;
+                intensity = _defaultEffectIntensity(value);
+              });
+              unawaited(refreshPreview(setState));
+            }
+
+            return Dialog(
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: horizontalInset,
+                vertical: 20,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: media.size.height * 0.9,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '本地后处理 / Effects',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '关闭',
+                            onPressed: () => Navigator.pop(context, false),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildEffectSection(
+                                title: '基础调整',
+                                effects: const [
+                                  EditorEffectType.brightness,
+                                  EditorEffectType.contrast,
+                                  EditorEffectType.saturation,
+                                  EditorEffectType.temperature,
+                                  EditorEffectType.gamma,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                              ),
+                              const SizedBox(height: 14),
+                              _buildEffectSection(
+                                title: '风格与修复',
+                                effects: const [
+                                  EditorEffectType.grayscale,
+                                  EditorEffectType.invert,
+                                  EditorEffectType.sepia,
+                                  EditorEffectType.denoise,
+                                  EditorEffectType.blur,
+                                  EditorEffectType.sharpen,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                              ),
+                              const SizedBox(height: 14),
+                              _buildEffectSection(
+                                title: '旋转 / 翻转 / 裁剪',
+                                description: '几何操作已经独立出来，点击后会先生成预览，确认应用后才写回图层。',
+                                effects: const [
+                                  EditorEffectType.rotateLeft,
+                                  EditorEffectType.rotateRight,
+                                  EditorEffectType.flipHorizontal,
+                                  EditorEffectType.flipVertical,
+                                  EditorEffectType.cropToSelection,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                                prominent: true,
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEffectControl(
+                                effectType: effectType,
+                                intensity: intensity,
+                                onChanged: (value) {
+                                  setState(() => intensity = value);
+                                  unawaited(refreshPreview(setState));
+                                },
+                                onReset: () {
+                                  setState(
+                                    () => intensity =
+                                        _defaultEffectIntensity(effectType),
+                                  );
+                                  unawaited(refreshPreview(setState));
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEffectPreviewComparison(
+                                previewHeight: previewHeight,
+                                sourceBytes: sourceBytes,
+                                previewBytes: previewBytes,
+                                previewLoading: previewLoading,
+                                previewError: previewError,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                '预览不会修改原图；点击应用后才会把结果写入当前活动图层和撤销历史。',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('取消'),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: previewLoading || previewError.isNotEmpty
+                                ? null
+                                : () => Navigator.pop(context, true),
+                            icon: const Icon(Icons.check),
+                            label: const Text('应用到当前图层'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    dialogOpen = false;
+    previewDebounce?.cancel();
+
+    if (confirmed == true) {
+      await _applyEffect(effectType, intensity);
+    }
+  }
+
+  Widget _buildEffectSection({
+    required String title,
+    required List<EditorEffectType> effects,
+    required EditorEffectType selectedEffect,
+    required ValueChanged<EditorEffectType> onSelected,
+    String? description,
+    bool prominent = false,
+  }) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (description != null) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      description,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final effect in effects)
+                  _buildEffectChip(
+                    effect: effect,
+                    selected: effect == selectedEffect,
+                    onSelected: onSelected,
+                    prominent: prominent,
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEffectChip({
+    required EditorEffectType effect,
+    required bool selected,
+    required ValueChanged<EditorEffectType> onSelected,
+    required bool prominent,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final foreground =
+        selected ? colorScheme.onSecondaryContainer : colorScheme.onSurface;
+    return ChoiceChip(
+      selected: selected,
+      showCheckmark: false,
+      selectedColor: colorScheme.secondaryContainer,
+      backgroundColor:
+          colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      side: BorderSide(
+        color: selected ? colorScheme.secondary : colorScheme.outlineVariant,
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: prominent ? 14 : 10,
+        vertical: prominent ? 10 : 7,
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_effectIcon(effect), size: prominent ? 20 : 18),
+          const SizedBox(width: 6),
+          Text(
+            _effectLabel(effect),
+            style: theme.textTheme.labelLarge?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+      onSelected: (_) => onSelected(effect),
+    );
+  }
+
+  Widget _buildEffectControl({
+    required EditorEffectType effectType,
+    required double intensity,
+    required ValueChanged<double> onChanged,
+    required VoidCallback onReset,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    if (!_effectHasIntensity(effectType)) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Icon(_effectIcon(effectType), color: colorScheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '${_effectLabel(effectType)} 是一次性操作，没有强度滑条。',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(_effectIcon(effectType), color: colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${_effectLabel(effectType)} 强度',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Text(
+                  intensity.toStringAsFixed(2),
+                  style: theme.textTheme.titleSmall,
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: onReset,
+                  child: const Text('重置'),
+                ),
+              ],
+            ),
+            Slider(
+              value: intensity,
+              min: _effectMin(effectType),
+              max: _effectMax(effectType),
+              divisions: 40,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEffectPreviewComparison({
+    required double previewHeight,
+    required Uint8List sourceBytes,
+    required Uint8List previewBytes,
+    required bool previewLoading,
+    required String previewError,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stacked = constraints.maxWidth < 720;
+        if (stacked) {
+          return SizedBox(
+            height: previewHeight * 1.7,
+            child: Column(
+              children: [
+                Expanded(
+                  child: _buildEffectPreviewPane(
+                    title: '原图',
+                    bytes: sourceBytes,
+                    loading: false,
+                    error: '',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: _buildEffectPreviewPane(
+                    title: '效果预览',
+                    bytes: previewBytes,
+                    loading: previewLoading,
+                    error: previewError,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return SizedBox(
+          height: previewHeight,
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildEffectPreviewPane(
+                  title: '原图',
+                  bytes: sourceBytes,
+                  loading: false,
+                  error: '',
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _buildEffectPreviewPane(
+                  title: '效果预览',
+                  bytes: previewBytes,
+                  loading: previewLoading,
+                  error: previewError,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEffectPreviewPane({
+    required String title,
+    required Uint8List bytes,
+    required bool loading,
+    required String error,
+  }) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
+              child: error.isNotEmpty
+                  ? Center(
+                      child: Text(
+                        error,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
+                      ),
+                    )
+                  : Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.medium,
+                      gaplessPlayback: true,
+                    ),
+            ),
+          ),
+          Positioned(
+            left: 8,
+            top: 6,
+            child: Text(title, style: theme.textTheme.labelMedium),
+          ),
+          if (loading)
+            const Positioned(
+              right: 8,
+              top: 8,
+              child: SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  IconData _effectIcon(EditorEffectType type) {
+    return switch (type) {
+      EditorEffectType.brightness => Icons.wb_sunny_outlined,
+      EditorEffectType.contrast => Icons.contrast,
+      EditorEffectType.saturation => Icons.palette_outlined,
+      EditorEffectType.temperature => Icons.thermostat,
+      EditorEffectType.gamma => Icons.tune,
+      EditorEffectType.grayscale => Icons.tonality,
+      EditorEffectType.invert => Icons.invert_colors,
+      EditorEffectType.sepia => Icons.filter_vintage,
+      EditorEffectType.denoise => Icons.grain,
+      EditorEffectType.blur => Icons.blur_on,
+      EditorEffectType.sharpen => Icons.auto_fix_high,
+      EditorEffectType.cropToSelection => Icons.crop,
+      EditorEffectType.rotateLeft => Icons.rotate_left,
+      EditorEffectType.rotateRight => Icons.rotate_right,
+      EditorEffectType.flipHorizontal => Icons.swap_horiz,
+      EditorEffectType.flipVertical => Icons.swap_vert,
+    };
+  }
+
+  Future<void> _applyEffect(
+    EditorEffectType effectType,
+    double intensity,
+  ) async {
+    final layer = _state.layerManager.activeLayer;
+    if (layer == null || layer.locked || !layer.hasContent) {
+      AppToast.warning(context, '请选择一个非锁定且有内容的图层');
+      return;
+    }
+
+    try {
+      final sourceBytes = await _readLayerPng(layer);
+      if (!mounted) return;
+      if (sourceBytes == null) {
+        AppToast.error(context, '无法读取当前图层');
+        return;
+      }
+
+      final cropRect = _selectionCropRect();
+      final job = EditorEffectJob(
+        imageBytes: sourceBytes,
+        effectType: effectType,
+        intensity: intensity,
+        cropRect: cropRect,
+      );
+      final resultMessage = await compute(
+        runEditorEffectJobMessage,
+        job.toMessage(),
+        debugLabel: 'image_editor_effect_apply',
+      );
+      final result = EditorEffectResult.fromMessage(resultMessage);
+      final bytes = result.bytes;
+      final newImage = await _decodeUiImage(bytes);
+      if (!mounted) return;
+      _state.historyManager.execute(
+        ReplaceLayerImageAction(
+          layerId: layer.id,
+          newImageBytes: bytes,
+          newImage: newImage,
+          actionDescription: _effectLabel(effectType),
+        ),
+        _state,
+      );
+      _state.layerManager.invalidateSnapshot();
+      setState(() {});
+      AppToast.success(context, '已应用 ${_effectLabel(effectType)}');
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, '应用效果失败: $e');
+    }
+  }
+
+  Future<Uint8List?> _readLayerPng(dynamic layer) async {
+    final rendered = await _renderLayerToImage(layer);
+    try {
+      final raw = await rendered.toByteData(format: ui.ImageByteFormat.png);
+      return raw?.buffer.asUint8List();
+    } finally {
+      rendered.dispose();
+    }
+  }
+
+  Future<ui.Image> _renderLayerToImage(dynamic layer) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    layer.render(canvas, _state.canvasSize);
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(
+      _state.canvasSize.width.toInt(),
+      _state.canvasSize.height.toInt(),
+    );
+    picture.dispose();
+    return image;
+  }
+
+  Future<ui.Image> _decodeUiImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    try {
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  String _effectLabel(EditorEffectType type) {
+    return editorEffectLabel(type);
+  }
+
+  double _defaultEffectIntensity(EditorEffectType type) {
+    return editorEffectDefaultIntensity(type);
+  }
+
+  double _effectMin(EditorEffectType type) {
+    return editorEffectMin(type);
+  }
+
+  double _effectMax(EditorEffectType type) {
+    return editorEffectMax(type);
+  }
+
+  bool _effectHasIntensity(EditorEffectType type) {
+    return editorEffectHasIntensity(type);
+  }
+
+  EditorEffectCropRect? _selectionCropRect() {
+    final selection = _state.selectionPath;
+    if (selection == null) {
+      return null;
+    }
+    final bounds = selection.getBounds().intersect(
+          Offset.zero & _state.canvasSize,
+        );
+    if (bounds.isEmpty) {
+      return null;
+    }
+    final x = bounds.left.floor().clamp(0, _state.canvasSize.width - 1).toInt();
+    final y = bounds.top.floor().clamp(0, _state.canvasSize.height - 1).toInt();
+    final right =
+        bounds.right.ceil().clamp(x + 1, _state.canvasSize.width).toInt();
+    final bottom =
+        bounds.bottom.ceil().clamp(y + 1, _state.canvasSize.height).toInt();
+    return EditorEffectCropRect(
+      x: x,
+      y: y,
+      width: right - x,
+      height: bottom - y,
     );
   }
 
@@ -1200,8 +1913,8 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         Positioned.fill(
           child: EditorCanvas(
             state: _state,
-            suppressSelectionOverlay: _focusedSelectionState
-                .shouldSuppressSelectionOverlay(
+            suppressSelectionOverlay:
+                _focusedSelectionState.shouldSuppressSelectionOverlay(
               focusedEnabled: _isInpaintMode && _focusedInpaintEnabled,
               currentToolId: _state.currentTool?.id,
               previewPath: _state.previewPath,
@@ -1392,7 +2105,8 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
     if (_state.currentTool?.id != 'rect_selection') {
       return;
     }
-    final consumed = _focusedSelectionState.captureSelection(_state.selectionPath);
+    final consumed =
+        _focusedSelectionState.captureSelection(_state.selectionPath);
     if (!consumed) {
       return;
     }

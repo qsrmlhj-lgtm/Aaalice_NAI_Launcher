@@ -37,14 +37,16 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
     /// 原始图片数据 (仅 rawImage 模式使用)
     @HiveField(5) Uint8List? rawImageData,
 
-    /// Reference Strength (0-1)
+    /// Reference Strength (-1 到 1)
     @HiveField(6) @Default(0.6) double strength,
 
     /// Information Extracted (0-1)
     @HiveField(7) @Default(0.7) double infoExtracted,
 
     /// 数据来源类型索引 (VibeSourceType 的索引)
-    @HiveField(8) @Default(3) int sourceTypeIndex, // default to rawImage (index 3)
+    @HiveField(8)
+    @Default(3)
+    int sourceTypeIndex, // default to rawImage (index 3)
 
     /// 所属分类 ID
     @HiveField(9) String? categoryId,
@@ -158,6 +160,18 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
     );
   }
 
+  /// 转换为仅保留展示所需字段的轻量条目
+  VibeLibraryEntry toDisplayEntry() {
+    return copyWith(
+      vibeEncoding: '',
+      vibeThumbnail: null,
+      rawImageData: null,
+      thumbnail: null,
+      bundledVibePreviews: null,
+      bundledVibeEncodings: null,
+    );
+  }
+
   /// 数据来源类型
   VibeSourceType get sourceType => VibeSourceType.values[sourceTypeIndex];
 
@@ -171,15 +185,18 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
   bool get hasThumbnail => thumbnail != null && thumbnail!.isNotEmpty;
 
   /// 是否有 vibe 缩略图
-  bool get hasVibeThumbnail => vibeThumbnail != null && vibeThumbnail!.isNotEmpty;
+  bool get hasVibeThumbnail =>
+      vibeThumbnail != null && vibeThumbnail!.isNotEmpty;
+
+  /// 是否存在可用于重新编码的原图数据
+  bool get canReencodeFromRawSource =>
+      rawImageData != null && rawImageData!.isNotEmpty;
 
   /// 是否为 bundle 条目
-  bool get isBundle =>
-      bundledVibeNames != null && bundledVibeNames!.isNotEmpty;
+  bool get isBundle => bundledVibeNames != null && bundledVibeNames!.isNotEmpty;
 
   /// 是否为预编码条目（不需要服务端编码）
-  bool get isPreEncoded =>
-      sourceType != VibeSourceType.rawImage;
+  bool get isPreEncoded => sourceType != VibeSourceType.rawImage;
 
   /// bundle 内部 vibe 数量
   int get bundledVibeCount => bundledVibeNames?.length ?? 0;
@@ -262,20 +279,21 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
 
   /// 更新 Vibe 强度
   VibeLibraryEntry updateStrength(double newStrength) {
-    return copyWith(strength: newStrength.clamp(0.0, 1.0));
+    return copyWith(strength: VibeReference.sanitizeStrength(newStrength));
   }
 
   /// 更新信息提取度
   VibeLibraryEntry updateInfoExtracted(double newInfoExtracted) {
-    return copyWith(infoExtracted: newInfoExtracted.clamp(0.0, 1.0));
+    return copyWith(
+      infoExtracted: VibeReference.sanitizeInfoExtracted(newInfoExtracted),
+    );
   }
 }
 
 /// Vibe 库条目列表扩展
 extension VibeLibraryEntryListExtension on List<VibeLibraryEntry> {
   /// 获取收藏的条目
-  List<VibeLibraryEntry> get favorites =>
-      where((e) => e.isFavorite).toList();
+  List<VibeLibraryEntry> get favorites => where((e) => e.isFavorite).toList();
 
   /// 获取指定分类的条目
   List<VibeLibraryEntry> getByCategory(String? categoryId) =>
@@ -334,4 +352,3 @@ extension VibeLibraryEntryListExtension on List<VibeLibraryEntry> {
     return tags;
   }
 }
-

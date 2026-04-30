@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_mode_provider.dart';
 import 'auth_mode_switcher.dart';
 import 'credentials_login_form.dart';
+import 'third_party_api_login_card.dart';
 import 'token_login_card.dart';
 
 /// 登录表单容器 - 支持邮箱密码和 Token 两种登录模式
@@ -71,6 +72,10 @@ class LoginFormContainer extends ConsumerWidget {
                   ),
                 AuthMode.token => TokenLoginCard(
                     key: const Key('token_form'),
+                    onLoginSuccess: onLoginSuccess,
+                  ),
+                AuthMode.thirdParty => ThirdPartyApiLoginCard(
+                    key: const Key('third_party_form'),
                     onLoginSuccess: onLoginSuccess,
                   ),
               },

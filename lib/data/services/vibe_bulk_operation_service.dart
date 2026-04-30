@@ -164,7 +164,8 @@ class VibeBulkOperationService {
         final deleted = await _storageService.deleteEntry(entryId);
         if (deleted) {
           successCount++;
-          AppLogger.d('Deleted: $entryName ($successCount/${entryIds.length})', _tag);
+          AppLogger.d(
+              'Deleted: $entryName ($successCount/${entryIds.length})', _tag);
         } else {
           failedCount++;
           errors.add('Entry not found or delete failed: $entryName');
@@ -238,7 +239,8 @@ class VibeBulkOperationService {
         );
         if (updatedEntry != null) {
           successCount++;
-          AppLogger.d('Moved: $entryName ($successCount/${entryIds.length})', _tag);
+          AppLogger.d(
+              'Moved: $entryName ($successCount/${entryIds.length})', _tag);
         } else {
           failedCount++;
           errors.add('Entry not found: $entryName');
@@ -322,7 +324,9 @@ class VibeBulkOperationService {
         final updatedEntry = await _storageService.toggleFavorite(entryId);
         if (updatedEntry != null) {
           successCount++;
-          AppLogger.d('Favorite toggled: $entryName ($successCount/${entryIds.length})', _tag);
+          AppLogger.d(
+              'Favorite toggled: $entryName ($successCount/${entryIds.length})',
+              _tag);
         } else {
           failedCount++;
           errors.add('Failed to toggle favorite: $entryName');
@@ -410,7 +414,9 @@ class VibeBulkOperationService {
 
         if (updatedEntry != null) {
           successCount++;
-          AppLogger.d('Tags added: $entryName ($successCount/${entryIds.length})', _tag);
+          AppLogger.d(
+              'Tags added: $entryName ($successCount/${entryIds.length})',
+              _tag);
         } else {
           failedCount++;
           errors.add('Failed to add tags: $entryName');
@@ -490,7 +496,8 @@ class VibeBulkOperationService {
         }
 
         // 移除指定标签
-        final updatedTags = currentEntry.tags.where((t) => !tags.contains(t)).toList();
+        final updatedTags =
+            currentEntry.tags.where((t) => !tags.contains(t)).toList();
         final updatedEntry = await _storageService.updateEntryTags(
           entryId,
           updatedTags,
@@ -498,7 +505,9 @@ class VibeBulkOperationService {
 
         if (updatedEntry != null) {
           successCount++;
-          AppLogger.d('Tags removed: $entryName ($successCount/${entryIds.length})', _tag);
+          AppLogger.d(
+              'Tags removed: $entryName ($successCount/${entryIds.length})',
+              _tag);
         } else {
           failedCount++;
           errors.add('Failed to remove tags: $entryName');
@@ -624,7 +633,8 @@ class VibeBulkOperationService {
           exportedFilePath: exportedFilePath,
         );
       } else {
-        AppLogger.e('Bulk export failed: no file was created', null, null, _tag);
+        AppLogger.e(
+            'Bulk export failed: no file was created', null, null, _tag);
         return VibeBulkOperationResult.fromResult(
           success: 0,
           failed: entries.length,
@@ -665,11 +675,7 @@ class VibeBulkOperationService {
       _tag,
     );
 
-    // 获取现有条目用于名称冲突检测
-    final existingEntries = await _storageService.getAllEntries();
-    final nameMap = <String, VibeLibraryEntry>{
-      for (final entry in existingEntries) _normalizeName(entry.name): entry,
-    };
+    final nameMap = <String, VibeLibraryEntry>{};
 
     for (var i = 0; i < filePaths.length; i++) {
       final filePath = filePaths[i];
@@ -708,8 +714,10 @@ class VibeBulkOperationService {
         // 导入解析到的所有 Vibe 引用
         for (var refIndex = 0; refIndex < references.length; refIndex++) {
           final reference = references[refIndex];
-          final entryName = _generateUniqueName(
-            reference.displayName.isEmpty ? 'vibe-${i + 1}-${refIndex + 1}' : reference.displayName,
+          final entryName = await _generateUniqueName(
+            reference.displayName.isEmpty
+                ? 'vibe-${i + 1}-${refIndex + 1}'
+                : reference.displayName,
             nameMap,
           );
 
@@ -788,11 +796,7 @@ class VibeBulkOperationService {
       _tag,
     );
 
-    // 获取现有条目用于名称冲突检测
-    final existingEntries = await _storageService.getAllEntries();
-    final nameMap = <String, VibeLibraryEntry>{
-      for (final entry in existingEntries) _normalizeName(entry.name): entry,
-    };
+    final nameMap = <String, VibeLibraryEntry>{};
 
     for (var i = 0; i < files.length; i++) {
       final file = files[i];
@@ -823,8 +827,10 @@ class VibeBulkOperationService {
         // 导入解析到的所有 Vibe 引用
         for (var refIndex = 0; refIndex < references.length; refIndex++) {
           final reference = references[refIndex];
-          final entryName = _generateUniqueName(
-            reference.displayName.isEmpty ? 'vibe-${i + 1}-${refIndex + 1}' : reference.displayName,
+          final entryName = await _generateUniqueName(
+            reference.displayName.isEmpty
+                ? 'vibe-${i + 1}-${refIndex + 1}'
+                : reference.displayName,
             nameMap,
           );
 
@@ -899,20 +905,38 @@ class VibeBulkOperationService {
     return name.trim().toLowerCase();
   }
 
+  Future<VibeLibraryEntry?> _findEntryByNameCached(
+    String name,
+    Map<String, VibeLibraryEntry> existingNameMap,
+  ) async {
+    final normalized = _normalizeName(name);
+    final cached = existingNameMap[normalized];
+    if (cached != null) {
+      return cached;
+    }
+
+    final existing = await _storageService.findEntryByName(name);
+    if (existing != null) {
+      existingNameMap[_normalizeName(existing.name)] = existing;
+    }
+    return existing;
+  }
+
   /// 生成唯一名称
-  String _generateUniqueName(
+  Future<String> _generateUniqueName(
     String baseName,
     Map<String, VibeLibraryEntry> existingNameMap,
-  ) {
+  ) async {
     final normalizedBase = _normalizeName(baseName);
 
-    if (!existingNameMap.containsKey(normalizedBase)) {
+    if (existingNameMap[normalizedBase] == null &&
+        await _findEntryByNameCached(baseName, existingNameMap) == null) {
       return baseName;
     }
 
     var index = 2;
     var candidate = '$baseName ($index)';
-    while (existingNameMap.containsKey(_normalizeName(candidate))) {
+    while (await _findEntryByNameCached(candidate, existingNameMap) != null) {
       index++;
       candidate = '$baseName ($index)';
     }
@@ -926,7 +950,8 @@ class VibeBulkOperationService {
   /// [operations] - 操作配置列表
   Future<List<VibeBulkOperationResult>> executeMultiple(
     List<BulkOperationConfig> operations, {
-    void Function(int current, int total, VibeBulkOperationType type)? onOperationStart,
+    void Function(int current, int total, VibeBulkOperationType type)?
+        onOperationStart,
   }) async {
     final results = <VibeBulkOperationResult>[];
 

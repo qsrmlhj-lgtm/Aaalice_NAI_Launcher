@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -203,6 +205,7 @@ class EditorState extends ChangeNotifier {
   void invertSelection() => selectionManager.invertSelection(_canvasSize);
   void setPreviewPath(Path? path) => selectionManager.setPreviewPath(path);
   void clearPreview() => selectionManager.clearPreview();
+  bool get isTransforming => selectionManager.isTransforming;
 
   // ===== 代理方法：笔画 =====
 
@@ -362,7 +365,7 @@ class EditorState extends ChangeNotifier {
   /// 清空当前图层（支持撤销）
   void clearActiveLayerWithHistory() {
     final layer = layerManager.activeLayer;
-    if (layer == null || layer.locked || layer.strokes.isEmpty) return;
+    if (layer == null || layer.locked || !layer.hasContent) return;
 
     historyManager.execute(
       ClearLayerAction(layerId: layer.id),
@@ -382,6 +385,110 @@ class EditorState extends ChangeNotifier {
       ),
       this,
     );
+  }
+
+  // ===== 选区操作 =====
+
+  /// 将选区内容剪切到新图层
+  Future<bool> cutSelectionToNewLayer() async {
+    final selection = selectionManager.selectionPath;
+    final activeLayer = layerManager.activeLayer;
+    if (selection == null || activeLayer == null || activeLayer.locked) {
+      return false;
+    }
+
+    final w = _canvasSize.width.toInt();
+    final h = _canvasSize.height.toInt();
+    if (w <= 0 || h <= 0) return false;
+
+    final layerImg = await _renderLayerToImage(activeLayer, _canvasSize, w, h);
+
+    final cutImg = await _extractSelection(layerImg, selection, w, h);
+    final remainImg = await _eraseSelection(layerImg, selection, w, h);
+    layerImg.dispose();
+
+    final cutPng = await cutImg.toByteData(format: ui.ImageByteFormat.png);
+    final remainPng =
+        await remainImg.toByteData(format: ui.ImageByteFormat.png);
+    if (cutPng == null || remainPng == null) {
+      cutImg.dispose();
+      remainImg.dispose();
+      return false;
+    }
+
+    historyManager.execute(
+      ReplaceLayerImageAction(
+        layerId: activeLayer.id,
+        newImageBytes: remainPng.buffer.asUint8List(),
+        newImage: remainImg,
+        actionDescription: '剪切选区',
+      ),
+      this,
+    );
+
+    final cutLayer = layerManager.addLayer(
+      name: '${activeLayer.name} (选区)',
+    );
+    await cutLayer.setBaseImage(cutPng.buffer.asUint8List());
+    cutImg.dispose();
+
+    selectionManager.clearSelection();
+    _notifyRenderChange();
+    notifyListeners();
+    return true;
+  }
+
+  Future<ui.Image> _renderLayerToImage(
+    dynamic layer,
+    Size canvasSize,
+    int w,
+    int h,
+  ) async {
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    (layer as dynamic).render(c, canvasSize);
+    final pic = rec.endRecording();
+    final img = await pic.toImage(w, h);
+    pic.dispose();
+    return img;
+  }
+
+  Future<ui.Image> _extractSelection(
+    ui.Image source,
+    Path selection,
+    int w,
+    int h,
+  ) async {
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.clipPath(selection);
+    c.drawImage(source, Offset.zero, Paint());
+    final pic = rec.endRecording();
+    final img = await pic.toImage(w, h);
+    pic.dispose();
+    return img;
+  }
+
+  Future<ui.Image> _eraseSelection(
+    ui.Image source,
+    Path selection,
+    int w,
+    int h,
+  ) async {
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawImage(source, Offset.zero, Paint());
+    c.save();
+    c.clipPath(selection);
+    c.drawRect(
+      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+      Paint()..blendMode = BlendMode.clear,
+    );
+    c.restore();
+    final pic = rec.endRecording();
+    final img = await pic.toImage(w, h);
+    pic.dispose();
+    return img;
   }
 
   // ===== 内部方法 =====
@@ -408,10 +515,13 @@ class EditorState extends ChangeNotifier {
     // strokeManager 的变化已在代理方法中处理
   }
 
-  void _notifyRenderChange() {
+  /// 通知画布需要重绘（供工具调用）
+  void notifyRenderChange() {
     // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
     renderNotifier.notifyListeners();
   }
+
+  void _notifyRenderChange() => notifyRenderChange();
 
   void _safeNotifyListeners() {
     if (_isNotifying) return;

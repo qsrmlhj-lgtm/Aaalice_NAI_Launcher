@@ -6,6 +6,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../widgets/common/app_toast.dart';
+import '../../../data/models/character/character_prompt.dart';
+import '../../../data/models/tag_library/tag_library_entry.dart';
+import '../../providers/fixed_tags_provider.dart';
+import '../../providers/reverse_prompt_provider.dart';
+import '../../providers/tag_library_page_provider.dart';
+import '../../widgets/tag_library/tag_library_picker_dialog.dart';
 import '../providers/prompt_assistant_config_provider.dart';
 import '../providers/prompt_assistant_history_provider.dart';
 import '../providers/prompt_assistant_state_provider.dart';
@@ -63,81 +69,143 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
   }
 
   Future<void> _runTranslate() async {
+    final inputText = _assistantInputText();
     await _runAction(
       '翻译中',
-      (service) => service.translatePrompt(
-        widget.controller.text,
+      inputText,
+      (service, input) => service.translatePrompt(
+        input,
         sessionId: widget.sessionId,
       ),
     );
   }
 
   Future<void> _runOptimize() async {
+    final inputText = _assistantInputText();
     await _runAction(
       '优化中',
-      (service) => service.optimizePrompt(
-        widget.controller.text,
+      inputText,
+      (service, input) => service.optimizePrompt(
+        input,
         sessionId: widget.sessionId,
       ),
     );
   }
 
+  Future<void> _runCharacterReplace() async {
+    final character = await _selectCharacterForReplacement();
+    if (character == null) {
+      return;
+    }
+
+    final inputText = _assistantInputText();
+    await _runAction(
+      '角色替换中',
+      inputText,
+      (service, input) => service.replaceCharacterPrompt(
+        input,
+        sessionId: widget.sessionId,
+        characterName: character.name,
+        characterPrompt: character.prompt,
+      ),
+    );
+  }
+
+  Future<CharacterPrompt?> _selectCharacterForReplacement() async {
+    final character =
+        ref.read(reversePromptCharacterProvider.notifier).selectedCharacter;
+    if (character != null) {
+      return character;
+    }
+    return await _pickReplacementCharacterFromLibrary();
+  }
+
+  Future<CharacterPrompt?> _pickReplacementCharacterFromLibrary() async {
+    final entry = await showDialog<TagLibraryEntry>(
+      context: context,
+      builder: (context) => const TagLibraryPickerDialog(title: '选择替换目标角色'),
+    );
+    if (entry == null) {
+      if (mounted) {
+        AppToast.warning(context, '请先在反推角色库中添加有效角色');
+      }
+      return null;
+    }
+
+    ref.read(tagLibraryPageNotifierProvider.notifier).recordUsage(entry.id);
+    final character = CharacterPrompt.create(
+      name: entry.displayName,
+      prompt: entry.content,
+      thumbnailPath: entry.thumbnail,
+    );
+    ref
+        .read(reversePromptCharacterProvider.notifier)
+        .setReplacementCharacter(character);
+    return character;
+  }
+
   Future<void> _runAction(
     String label,
-    Stream<dynamic> Function(PromptAssistantService service) builder,
+    String inputText,
+    Stream<dynamic> Function(PromptAssistantService service, String input)
+        builder,
   ) async {
-    final text = widget.controller.text.trim();
+    final text = inputText.trim();
     if (text.isEmpty) {
       if (mounted) AppToast.warning(context, '请输入提示词后再操作');
       return;
     }
 
+    final beforeText = widget.controller.text;
     ref
         .read(promptAssistantHistoryProvider.notifier)
-        .push(widget.sessionId, widget.controller.text);
+        .push(widget.sessionId, beforeText);
 
     final stateNotifier = ref.read(promptAssistantStateProvider.notifier);
     stateNotifier.startProcessing(widget.sessionId, label);
 
     final service = ref.read(promptAssistantServiceProvider);
-    final config = ref.read(promptAssistantConfigProvider);
     final buffer = StringBuffer();
 
     await _streamSub?.cancel();
-    _streamSub = builder(service).listen(
+    _streamSub = builder(service, text).listen(
       (chunk) {
         if (chunk.done == true) return;
         final delta = chunk.delta as String? ?? '';
         if (delta.isEmpty) return;
         buffer.write(delta);
-        if (config.streamOutput) {
-          final nextText = buffer.toString();
-          if (nextText.isNotEmpty) {
-            widget.controller.text = nextText;
-            widget.controller.selection =
-                TextSelection.collapsed(offset: widget.controller.text.length);
-          }
-        }
       },
       onError: (e) {
         stateNotifier.setError(widget.sessionId, e.toString());
         if (mounted) AppToast.error(context, '助手请求失败: $e');
       },
       onDone: () {
-        if (!config.streamOutput && buffer.isNotEmpty) {
+        if (buffer.isNotEmpty) {
           final finalText = buffer.toString();
           widget.controller.text = finalText;
           widget.controller.selection =
               TextSelection.collapsed(offset: widget.controller.text.length);
         }
         stateNotifier.finishProcessing(widget.sessionId);
+        final afterText = widget.controller.text;
+        ref.read(promptAssistantHistoryProvider.notifier).recordExternalChange(
+              widget.sessionId,
+              before: beforeText,
+              after: afterText,
+            );
         ref.read(promptAssistantHistoryProvider.notifier).push(
               widget.sessionId,
-              widget.controller.text,
+              afterText,
             );
       },
       cancelOnError: true,
     );
+  }
+
+  String _assistantInputText() {
+    return ref
+        .read(fixedTagsNotifierProvider)
+        .stripFromPrompt(widget.controller.text);
   }
 
   void _undo() {
@@ -341,19 +409,18 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
                         ? Theme.of(context)
                             .colorScheme
                             .surfaceContainerHighest
-                            .withOpacity(state.hovering ? 0.9 : 0.82)
+                            .withValues(alpha: state.hovering ? 0.9 : 0.82)
                         : Theme.of(context)
                             .colorScheme
                             .surface
-                            .withOpacity(0.12),
+                            .withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(isExpanded ? 12 : 15),
                     boxShadow: [
                       BoxShadow(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withOpacity(
-                              isExpanded ? 0.09 : (0.10 * breath * glowBoost),
+                        color: Theme.of(context).colorScheme.primary.withValues(
+                              alpha: isExpanded
+                                  ? 0.09
+                                  : (0.10 * breath * glowBoost),
                             ),
                         blurRadius: isExpanded ? 8 : (10 * breath * glowBoost),
                         spreadRadius: isExpanded ? 0 : 0.2,
@@ -379,7 +446,7 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
                       : Theme.of(context)
                           .colorScheme
                           .onSurface
-                          .withOpacity(0.78),
+                          .withValues(alpha: 0.78),
                   iconSize: isExpanded ? 14 : 13,
                   buttonSize: isExpanded ? 24 : 26,
                 ),
@@ -408,6 +475,11 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
                     icon: Icons.auto_fix_high,
                     tooltip: '优化',
                     onPressed: isProcessing ? null : _runOptimize,
+                  ),
+                  _miniButton(
+                    icon: Icons.manage_accounts_rounded,
+                    tooltip: '角色替换',
+                    onPressed: isProcessing ? null : _runCharacterReplace,
                   ),
                   _miniButton(
                     icon: isProcessing ? Icons.stop_circle : Icons.more_horiz,
@@ -453,7 +525,7 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
       verticalOffset: 12,
       preferBelow: false,
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.88),
+        color: Colors.black.withValues(alpha: 0.88),
         borderRadius: BorderRadius.circular(8),
       ),
       textStyle: const TextStyle(

@@ -11,11 +11,22 @@ import '../../data/models/gallery/nai_image_metadata.dart';
 import '../../data/services/image_metadata_service.dart';
 import '../providers/generation/image_workflow_controller.dart';
 import '../providers/image_generation_provider.dart';
+import '../screens/director_tools/director_tools_screen.dart';
 import '../widgets/common/app_toast.dart';
 import '../widgets/image_editor/image_editor_screen.dart';
 
 class ImageWorkflowLauncher {
   const ImageWorkflowLauncher._();
+
+  static void openImageToImage(
+    WidgetRef ref,
+    Uint8List imageBytes,
+  ) {
+    final workflowNotifier = ref.read(imageWorkflowControllerProvider.notifier);
+    workflowNotifier.replaceSourceImage(imageBytes);
+    workflowNotifier.enterBaseMode(clearMask: true);
+    workflowNotifier.setPanelExpanded(true);
+  }
 
   static Future<void> openEditor(
     BuildContext context,
@@ -31,9 +42,6 @@ class ImageWorkflowLauncher {
     } else if (ref.read(imageWorkflowControllerProvider).isEnhance) {
       workflowNotifier.enterBaseMode(clearMask: false);
     }
-
-    workflowNotifier.hideDirectorToolsPanel();
-    workflowNotifier.clearVariationPrepared();
 
     final params = ref.read(generationParamsNotifierProvider);
     final result = await ImageEditorScreen.show(
@@ -80,18 +88,16 @@ class ImageWorkflowLauncher {
       return;
     }
 
-    workflowNotifier.enterInpaintMode();
-    workflowNotifier.setFocusedInpaintEnabled(result.focusedInpaintEnabled);
-    workflowNotifier.setFocusedSelectionRect(result.focusAreaRect);
-    workflowNotifier.setMinimumContextMegaPixels(
-      result.minimumContextMegaPixels,
-    );
     final effectiveMask = result.maskImage != null &&
             InpaintMaskUtils.hasMaskedPixels(result.maskImage!)
         ? result.maskImage
         : null;
-    workflowNotifier.onMaskChanged(effectiveMask);
-    workflowNotifier.setPanelExpanded(true);
+    workflowNotifier.applyInpaintEditorResult(
+      maskImage: effectiveMask,
+      focusedInpaintEnabled: result.focusedInpaintEnabled,
+      focusedSelectionRect: result.focusAreaRect,
+      minimumContextMegaPixels: result.minimumContextMegaPixels,
+    );
     if (effectiveMask != null) {
       AppToast.success(context, context.l10n.img2img_inpaintMaskReady);
     } else if (result.maskImage != null) {
@@ -109,22 +115,54 @@ class ImageWorkflowLauncher {
     workflowNotifier.setPanelExpanded(true);
   }
 
-  static void openDirectorTools(
-    WidgetRef ref,
-    Uint8List imageBytes,
-  ) {
-    final workflowNotifier = ref.read(imageWorkflowControllerProvider.notifier);
-    workflowNotifier.replaceSourceImage(imageBytes);
-    workflowNotifier.showDirectorToolsPanel();
-  }
-
-  static Future<void> prepareVariations(
+  static Future<void> openInpaint(
     BuildContext context,
     WidgetRef ref,
     Uint8List imageBytes,
   ) async {
     final workflowNotifier = ref.read(imageWorkflowControllerProvider.notifier);
-    final workflow = ref.read(imageWorkflowControllerProvider);
+    workflowNotifier.replaceSourceImage(imageBytes);
+    workflowNotifier.setPanelExpanded(true);
+    await openEditor(
+      context,
+      ref,
+      imageBytes,
+      mode: ImageEditorMode.inpaint,
+    );
+  }
+
+  /// 打开图生图「超分」子面板（内嵌，非弹窗）
+  static void openUpscale(WidgetRef ref, Uint8List imageBytes) {
+    final workflowNotifier = ref.read(imageWorkflowControllerProvider.notifier);
+    workflowNotifier.replaceSourceImage(imageBytes);
+    workflowNotifier.enterUpscaleMode();
+    workflowNotifier.setPanelExpanded(true);
+  }
+
+  static Future<void> openDirectorTools(
+    BuildContext context,
+    WidgetRef ref,
+    Uint8List imageBytes,
+  ) async {
+    final result = await DirectorToolsScreen.show(
+      context,
+      sourceImage: imageBytes,
+    );
+    if (result != null && context.mounted) {
+      final workflowNotifier =
+          ref.read(imageWorkflowControllerProvider.notifier);
+      workflowNotifier.replaceSourceImage(result);
+      workflowNotifier.setPanelExpanded(true);
+      AppToast.success(context, context.l10n.img2img_directorApplied);
+    }
+  }
+
+  static Future<void> generateVariations(
+    BuildContext context,
+    WidgetRef ref,
+    Uint8List imageBytes,
+  ) async {
+    final workflowNotifier = ref.read(imageWorkflowControllerProvider.notifier);
     final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
 
     workflowNotifier.replaceSourceImage(imageBytes);
@@ -143,16 +181,17 @@ class ImageWorkflowLauncher {
         paramsNotifier,
         fallbackModel: ref.read(generationParamsNotifierProvider).model,
       );
-      workflowNotifier.markVariationPrepared();
-      AppToast.success(context, context.l10n.img2img_variationsReady);
-      return;
+    } else {
+      paramsNotifier.randomizeSeed();
+      paramsNotifier.updateStrength(0.45);
+      paramsNotifier.updateNoise(0.0);
     }
 
-    paramsNotifier.randomizeSeed();
-    paramsNotifier.updateStrength(0.45);
-    paramsNotifier.updateNoise(0.0);
-    workflowNotifier.markVariationPrepared();
-    AppToast.warning(context, context.l10n.img2img_variationsFallbackHint);
+    if (!context.mounted) return;
+    AppToast.info(context, context.l10n.img2img_variationsStarted);
+
+    final currentParams = ref.read(generationParamsNotifierProvider);
+    ref.read(imageGenerationNotifierProvider.notifier).generate(currentParams);
   }
 
   static void _applyVariationMetadata(

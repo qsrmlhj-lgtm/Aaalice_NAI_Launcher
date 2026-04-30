@@ -261,23 +261,31 @@ class VibeFileParser {
                   final name = vibeJson['name'] as String? ??
                       '${params.fileName}#$i';
                   double strength = params.defaultStrength;
+                  var infoExtracted = 0.7;
                   final importInfo =
                       vibeJson['importInfo'] as Map<String, dynamic>?;
                   if (importInfo != null &&
                       importInfo['strength'] != null) {
                     strength = (importInfo['strength'] as num).toDouble();
                   }
+                  infoExtracted = _extractInformationExtracted(
+                    importInfo,
+                    infoExtracted,
+                  );
 
                   // 提取 vibe 自己的缩略图，如果没有则使用原图
                   final thumbnail = _extractThumbnailFromJson(vibeJson) ??
                       params.bytes;
+                  final rawImageData = _extractRawImageFromJson(vibeJson);
 
                   results.add(
                     VibeReference(
                       displayName: name,
                       vibeEncoding: extractedEncoding,
                       thumbnail: thumbnail,
-                      strength: strength.clamp(0.0, 1.0),
+                      rawImageData: rawImageData,
+                      strength: VibeReference.sanitizeStrength(strength),
+                      infoExtracted: infoExtracted,
                       sourceType: VibeSourceType.png,
                     ),
                   );
@@ -296,6 +304,7 @@ class VibeFileParser {
                 displayName: params.fileName,
                 vibeEncoding: content,
                 thumbnail: params.bytes,
+                rawImageData: params.bytes,
                 strength: params.defaultStrength,
                 sourceType: VibeSourceType.png,
               ),
@@ -314,18 +323,25 @@ class VibeFileParser {
           if (extractedEncoding != null) {
             final name = jsonData['name'] as String? ?? params.fileName;
             double strength = params.defaultStrength;
+            var infoExtracted = 0.7;
             final importInfo =
                 jsonData['importInfo'] as Map<String, dynamic>?;
             if (importInfo != null && importInfo['strength'] != null) {
               strength = (importInfo['strength'] as num).toDouble();
             }
+            infoExtracted = _extractInformationExtracted(
+              importInfo,
+              infoExtracted,
+            );
 
             results.add(
               VibeReference(
                 displayName: name,
                 vibeEncoding: extractedEncoding,
                 thumbnail: params.bytes,
-                strength: strength.clamp(0.0, 1.0),
+                rawImageData: _extractRawImageFromJson(jsonData),
+                strength: VibeReference.sanitizeStrength(strength),
+                infoExtracted: infoExtracted,
                 sourceType: VibeSourceType.png,
               ),
             );
@@ -396,16 +412,23 @@ class VibeFileParser {
               if (extractedEncoding != null && extractedEncoding.isNotEmpty) {
                 final name = firstVibe['name'] as String? ?? params.fileName;
                 double strength = params.defaultStrength;
+                var infoExtracted = 0.7;
                 final importInfo = firstVibe['importInfo'] as Map<String, dynamic>?;
                 if (importInfo != null && importInfo['strength'] != null) {
                   strength = (importInfo['strength'] as num).toDouble();
                 }
+                infoExtracted = _extractInformationExtracted(
+                  importInfo,
+                  infoExtracted,
+                );
 
                 return VibeReference(
                   displayName: name,
                   vibeEncoding: extractedEncoding,
                   thumbnail: params.bytes,
-                  strength: strength.clamp(0.0, 1.0),
+                  rawImageData: _extractRawImageFromJson(firstVibe),
+                  strength: VibeReference.sanitizeStrength(strength),
+                  infoExtracted: infoExtracted,
                   sourceType: VibeSourceType.png,
                 );
               }
@@ -419,6 +442,7 @@ class VibeFileParser {
             displayName: params.fileName,
             vibeEncoding: iTxtContent,
             thumbnail: params.bytes,
+            rawImageData: params.bytes,
             strength: params.defaultStrength,
             sourceType: VibeSourceType.png,
           );
@@ -436,16 +460,23 @@ class VibeFileParser {
           if (extractedEncoding != null) {
             final name = jsonData['name'] as String? ?? params.fileName;
             double strength = params.defaultStrength;
+            var infoExtracted = 0.7;
             final importInfo = jsonData['importInfo'] as Map<String, dynamic>?;
             if (importInfo != null && importInfo['strength'] != null) {
               strength = (importInfo['strength'] as num).toDouble();
             }
+            infoExtracted = _extractInformationExtracted(
+              importInfo,
+              infoExtracted,
+            );
 
             return VibeReference(
               displayName: name,
               vibeEncoding: extractedEncoding,
               thumbnail: params.bytes,
-              strength: strength.clamp(0.0, 1.0),
+              rawImageData: _extractRawImageFromJson(jsonData) ?? params.bytes,
+              strength: VibeReference.sanitizeStrength(strength),
+              infoExtracted: infoExtracted,
               sourceType: VibeSourceType.png,
             );
           }
@@ -540,6 +571,22 @@ class VibeFileParser {
     };
   }
 
+  /// 从导入信息中提取信息提取值
+  static double _extractInformationExtracted(
+    Map<String, dynamic>? importInfo,
+    double defaultValue,
+  ) {
+    final infoValue = importInfo?['information_extracted'];
+    return switch (infoValue) {
+      final double v => VibeReference.sanitizeInfoExtracted(v),
+      final int v => VibeReference.sanitizeInfoExtracted(v.toDouble()),
+      final String v => VibeReference.sanitizeInfoExtracted(
+          double.tryParse(v) ?? defaultValue,
+        ),
+      _ => defaultValue,
+    };
+  }
+
   /// 从 .naiv4vibe 文件解析 Vibe 参考
   static Future<VibeReference> fromNaiV4Vibe(
     String fileName,
@@ -554,10 +601,35 @@ class VibeFileParser {
       jsonData['importInfo'] as Map<String, dynamic>?,
       defaultStrength,
     );
+    final infoExtracted = _extractInformationExtracted(
+      jsonData['importInfo'] as Map<String, dynamic>?,
+      0.7,
+    );
+    final rawImageData = _extractRawImageFromJson(jsonData);
+    final thumbnail = _extractThumbnailFromJson(jsonData);
+    final type = jsonData['type'] as String?;
+
+    if (type == 'image') {
+      if (rawImageData == null || rawImageData.isEmpty) {
+        throw ArgumentError(
+          '文件缺少可用的原图数据: $fileName '
+          '(type=image). 此文件可能已损坏或不完整，建议删除后重新保存。',
+        );
+      }
+
+      return VibeReference(
+        displayName: name,
+        vibeEncoding: '',
+        thumbnail: thumbnail,
+        rawImageData: rawImageData,
+        strength: VibeReference.sanitizeStrength(strength),
+        infoExtracted: infoExtracted,
+        sourceType: VibeSourceType.rawImage,
+      );
+    }
 
     final vibeEncoding = _extractEncodingFromJson(jsonData);
     if (vibeEncoding == null) {
-      final type = jsonData['type'] as String?;
       final hasEncodings = jsonData.containsKey('encodings');
       throw ArgumentError(
         '文件缺少有效的 Vibe encoding: $fileName '
@@ -566,14 +638,13 @@ class VibeFileParser {
       );
     }
 
-    // 提取缩略图
-    final thumbnail = _extractThumbnailFromJson(jsonData);
-
     return VibeReference(
       displayName: name,
       vibeEncoding: vibeEncoding,
       thumbnail: thumbnail,
-      strength: strength.clamp(0.0, 1.0),
+      rawImageData: rawImageData,
+      strength: VibeReference.sanitizeStrength(strength),
+      infoExtracted: infoExtracted,
       sourceType: VibeSourceType.naiv4vibe,
     );
   }
@@ -600,6 +671,24 @@ class VibeFileParser {
     } catch (e) {
       if (kDebugMode) {
         AppLogger.d('Error extracting thumbnail from JSON: $e', 'VibeParser');
+      }
+    }
+    return null;
+  }
+
+  /// 从 JSON 数据中提取原始图片
+  static Uint8List? _extractRawImageFromJson(Map<String, dynamic> jsonData) {
+    try {
+      final imageBase64 = jsonData['image'] as String?;
+      if (imageBase64 != null && imageBase64.isNotEmpty) {
+        final base64Data = _extractBase64FromDataUri(imageBase64);
+        if (base64Data != null) {
+          return base64Decode(base64Data);
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        AppLogger.d('Error extracting raw image from JSON: $e', 'VibeParser');
       }
     }
     return null;
@@ -649,16 +738,23 @@ class VibeFileParser {
           vibeJson['importInfo'] as Map<String, dynamic>?,
           defaultStrength,
         );
+        final infoExtracted = _extractInformationExtracted(
+          vibeJson['importInfo'] as Map<String, dynamic>?,
+          0.7,
+        );
 
         final vibeEncoding = _extractEncodingFromJson(vibeJson);
         if (vibeEncoding != null) {
           final thumbnail = _extractThumbnailFromJson(vibeJson);
+          final rawImageData = _extractRawImageFromJson(vibeJson);
           results.add(
             VibeReference(
               displayName: name,
               vibeEncoding: vibeEncoding,
               thumbnail: thumbnail,
-              strength: strength.clamp(0.0, 1.0),
+              rawImageData: rawImageData,
+              strength: VibeReference.sanitizeStrength(strength),
+              infoExtracted: infoExtracted,
               sourceType: VibeSourceType.naiv4vibebundle,
             ),
           );

@@ -9,13 +9,13 @@ import 'package:file_picker/file_picker.dart';
 import '../../../../core/utils/app_logger.dart';
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/vibe_file_parser.dart';
+import '../../../../core/utils/vibe_performance_diagnostics.dart';
 import '../../../../l10n/app_localizations.dart';
 import '../../../../data/models/image/image_params.dart';
 import '../../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../../data/models/vibe/vibe_reference.dart';
 import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../providers/image_generation_provider.dart';
-import '../../../providers/vibe_library_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../vibe_library/widgets/vibe_selector_dialog.dart';
 import 'empty_state_card.dart';
@@ -75,7 +75,7 @@ class DragTargetWrapper extends ConsumerWidget {
                   )
                 : null,
             color: panelState.isDraggingOver
-                ? theme.colorScheme.primaryContainer.withOpacity(0.3)
+                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
                 : null,
           ),
           child: Column(
@@ -413,7 +413,9 @@ class DragTargetWrapper extends ConsumerWidget {
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: encodeChecked
                               ? null
-                              : theme.colorScheme.onSurface.withOpacity(0.4),
+                              : theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.4,
+                                ),
                         ),
                       ),
                     ),
@@ -606,19 +608,17 @@ class DragTargetWrapper extends ConsumerWidget {
   }
 
   Future<void> _importFromLibrary(BuildContext context, WidgetRef ref) async {
+    final span = VibePerformanceDiagnostics.start(
+      'dragTarget.importFromLibrary',
+    );
     final storageService = ref.read(vibeLibraryStorageServiceProvider);
     final panelNotifier = ref.read(referencePanelNotifierProvider.notifier);
+    var selectedEntries = 0;
+    var bundleEntries = 0;
+    var totalAdded = 0;
+    var replacedExisting = false;
 
     try {
-      final libraryState = ref.read(vibeLibraryNotifierProvider);
-      if (libraryState.entries.isEmpty &&
-          !libraryState.isInitializing &&
-          !libraryState.isLoading) {
-        unawaited(
-          ref.read(vibeLibraryNotifierProvider.notifier).loadFromCache(),
-        );
-      }
-
       final result = await VibeSelectorDialog.show(
         context: context,
         initialSelectedIds: const {},
@@ -627,20 +627,22 @@ class DragTargetWrapper extends ConsumerWidget {
       );
 
       if (result == null || result.selectedEntries.isEmpty) return;
+      selectedEntries = result.selectedEntries.length;
 
       final notifier = ref.read(generationParamsNotifierProvider.notifier);
 
       if (result.shouldReplace) {
         notifier.clearVibeReferences();
+        replacedExisting = true;
       }
 
-      var totalAdded = 0;
       for (final entry in result.selectedEntries) {
         final currentCount =
             ref.read(generationParamsNotifierProvider).vibeReferencesV4.length;
         if (currentCount >= 16) break;
 
         if (entry.isBundle) {
+          bundleEntries++;
           final added = await panelNotifier.extractAndAddBundleVibes(
             entry,
             maxCount: 16,
@@ -654,7 +656,7 @@ class DragTargetWrapper extends ConsumerWidget {
               .toSet();
           if (!existingNames.contains(entry.displayName)) {
             final vibe = entry.toVibeReference();
-            notifier.addVibeReferences([vibe]);
+            notifier.addVibeReferences([vibe], recordUsage: false);
             totalAdded++;
           }
         }
@@ -672,6 +674,15 @@ class DragTargetWrapper extends ConsumerWidget {
       if (context.mounted) {
         AppToast.error(context, '导入失败: $e');
       }
+    } finally {
+      span.finish(
+        details: {
+          'selectedEntries': selectedEntries,
+          'bundleEntries': bundleEntries,
+          'totalAdded': totalAdded,
+          'replacedExisting': replacedExisting,
+        },
+      );
     }
   }
 
@@ -680,16 +691,32 @@ class DragTargetWrapper extends ConsumerWidget {
     WidgetRef ref,
     VibeLibraryEntry entry,
   ) async {
+    final span = VibePerformanceDiagnostics.start(
+      'dragTarget.addLibraryVibe',
+      details: {
+        'entryId': entry.id,
+        'isBundle': entry.isBundle,
+      },
+    );
+    var success = false;
     final panelNotifier = ref.read(referencePanelNotifierProvider.notifier);
 
-    final success = await panelNotifier.addLibraryVibe(entry);
+    try {
+      success = await panelNotifier.addLibraryVibe(entry);
 
-    if (context.mounted) {
-      if (success) {
-        AppToast.success(context, '已添加 Vibe: ${entry.displayName}');
-      } else {
-        AppToast.warning(context, '已达到最大数量 (16张)，请先移除一些 Vibe');
+      if (context.mounted) {
+        if (success) {
+          AppToast.success(context, '已添加 Vibe: ${entry.displayName}');
+        } else {
+          AppToast.warning(context, '已达到最大数量 (16张)，请先移除一些 Vibe');
+        }
       }
+    } finally {
+      span.finish(
+        details: {
+          'success': success,
+        },
+      );
     }
   }
 }

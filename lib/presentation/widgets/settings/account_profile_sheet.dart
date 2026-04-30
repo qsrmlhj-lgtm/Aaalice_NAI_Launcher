@@ -397,6 +397,11 @@ class _AccountProfileBottomSheetState
 
   /// 构建账号详情
   Widget _buildAccountDetails(BuildContext context) {
+    final endpoint = ref
+        .watch(accountManagerNotifierProvider)
+        .accountApiEndpoints[currentAccount.id];
+    final isThirdParty = endpoint?.isThirdParty ?? false;
+
     return Column(
       children: [
         // 邮箱
@@ -412,10 +417,21 @@ class _AccountProfileBottomSheetState
           context,
           icon: Icons.account_circle_outlined,
           label: context.l10n.settings_accountType,
-          value: currentAccount.accountType == AccountType.credentials
-              ? context.l10n.settings_emailAccount
-              : context.l10n.settings_tokenAccount,
+          value: isThirdParty
+              ? '第三方站点 API'
+              : currentAccount.accountType == AccountType.credentials
+                  ? context.l10n.settings_emailAccount
+                  : context.l10n.settings_tokenAccount,
         ),
+        if (isThirdParty && endpoint != null) ...[
+          const SizedBox(height: 8),
+          _buildDetailRow(
+            context,
+            icon: Icons.public_outlined,
+            label: 'API 站点',
+            value: endpoint.mainBaseUrl,
+          ),
+        ],
       ],
     );
   }
@@ -529,7 +545,7 @@ class _AccountProfileBottomSheetState
       children: [
         // 分隔线和标题
         Divider(
-          color: theme.colorScheme.outlineVariant.withOpacity(0.5),
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
         ),
         const SizedBox(height: 8),
         Text(
@@ -579,7 +595,7 @@ class _AccountProfileBottomSheetState
         side: BorderSide(
           color: isCurrent
               ? theme.colorScheme.primary
-              : theme.colorScheme.outlineVariant.withOpacity(0.5),
+              : theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
           width: isCurrent ? 2 : 1,
         ),
       ),

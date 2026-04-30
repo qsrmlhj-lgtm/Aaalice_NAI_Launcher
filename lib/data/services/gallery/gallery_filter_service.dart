@@ -108,12 +108,19 @@ class FilterCriteria {
       showFavoritesOnly: showFavoritesOnly ?? this.showFavoritesOnly,
       selectedTags: selectedTags ?? this.selectedTags,
       filterModel: clearFilterModel ? null : (filterModel ?? this.filterModel),
-      filterSampler: clearFilterSampler ? null : (filterSampler ?? this.filterSampler),
-      filterMinSteps: clearFilterMinSteps ? null : (filterMinSteps ?? this.filterMinSteps),
-      filterMaxSteps: clearFilterMaxSteps ? null : (filterMaxSteps ?? this.filterMaxSteps),
-      filterMinCfg: clearFilterMinCfg ? null : (filterMinCfg ?? this.filterMinCfg),
-      filterMaxCfg: clearFilterMaxCfg ? null : (filterMaxCfg ?? this.filterMaxCfg),
-      filterResolution: clearFilterResolution ? null : (filterResolution ?? this.filterResolution),
+      filterSampler:
+          clearFilterSampler ? null : (filterSampler ?? this.filterSampler),
+      filterMinSteps:
+          clearFilterMinSteps ? null : (filterMinSteps ?? this.filterMinSteps),
+      filterMaxSteps:
+          clearFilterMaxSteps ? null : (filterMaxSteps ?? this.filterMaxSteps),
+      filterMinCfg:
+          clearFilterMinCfg ? null : (filterMinCfg ?? this.filterMinCfg),
+      filterMaxCfg:
+          clearFilterMaxCfg ? null : (filterMaxCfg ?? this.filterMaxCfg),
+      filterResolution: clearFilterResolution
+          ? null
+          : (filterResolution ?? this.filterResolution),
       minWidth: clearMinWidth ? null : (minWidth ?? this.minWidth),
       minHeight: clearMinHeight ? null : (minHeight ?? this.minHeight),
       maxWidth: clearMaxWidth ? null : (maxWidth ?? this.maxWidth),
@@ -122,7 +129,9 @@ class FilterCriteria {
       maxFileSize: clearMaxFileSize ? null : (maxFileSize ?? this.maxFileSize),
       metadataStatuses: metadataStatuses ?? this.metadataStatuses,
       categoryId: clearCategoryId ? null : (categoryId ?? this.categoryId),
-      categoryFolderPath: clearCategoryFolderPath ? null : (categoryFolderPath ?? this.categoryFolderPath),
+      categoryFolderPath: clearCategoryFolderPath
+          ? null
+          : (categoryFolderPath ?? this.categoryFolderPath),
     );
   }
 
@@ -268,6 +277,10 @@ class GalleryFilterService {
     AppLogger.i('Filter cache cleared', 'GalleryFilterService');
   }
 
+  String _buildCacheKey(List<File> allFiles, FilterCriteria criteria) {
+    return '${criteria.cacheKey}|files:${allFiles.length}|rev:${_dataSource.dataRevision}';
+  }
+
   /// 异步应用过滤条件
   ///
   /// [allFiles] 所有文件列表
@@ -287,7 +300,7 @@ class GalleryFilterService {
 
     try {
       // 检查缓存
-      final cacheKey = criteria.cacheKey;
+      final cacheKey = _buildCacheKey(allFiles, criteria);
       final cached = _filterCache.get(cacheKey);
       if (cached != null) {
         AppLogger.d('Filter cache hit: $cacheKey', 'GalleryFilterService');
@@ -351,7 +364,7 @@ class GalleryFilterService {
 
       AppLogger.d(
         'Filter completed in ${stopwatch.elapsedMilliseconds}ms: ${filtered.length} results (from ${allFiles.length} files)'
-        ' | search="${criteria.searchQuery}" | tags=${criteria.selectedTags} | fav=${criteria.showFavoritesOnly}',
+            ' | search="${criteria.searchQuery}" | tags=${criteria.selectedTags} | fav=${criteria.showFavoritesOnly}',
         'GalleryFilterService',
       );
 
@@ -383,7 +396,7 @@ class GalleryFilterService {
         metadataStatuses: criteria.metadataStatuses.isNotEmpty
             ? criteria.metadataStatuses
             : null,
-        limit: 10000,
+        limit: max(1, allFiles.length),
       );
 
       if (cancelToken.isCancelled) return [];
@@ -411,14 +424,17 @@ class GalleryFilterService {
 
     AppLogger.d(
       '_applyLocalFilters START: ${filtered.length} files, '
-      'tags=${criteria.selectedTags}, dateStart=${criteria.dateStart}, dateEnd=${criteria.dateEnd}, favOnly=${criteria.showFavoritesOnly}',
+          'tags=${criteria.selectedTags}, dateStart=${criteria.dateStart}, dateEnd=${criteria.dateEnd}, favOnly=${criteria.showFavoritesOnly}',
       'GalleryFilterService',
     );
 
     // 标签过滤（需要数据库查询）
     if (criteria.selectedTags.isNotEmpty) {
-      filtered = await _filterByTags(filtered, criteria.selectedTags, cancelToken);
-      AppLogger.d('_applyLocalFilters after tags filter: ${filtered.length} files', 'GalleryFilterService');
+      filtered =
+          await _filterByTags(filtered, criteria.selectedTags, cancelToken);
+      AppLogger.d(
+          '_applyLocalFilters after tags filter: ${filtered.length} files',
+          'GalleryFilterService');
     }
 
     if (cancelToken.isCancelled) return [];
@@ -426,7 +442,9 @@ class GalleryFilterService {
     // 日期过滤
     if (criteria.dateStart != null || criteria.dateEnd != null) {
       filtered = await _filterByDateRange(filtered, criteria, cancelToken);
-      AppLogger.d('_applyLocalFilters after date filter: ${filtered.length} files', 'GalleryFilterService');
+      AppLogger.d(
+          '_applyLocalFilters after date filter: ${filtered.length} files',
+          'GalleryFilterService');
     }
 
     if (cancelToken.isCancelled) return [];
@@ -434,18 +452,24 @@ class GalleryFilterService {
     // 收藏过滤
     if (criteria.showFavoritesOnly) {
       filtered = await _filterByFavorites(filtered, cancelToken);
-      AppLogger.d('_applyLocalFilters after fav filter: ${filtered.length} files', 'GalleryFilterService');
+      AppLogger.d(
+          '_applyLocalFilters after fav filter: ${filtered.length} files',
+          'GalleryFilterService');
     }
 
     if (cancelToken.isCancelled) return [];
 
     // 分类过滤（按文件夹路径）
     if (criteria.categoryFolderPath != null) {
-      filtered = await _filterByCategory(filtered, criteria.categoryFolderPath!, cancelToken);
-      AppLogger.d('_applyLocalFilters after category filter: ${filtered.length} files', 'GalleryFilterService');
+      filtered = await _filterByCategory(
+          filtered, criteria.categoryFolderPath!, cancelToken);
+      AppLogger.d(
+          '_applyLocalFilters after category filter: ${filtered.length} files',
+          'GalleryFilterService');
     }
 
-    AppLogger.d('_applyLocalFilters END: ${filtered.length} files', 'GalleryFilterService');
+    AppLogger.d('_applyLocalFilters END: ${filtered.length} files',
+        'GalleryFilterService');
     return filtered;
   }
 
@@ -554,13 +578,15 @@ class GalleryFilterService {
   ) async {
     try {
       // 规范化路径分隔符并转换为小写以便比较
-      final normalizedCategoryPath = categoryFolderPath.replaceAll('\\', '/').toLowerCase();
+      final normalizedCategoryPath =
+          categoryFolderPath.replaceAll('\\', '/').toLowerCase();
 
       return files.where((file) {
         if (cancelToken.isCancelled) return false;
 
         // 规范化文件路径
-        final normalizedFilePath = file.path.replaceAll('\\', '/').toLowerCase();
+        final normalizedFilePath =
+            file.path.replaceAll('\\', '/').toLowerCase();
 
         // 检查文件路径是否包含分类文件夹路径
         // 使用 / 确保精确匹配文件夹名（如 "test_batch/" 不匹配 "test_batch_2/"）

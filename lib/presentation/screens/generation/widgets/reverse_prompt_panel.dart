@@ -1,0 +1,593 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
+
+import '../../../../data/models/character/character_prompt.dart';
+import '../../../../data/models/tag_library/tag_library_entry.dart';
+import '../../../../data/services/local_onnx_model_service.dart';
+import '../../../providers/generation/generation_params_notifier.dart';
+import '../../../providers/reverse_prompt_provider.dart';
+import '../../../providers/tag_library_page_provider.dart';
+import '../../../prompt_assistant/providers/prompt_assistant_history_provider.dart';
+import '../../../utils/asset_protection_guard.dart';
+import '../../../utils/dropped_file_reader.dart';
+import '../../../widgets/common/app_toast.dart';
+import '../../../widgets/common/collapsible_image_panel.dart';
+import '../../../widgets/common/decoded_memory_image.dart';
+import '../../../widgets/common/themed_divider.dart';
+import '../../../widgets/tag_library/tag_library_picker_dialog.dart';
+
+class ReversePromptPanel extends ConsumerStatefulWidget {
+  const ReversePromptPanel({super.key});
+
+  @override
+  ConsumerState<ReversePromptPanel> createState() => _ReversePromptPanelState();
+}
+
+class _ReversePromptPanelState extends ConsumerState<ReversePromptPanel> {
+  bool _isExpanded = false;
+  bool _isDragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final state = ref.watch(reversePromptProvider);
+    final hasImages = state.images.isNotEmpty;
+    final showBackground = hasImages && !_isExpanded;
+
+    return CollapsibleImagePanel(
+      title: '反推',
+      icon: Icons.manage_search_rounded,
+      isExpanded: _isExpanded,
+      onToggle: () => setState(() => _isExpanded = !_isExpanded),
+      hasData: hasImages || state.finalPrompt.isNotEmpty,
+      backgroundImage: showBackground
+          ? DecodedMemoryImage(
+              bytes: state.images.first.bytes,
+              fit: BoxFit.cover,
+              decodeScale: 0.75,
+            )
+          : null,
+      badge: _buildBadge(context, state, showBackground),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const ThemedDivider(),
+            _buildDropArea(theme, state),
+            if (hasImages) ...[
+              const SizedBox(height: 10),
+              _buildImageStrip(state),
+            ],
+            const SizedBox(height: 12),
+            _buildChainToggles(state),
+            if (state.useOnnxTagger) ...[
+              const SizedBox(height: 8),
+              _buildTaggerControls(state),
+            ],
+            if (state.useCharacterReplace) ...[
+              const SizedBox(height: 8),
+              _buildCharacterSelector(state),
+            ],
+            const SizedBox(height: 12),
+            _buildActions(state),
+            if (state.error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                state.error!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ],
+            if (state.taggerPrompt.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _PromptOutputBlock(
+                title: 'ONNX tagger',
+                text: state.taggerPrompt,
+              ),
+            ],
+            if (state.llmPrompt.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _PromptOutputBlock(title: 'LLM 反推', text: state.llmPrompt),
+            ],
+            if (state.characterReplacePrompt.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _PromptOutputBlock(
+                title: '角色替换',
+                text: state.characterReplacePrompt,
+              ),
+            ],
+            if (state.finalPrompt.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _PromptOutputBlock(title: '最终结果', text: state.finalPrompt),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBadge(
+    BuildContext context,
+    ReversePromptState state,
+    bool showBackground,
+  ) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: showBackground
+            ? Colors.white.withValues(alpha: 0.2)
+            : theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        state.images.isEmpty ? '待添加' : '${state.images.length} 张',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: showBackground
+              ? Colors.white
+              : theme.colorScheme.onSecondaryContainer,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDropArea(ThemeData theme, ReversePromptState state) {
+    return DropRegion(
+      formats: Formats.standardFormats,
+      hitTestBehavior: HitTestBehavior.opaque,
+      onDropOver: (event) {
+        if (event.session.allowedOperations.contains(DropOperation.copy)) {
+          if (!_isDragging) {
+            setState(() => _isDragging = true);
+          }
+          return DropOperation.copy;
+        }
+        return DropOperation.none;
+      },
+      onDropLeave: (_) {
+        if (_isDragging) {
+          setState(() => _isDragging = false);
+        }
+      },
+      onPerformDrop: (event) async {
+        setState(() => _isDragging = false);
+        unawaited(_handleDrop(event));
+      },
+      child: OutlinedButton.icon(
+        onPressed: state.isProcessing ? null : _pickImages,
+        icon: Icon(
+          _isDragging ? Icons.file_download_rounded : Icons.add_photo_alternate,
+          size: 18,
+        ),
+        label: Text(_isDragging ? '松开后添加到反推' : '增加图片 / 拖入图片'),
+      ),
+    );
+  }
+
+  Widget _buildImageStrip(ReversePromptState state) {
+    return SizedBox(
+      height: 74,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: state.images.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final image = state.images[index];
+          return Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 74,
+                  height: 74,
+                  child: DecodedMemoryImage(
+                    bytes: image.bytes,
+                    fit: BoxFit.cover,
+                    decodeScale: 0.75,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 2,
+                right: 2,
+                child: InkWell(
+                  onTap: () => ref
+                      .read(reversePromptProvider.notifier)
+                      .removeImage(image.id),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.all(2),
+                    child: const Icon(Icons.close, size: 14),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChainToggles(ReversePromptState state) {
+    final notifier = ref.read(reversePromptProvider.notifier);
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        FilterChip(
+          label: const Text('ONNX tagger'),
+          selected: state.useOnnxTagger,
+          onSelected: state.isProcessing ? null : notifier.setUseOnnxTagger,
+        ),
+        FilterChip(
+          label: const Text('LLM 反推'),
+          selected: state.useLlmReverse,
+          onSelected: state.isProcessing ? null : notifier.setUseLlmReverse,
+        ),
+        FilterChip(
+          label: const Text('角色替换'),
+          selected: state.useCharacterReplace,
+          onSelected:
+              state.isProcessing ? null : notifier.setUseCharacterReplace,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTaggerControls(ReversePromptState state) {
+    return FutureBuilder<List<LocalOnnxModelDescriptor>>(
+      future: ref.read(localOnnxModelServiceProvider).scanTaggerModels(),
+      builder: (context, snapshot) {
+        final models = snapshot.data ?? const <LocalOnnxModelDescriptor>[];
+        final selected =
+            models.any((m) => m.path == state.selectedTaggerModelPath)
+                ? state.selectedTaggerModelPath
+                : null;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: selected,
+              isExpanded: true,
+              items: models
+                  .map(
+                    (model) => DropdownMenuItem(
+                      value: model.path,
+                      child: Text(model.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: state.isProcessing
+                  ? null
+                  : ref
+                      .read(reversePromptProvider.notifier)
+                      .setSelectedTaggerModelPath,
+              decoration: const InputDecoration(
+                labelText: '本地 tagger 模型',
+                hintText: '请在设置中配置模型文件夹',
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 6),
+            _ThresholdSlider(
+              label: '通用标签阈值',
+              value: state.taggerGeneralThreshold,
+              onChanged: state.isProcessing
+                  ? null
+                  : ref
+                      .read(reversePromptProvider.notifier)
+                      .setTaggerGeneralThreshold,
+            ),
+            _ThresholdSlider(
+              label: '角色标签阈值',
+              value: state.taggerCharacterThreshold,
+              onChanged: state.isProcessing
+                  ? null
+                  : ref
+                      .read(reversePromptProvider.notifier)
+                      .setTaggerCharacterThreshold,
+            ),
+            Text(
+              '只输出 General / Character 分类标签；Rating、Artist、Copyright、Meta 等分类会被过滤。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCharacterSelector(ReversePromptState state) {
+    final selectedCharacter = ref
+        .watch(reversePromptCharacterProvider)
+        .characters
+        .where((c) => c.enabled && c.prompt.trim().isNotEmpty)
+        .cast<CharacterPrompt?>()
+        .firstWhere((_) => true, orElse: () => null);
+    if (selectedCharacter == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '替换目标角色为空。这里从词库选择一个角色作为替换目标，不会注入到正向提示词。',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.white70,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: state.isProcessing
+                  ? null
+                  : _selectReverseCharacterFromLibrary,
+              icon: const Icon(Icons.library_books_outlined, size: 18),
+              label: const Text('从词库选择替换目标角色'),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.person_search_rounded, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  selectedCharacter.name,
+                  style: theme.textTheme.labelLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            selectedCharacter.prompt,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: state.isProcessing
+                    ? null
+                    : _selectReverseCharacterFromLibrary,
+                icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                label: const Text('更换'),
+              ),
+              TextButton.icon(
+                onPressed: state.isProcessing
+                    ? null
+                    : ref
+                        .read(reversePromptCharacterProvider.notifier)
+                        .clearReplacementCharacter,
+                icon: const Icon(Icons.close_rounded, size: 16),
+                label: const Text('清除'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectReverseCharacterFromLibrary() async {
+    final entry = await showDialog<TagLibraryEntry>(
+      context: context,
+      builder: (context) => const TagLibraryPickerDialog(title: '选择替换目标角色'),
+    );
+
+    if (entry == null) {
+      return;
+    }
+
+    ref.read(tagLibraryPageNotifierProvider.notifier).recordUsage(entry.id);
+    ref.read(reversePromptCharacterProvider.notifier).setReplacementCharacter(
+          CharacterPrompt.create(
+            name: entry.displayName,
+            prompt: entry.content,
+            thumbnailPath: entry.thumbnail,
+          ),
+        );
+  }
+
+  Widget _buildActions(ReversePromptState state) {
+    return Row(
+      children: [
+        Expanded(
+          child: FilledButton.icon(
+            onPressed: state.isProcessing || !state.canRun
+                ? null
+                : () => _runChainWithProtection(state),
+            icon: state.isProcessing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.play_arrow_rounded, size: 18),
+            label: Text(state.processingLabel ?? '开始反推'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          onPressed: state.finalPrompt.trim().isEmpty
+              ? null
+              : () {
+                  final prompt = state.finalPrompt.trim();
+                  final currentPrompt =
+                      ref.read(generationParamsNotifierProvider).prompt;
+                  ref
+                      .read(promptAssistantHistoryProvider.notifier)
+                      .recordExternalChange(
+                        PromptHistorySessionIds.generationPrompt,
+                        before: currentPrompt,
+                        after: prompt,
+                      );
+                  ref
+                      .read(generationParamsNotifierProvider.notifier)
+                      .updatePrompt(prompt);
+                  AppToast.success(context, '已发送到提示词');
+                },
+          icon: const Icon(Icons.send_rounded, size: 18),
+          label: const Text('发送到提示词'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _runChainWithProtection(ReversePromptState state) async {
+    if (state.useLlmReverse) {
+      final confirmed = await AssetProtectionGuard.confirmExternalImageSend(
+        context: context,
+        ref: ref,
+        targetName: '多模态 LLM 反推服务',
+        imageCount: state.images.length,
+      );
+      if (!confirmed || !mounted) {
+        return;
+      }
+    }
+    await ref.read(reversePromptProvider.notifier).runChain();
+  }
+
+  Future<void> _pickImages() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: false,
+    );
+    if (result == null) {
+      return;
+    }
+    for (final file in result.files) {
+      final path = file.path;
+      if (path == null) {
+        continue;
+      }
+      final bytes = await File(path).readAsBytes();
+      await ref
+          .read(reversePromptProvider.notifier)
+          .addImage(bytes, name: file.name);
+    }
+  }
+
+  Future<void> _handleDrop(PerformDropEvent event) async {
+    var handledAny = false;
+    for (final item in event.session.items) {
+      final reader = item.dataReader;
+      if (reader == null) {
+        continue;
+      }
+      final file = await DroppedFileReader.read(
+        reader,
+        logTag: 'ReversePromptDrop',
+      );
+      if (file != null) {
+        handledAny = true;
+        await ref
+            .read(reversePromptProvider.notifier)
+            .addImage(file.bytes, name: file.fileName);
+      }
+    }
+    if (!handledAny && mounted) {
+      AppToast.warning(context, '拖入源未提供可读取的图片文件或图片链接');
+    }
+  }
+}
+
+class _ThresholdSlider extends StatelessWidget {
+  const _ThresholdSlider({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final ValueChanged<double>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 104,
+          child: Text('$label ${value.toStringAsFixed(2)}'),
+        ),
+        Expanded(
+          child: Slider(
+            value: value,
+            min: 0.05,
+            max: 0.95,
+            divisions: 18,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PromptOutputBlock extends StatelessWidget {
+  const _PromptOutputBlock({
+    required this.title,
+    required this.text,
+  });
+
+  final String title;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.textTheme.labelMedium),
+          const SizedBox(height: 4),
+          SelectableText(
+            text,
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}

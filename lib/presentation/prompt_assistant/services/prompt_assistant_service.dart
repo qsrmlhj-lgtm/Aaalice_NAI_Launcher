@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 
+import '../../../core/utils/app_logger.dart';
 import '../models/prompt_assistant_models.dart';
 import '../providers/prompt_assistant_config_provider.dart';
 import 'prompt_assistant_api_client.dart';
@@ -78,20 +82,99 @@ class PromptAssistantService {
     );
   }
 
+  Stream<StreamingChunk> reverseImagePrompt(
+    Uint8List imageBytes, {
+    required String sessionId,
+    String? taggerPrompt,
+  }) async* {
+    final text = StringBuffer(
+      '请反推这张图片，输出 NovelAI 可直接使用的英文逗号分隔提示词。',
+    );
+    final trimmedTags = taggerPrompt?.trim();
+    if (trimmedTags != null && trimmedTags.isNotEmpty) {
+      text
+        ..write('\n\n本地 ONNX tagger 初步结果如下，请结合图片判断取舍：\n')
+        ..write(trimmedTags);
+    }
+
+    yield* _runTask(
+      sessionId: sessionId,
+      taskType: AssistantTaskType.reverse,
+      userContent: [
+        {'type': 'text', 'text': text.toString()},
+        {
+          'type': 'image_url',
+          'image_url': {'url': _imageDataUri(imageBytes)},
+        },
+      ],
+      userInstruction: '请严格输出单行英文提示词，不要 Markdown，不要解释。优先保留可见元素，避免编造不可见角色信息。',
+    );
+  }
+
+  Stream<StreamingChunk> replaceCharacterPrompt(
+    String input, {
+    required String sessionId,
+    required String characterName,
+    required String characterPrompt,
+  }) async* {
+    final sourcePrompt = input.trim();
+    final targetCharacterPrompt = characterPrompt.trim();
+    AppLogger.d(
+      'character replace input sourceLen=${sourcePrompt.length} targetLen=${targetCharacterPrompt.length} '
+          'source="${_previewForLog(sourcePrompt)}" target="${_previewForLog(targetCharacterPrompt)}"',
+      'PromptAssistant',
+    );
+
+    yield* _runTask(
+      sessionId: sessionId,
+      taskType: AssistantTaskType.characterReplace,
+      userContent: buildCharacterReplacementUserContent(
+        sourcePrompt: sourcePrompt,
+        characterName: characterName,
+        characterPrompt: targetCharacterPrompt,
+      ),
+      userInstruction: characterReplacementInstruction,
+    );
+  }
+
+  static const String characterReplacementInstruction =
+      '仅输出替换后的完整单行英文逗号分隔提示词，不要输出分析、解释、删除/保留清单或 Markdown。';
+
+  static String buildCharacterReplacementUserContent({
+    required String sourcePrompt,
+    required String characterName,
+    required String characterPrompt,
+  }) {
+    return [
+      '待替换提示词（以这一段为主，保留非角色内容）：',
+      sourcePrompt.trim(),
+      '',
+      '目标角色名称：',
+      characterName.trim(),
+      '',
+      '目标角色提示词（只作为替换角色块）：',
+      characterPrompt.trim(),
+    ].join('\n');
+  }
+
+  static String _previewForLog(String value) {
+    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.length <= 240) {
+      return normalized;
+    }
+    return '${normalized.substring(0, 240)}...';
+  }
+
   Stream<StreamingChunk> _runTask({
     required String sessionId,
     required AssistantTaskType taskType,
-    required String userContent,
+    required Object userContent,
     required String userInstruction,
   }) async* {
     final config = _ref.read(promptAssistantConfigProvider);
 
-    final routingProviderId = taskType == AssistantTaskType.llm
-        ? config.routing.llmProviderId
-        : config.routing.translateProviderId;
-    final routingModel = taskType == AssistantTaskType.llm
-        ? config.routing.llmModel
-        : config.routing.translateModel;
+    final routingProviderId = config.routing.providerIdFor(taskType);
+    final routingModel = config.routing.modelFor(taskType);
 
     final provider = config.providers.firstWhere(
       (p) => p.id == routingProviderId && p.enabled,
@@ -101,22 +184,28 @@ class PromptAssistantService {
       ),
     );
 
-    final model = config.models.firstWhere(
-      (m) =>
-          m.providerId == provider.id &&
-          m.forTask == taskType &&
-          m.name == routingModel,
-      orElse: () => config.models.firstWhere(
-        (m) => m.providerId == provider.id && m.forTask == taskType,
-        orElse: () => ModelConfig(
-          providerId: provider.id,
-          name: routingModel,
-          displayName: routingModel,
-          forTask: taskType,
-          isDefault: true,
-        ),
-      ),
+    final taskModels = config.modelsForProviderTask(
+      providerId: provider.id,
+      taskType: taskType,
     );
+    final hasRealModel = taskModels.any((m) => !m.isPlaceholder);
+    final shouldIgnoreRoutedPlaceholder = (routingModel.trim().isEmpty ||
+            routingModel.trim() == 'default-model') &&
+        hasRealModel;
+    final model = shouldIgnoreRoutedPlaceholder
+        ? taskModels.firstWhere((m) => !m.isPlaceholder)
+        : taskModels.firstWhere(
+            (m) => m.name == routingModel,
+            orElse: () => taskModels.isNotEmpty
+                ? taskModels.first
+                : ModelConfig(
+                    providerId: provider.id,
+                    name: routingModel,
+                    displayName: routingModel,
+                    forTask: taskType,
+                    isDefault: true,
+                  ),
+          );
 
     final apiKey = await _ref
         .read(promptAssistantConfigProvider.notifier)
@@ -132,7 +221,7 @@ class PromptAssistantService {
       userInstruction,
     ].join('\n\n');
 
-    final messages = <Map<String, String>>[
+    final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': systemPrompt},
       {'role': 'user', 'content': userContent},
     ];
@@ -142,11 +231,40 @@ class PromptAssistantService {
       provider: provider,
       model: model.name,
       messages: messages,
-      temperature: model.temperature,
-      topP: model.topP,
-      maxTokens: model.maxTokens,
-      advancedParams: provider.advancedParams,
       apiKey: apiKey,
     );
+  }
+
+  String _imageDataUri(Uint8List imageBytes) {
+    final mime = _detectImageMime(imageBytes);
+    return 'data:$mime;base64,${base64Encode(imageBytes)}';
+  }
+
+  String _detectImageMime(Uint8List bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return 'image/png';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF) {
+      return 'image/jpeg';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'image/webp';
+    }
+    return 'image/png';
   }
 }

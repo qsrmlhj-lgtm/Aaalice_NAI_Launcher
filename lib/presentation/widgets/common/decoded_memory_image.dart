@@ -14,6 +14,7 @@ class DecodedMemoryImage extends StatelessWidget {
     this.maxLogicalHeight,
     this.decodeScale = 1.0,
     this.errorBuilder,
+    this.frameBuilder,
   });
 
   final Uint8List bytes;
@@ -25,6 +26,7 @@ class DecodedMemoryImage extends StatelessWidget {
   final double? maxLogicalHeight;
   final double decodeScale;
   final ImageErrorWidgetBuilder? errorBuilder;
+  final ImageFrameBuilder? frameBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +58,7 @@ class DecodedMemoryImage extends StatelessWidget {
           cacheWidth: cacheWidth,
           cacheHeight: cacheHeight,
           errorBuilder: errorBuilder,
+          frameBuilder: frameBuilder,
         );
       },
     );

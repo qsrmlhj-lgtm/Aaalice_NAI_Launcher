@@ -166,6 +166,7 @@ logs/security/
 # ===========================================================================
 
 # AI 编程助手
+.codex
 .serena/
 .playwright-mcp/
 .spec-workflow/
@@ -174,6 +175,7 @@ logs/security/
 .kiro
 .claude/
 .gemini/
+.specstory/
 
 # GSD (Get Shit Done) 工作流
 .planning/
@@ -210,6 +212,17 @@ GEMINI.md
 nai_web_copy/
 NAI COPY/
 .shared/
+
+# 本机临时/对话工件
+/300d1829-66f3-4b01-810d-d8092e28b96f.png
+/a5795f23-9c74-461d-b50e-53452c186f36.png
+/list.txt
+/list2.txt
+/list3.txt
+/list_vibe.txt
+/listvibe.txt
+/seedvr2_fix.json
+/.workflow/
 
 # 预构建数据库使用 Git LFS 管理
 

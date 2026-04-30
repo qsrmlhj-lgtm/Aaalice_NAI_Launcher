@@ -8,6 +8,9 @@ enum SendDestination {
   /// 发送到图生图
   img2img,
 
+  /// 发送到反推
+  reversePrompt,
+
   /// 发送到Vibe Transfer
   vibeTransfer,
 }
@@ -59,6 +62,15 @@ class ImageSendDestinationDialog extends StatelessWidget {
               title: '图生图',
               subtitle: '使用此图片进行图像生成',
               onTap: () => Navigator.of(context).pop(SendDestination.img2img),
+            ),
+            const SizedBox(height: 8),
+            _buildOption(
+              context,
+              icon: Icons.manage_search_rounded,
+              title: '反推',
+              subtitle: '添加到画布反推模块',
+              onTap: () =>
+                  Navigator.of(context).pop(SendDestination.reversePrompt),
             ),
             const SizedBox(height: 8),
             // 发送到 Vibe Transfer

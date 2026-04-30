@@ -43,6 +43,19 @@ extension VibeSourceTypeExtension on VibeSourceType {
 /// 2. 原始图片模式: 需要服务端编码，消耗 2 Anlas/张
 @freezed
 class VibeReference with _$VibeReference {
+  static const double minStrength = -1.0;
+  static const double maxStrength = 1.0;
+  static const double minInfoExtracted = 0.0;
+  static const double maxInfoExtracted = 1.0;
+
+  static double sanitizeStrength(double value) {
+    return value.clamp(minStrength, maxStrength).toDouble();
+  }
+
+  static double sanitizeInfoExtracted(double value) {
+    return value.clamp(minInfoExtracted, maxInfoExtracted).toDouble();
+  }
+
   const factory VibeReference({
     /// 显示名称 (文件名或从 JSON 提取)
     required String displayName,
@@ -58,12 +71,12 @@ class VibeReference with _$VibeReference {
     @JsonKey(includeFromJson: false, includeToJson: false)
     Uint8List? rawImageData,
 
-    /// Reference Strength (0-1)
+    /// Reference Strength (-1 到 1)
     /// 控制 vibe 对生成图像的影响强度
     @Default(0.6) double strength,
 
-    /// Information Extracted (0-1)
-    /// 仅用于原始图片模式，控制从参考图中提取多少信息
+    /// Information Extracted (0 到 1)
+    /// 对于可重新编码的 Vibe，控制从参考图中提取多少信息
     @Default(0.7) double infoExtracted,
 
     /// 数据来源类型
@@ -79,4 +92,7 @@ class VibeReference with _$VibeReference {
   /// 从 JSON 构造
   factory VibeReference.fromJson(Map<String, dynamic> json) =>
       _$VibeReferenceFromJson(json);
+
+  bool get canReencodeFromRawSource =>
+      rawImageData != null && rawImageData!.isNotEmpty;
 }

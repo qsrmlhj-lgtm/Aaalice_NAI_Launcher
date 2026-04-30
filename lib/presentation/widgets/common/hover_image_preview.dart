@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'decoded_memory_image.dart';
+
 /// 鼠标悬浮时显示大图预览的组件
 ///
 /// 将缩略图包装在此组件中，鼠标悬浮时会在附近显示放大后的图片
@@ -71,9 +73,11 @@ class _HoverImagePreviewState extends State<HoverImagePreview> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Image.memory(
-              widget.imageBytes,
+            child: DecodedMemoryImage(
+              bytes: widget.imageBytes,
               fit: BoxFit.contain,
+              maxLogicalWidth: widget.previewMaxSize,
+              maxLogicalHeight: widget.previewMaxSize,
               errorBuilder: (context, error, stackTrace) {
                 return Container(
                   width: 100,

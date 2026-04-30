@@ -92,6 +92,22 @@ class LocalStorageService {
     await setSetting(StorageKeys.locale, code);
   }
 
+  // ==================== Diagnostics ====================
+
+  /// 获取是否记录文件日志 (默认关闭)
+  bool getFileLoggingEnabled() {
+    return getSetting<bool>(
+          StorageKeys.fileLoggingEnabled,
+          defaultValue: false,
+        ) ??
+        false;
+  }
+
+  /// 保存是否记录文件日志
+  Future<void> setFileLoggingEnabled(bool value) async {
+    await setSetting(StorageKeys.fileLoggingEnabled, value);
+  }
+
   // ==================== Default Generation Params ====================
 
   /// 获取默认模型

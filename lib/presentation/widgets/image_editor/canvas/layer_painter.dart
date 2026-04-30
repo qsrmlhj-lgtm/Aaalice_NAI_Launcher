@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/utils/app_logger.dart';
 import '../core/editor_state.dart';
+import '../tools/blur_tool.dart';
 import '../tools/brush_tool.dart';
+import '../tools/clone_stamp_tool.dart';
 import '../tools/eraser_tool.dart';
 
 /// 棋盘格缓存管理器
@@ -168,11 +170,10 @@ class LayerPainter extends CustomPainter {
     final tool = state.currentTool;
     if (tool == null || !tool.isPaintTool) return;
 
-    // 获取当前工具的设置
     double size = 20.0;
     double opacity = 1.0;
     double hardness = 0.8;
-    final Color color = state.foregroundColor;
+    Color color = state.foregroundColor;
     bool isEraser = false;
 
     if (tool is BrushTool) {
@@ -183,6 +184,20 @@ class LayerPainter extends CustomPainter {
       size = tool.size;
       hardness = tool.hardness;
       isEraser = true;
+    } else if (tool is BlurTool) {
+      size = tool.size;
+      color = const Color(0xFF90CAF9);
+      opacity = 0.25;
+      hardness = 0.0;
+    } else if (tool is CloneStampTool) {
+      if (tool.canvasSnapshot != null && tool.sourceOffset != null) {
+        tool.drawRealtimePreview(canvas, points);
+        return;
+      }
+      size = tool.size;
+      opacity = 0.3;
+      hardness = 0.5;
+      color = Colors.cyanAccent;
     }
 
     final paint = Paint()
@@ -333,10 +348,50 @@ class SelectionPainter extends CustomPainter {
 
     // 绘制已确认的选区（蚂蚁线）
     if (state.selectionPath != null) {
-      _drawMarchingAnts(canvas, state.selectionPath!);
+      if (state.selectionManager.isTransforming) {
+        final bounds = state.selectionManager.transformedBounds;
+        if (bounds != null) {
+          final transformedPath = Path()..addRect(bounds);
+          _drawMarchingAnts(canvas, transformedPath);
+          _drawTransformHandles(canvas, bounds, controller.scale);
+        }
+      } else {
+        _drawMarchingAnts(canvas, state.selectionPath!);
+      }
     }
 
     canvas.restore();
+  }
+
+  /// 绘制变换控制点
+  void _drawTransformHandles(Canvas canvas, Rect bounds, double viewScale) {
+    final handleSize = 6.0 / viewScale;
+    final handlePaint = Paint()..color = Colors.white;
+    final handleBorder = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0 / viewScale;
+
+    final corners = [
+      bounds.topLeft,
+      bounds.topCenter,
+      bounds.topRight,
+      bounds.centerLeft,
+      bounds.centerRight,
+      bounds.bottomLeft,
+      bounds.bottomCenter,
+      bounds.bottomRight,
+    ];
+
+    for (final corner in corners) {
+      final rect = Rect.fromCenter(
+        center: corner,
+        width: handleSize,
+        height: handleSize,
+      );
+      canvas.drawRect(rect, handlePaint);
+      canvas.drawRect(rect, handleBorder);
+    }
   }
 
   /// 绘制蚂蚁线（选区边框动画）
