@@ -4,15 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../data/models/image/image_params.dart';
 import '../../../../data/models/image/resolution_preset.dart';
+import '../../../providers/generation/generation_params_selectors.dart';
 import '../../../providers/image_generation_provider.dart';
+import '../../../utils/asset_protection_guard.dart';
 import '../../../widgets/common/themed_dropdown.dart';
 import '../../../widgets/common/themed_input.dart';
 import '../../../widgets/common/themed_button.dart';
 import '../../../widgets/common/themed_slider.dart';
 import '../../../widgets/common/themed_divider.dart';
 import 'img2img_panel.dart';
+import 'reverse_prompt_panel.dart';
 import 'unified_reference_panel.dart';
 import 'precise_reference_panel.dart';
 import 'prompt_input.dart';
@@ -52,7 +54,9 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final params = ref.watch(generationParamsNotifierProvider);
+    final params = ref.watch(
+      generationParamsNotifierProvider.select(selectParameterPanelViewData),
+    );
     final generationState = ref.watch(imageGenerationNotifierProvider);
     final theme = Theme.of(context);
     final isGenerating = generationState.isGenerating;
@@ -82,7 +86,7 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
                   ? () => ref
                       .read(imageGenerationNotifierProvider.notifier)
                       .cancel()
-                  : () {
+                  : () async {
                       if (params.prompt.isEmpty) {
                         AppToast.info(
                           context,
@@ -90,9 +94,17 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
                         );
                         return;
                       }
+                      final confirmed =
+                          await AssetProtectionGuard.confirmHighAnlasCost(
+                        context: context,
+                        ref: ref,
+                      );
+                      if (!confirmed || !context.mounted) {
+                        return;
+                      }
                       ref
                           .read(imageGenerationNotifierProvider.notifier)
-                          .generate(params);
+                          .generate(ref.read(generationParamsNotifierProvider));
                     },
               icon: isGenerating
                   ? const Icon(Icons.stop)
@@ -389,6 +401,11 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
         const SizedBox(height: 16),
 
         // ==================== 新功能面板 ====================
+
+        // 反推面板
+        const ReversePromptPanel(),
+
+        const SizedBox(height: 8),
 
         // 图生图面板
         const Img2ImgPanel(),

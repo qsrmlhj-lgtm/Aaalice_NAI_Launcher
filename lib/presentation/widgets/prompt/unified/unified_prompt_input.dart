@@ -25,6 +25,7 @@ import '../../../prompt_assistant/providers/prompt_assistant_history_provider.da
 import '../../../prompt_assistant/providers/prompt_assistant_state_provider.dart';
 import '../../../prompt_assistant/services/prompt_assistant_service.dart';
 import '../../../prompt_assistant/widgets/prompt_assistant_overlay.dart';
+import '../../../providers/fixed_tags_provider.dart';
 import '../comfyui_import_wrapper.dart';
 import '../nai_syntax_controller.dart';
 import 'unified_prompt_config.dart';
@@ -147,6 +148,8 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
 
     final logicalKey = event.logicalKey;
 
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
     if (!widget.enableAssistant) {
       return false;
     }
@@ -156,8 +159,6 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       return false;
     }
 
-    final isCtrl = HardwareKeyboard.instance.isControlPressed;
-    final isShift = HardwareKeyboard.instance.isShiftPressed;
     if (isCtrl && isShift && logicalKey == LogicalKeyboardKey.keyE) {
       unawaited(_runAssistantAction(AssistantTaskType.llm));
       return true;
@@ -311,32 +312,32 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
   }
 
   Future<void> _runAssistantAction(AssistantTaskType taskType) async {
-    final text = _effectiveController.text.trim();
+    final text = _assistantInputText().trim();
     if (text.isEmpty) {
       if (mounted) AppToast.warning(context, '请输入提示词后再操作');
       return;
     }
 
+    final beforeText = _effectiveController.text;
     ref
         .read(promptAssistantHistoryProvider.notifier)
-        .push(_sessionId, _effectiveController.text);
+        .push(_sessionId, beforeText);
 
     final stateNotifier = ref.read(promptAssistantStateProvider.notifier);
     final label = taskType == AssistantTaskType.llm ? '优化中' : '翻译中';
     stateNotifier.startProcessing(_sessionId, label);
 
     final service = ref.read(promptAssistantServiceProvider);
-    final config = ref.read(promptAssistantConfigProvider);
     final buffer = StringBuffer();
 
     await _assistantStreamSub?.cancel();
     final stream = taskType == AssistantTaskType.llm
         ? service.optimizePrompt(
-            _effectiveController.text,
+            text,
             sessionId: _sessionId,
           )
         : service.translatePrompt(
-            _effectiveController.text,
+            text,
             sessionId: _sessionId,
           );
 
@@ -345,35 +346,38 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
         if (chunk.done) return;
         if (chunk.delta.isEmpty) return;
         buffer.write(chunk.delta);
-        if (config.streamOutput) {
-          final nextText = buffer.toString();
-          if (nextText.isNotEmpty) {
-            _effectiveController.text = nextText;
-            _effectiveController.selection = TextSelection.collapsed(
-              offset: _effectiveController.text.length,
-            );
-          }
-        }
       },
       onError: (e) {
         stateNotifier.setError(_sessionId, e.toString());
         if (mounted) AppToast.error(context, '助手请求失败: $e');
       },
       onDone: () {
-        if (!config.streamOutput && buffer.isNotEmpty) {
+        if (buffer.isNotEmpty) {
           final finalText = buffer.toString();
           _effectiveController.text = finalText;
           _effectiveController.selection =
               TextSelection.collapsed(offset: _effectiveController.text.length);
         }
         stateNotifier.finishProcessing(_sessionId);
+        final afterText = _effectiveController.text;
+        ref.read(promptAssistantHistoryProvider.notifier).recordExternalChange(
+              _sessionId,
+              before: beforeText,
+              after: afterText,
+            );
         ref.read(promptAssistantHistoryProvider.notifier).push(
               _sessionId,
-              _effectiveController.text,
+              afterText,
             );
       },
       cancelOnError: true,
     );
+  }
+
+  String _assistantInputText() {
+    return ref
+        .read(fixedTagsNotifierProvider)
+        .stripFromPrompt(_effectiveController.text);
   }
 
   /// 焦点变化回调

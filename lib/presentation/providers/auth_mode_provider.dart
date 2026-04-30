@@ -11,6 +11,9 @@ enum AuthMode {
 
   /// Token登录
   token,
+
+  /// 第三方 NAI-compatible API 登录
+  thirdParty,
 }
 
 /// 登录模式状态模型

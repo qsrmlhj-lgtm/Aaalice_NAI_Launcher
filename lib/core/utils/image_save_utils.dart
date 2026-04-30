@@ -148,6 +148,55 @@ class ImageSaveUtils {
     };
   }
 
+  /// 根据传入参数重建图像内嵌元数据。
+  ///
+  /// 如果原图已经带有 NovelAI 文本块，则优先保留原有的
+  /// `Description`、`Software`、`Source`，仅用新的参数覆盖 Comment。
+  static Future<Uint8List> rebuildImageBytesWithMetadata({
+    required Uint8List imageBytes,
+    required ImageParams params,
+    int? actualSeed,
+    List<String>? fixedPrefixTags,
+    List<String>? fixedSuffixTags,
+    List<Map<String, dynamic>>? charCaptions,
+    List<Map<String, dynamic>>? charNegCaptions,
+    bool useCoords = false,
+    bool useStealth = false,
+  }) async {
+    final existingMetadata = _extractEmbeddedPngMetadata(imageBytes);
+    final embeddedSeed = existingMetadata?.commentJson['seed'];
+    final normalizedSeed = actualSeed ??
+        (embeddedSeed is int
+            ? embeddedSeed
+            : embeddedSeed is num
+                ? embeddedSeed.toInt()
+                : params.seed);
+
+    return _embedNaiAlignedMetadata(
+      imageBytes: imageBytes,
+      commentJson: buildCommentJson(
+        params: params,
+        actualSeed: normalizedSeed,
+        fixedPrefixTags: fixedPrefixTags,
+        fixedSuffixTags: fixedSuffixTags,
+        charCaptions: charCaptions,
+        charNegCaptions: charNegCaptions,
+        useCoords: useCoords,
+      ),
+      description: existingMetadata?.description ??
+          buildPromptSemanticsSnapshot(
+            prompt: params.prompt,
+            negativePrompt: params.negativePrompt,
+            model: params.model,
+            qualityToggle: params.qualityToggle,
+            ucPreset: params.ucPreset,
+          ).effectivePrompt,
+      source: existingMetadata?.source ?? _getModelSourceName(params.model),
+      software: existingMetadata?.software ?? 'NovelAI',
+      useStealth: useStealth,
+    );
+  }
+
   /// 保存图像并嵌入完整元数据
   ///
   /// [imageBytes] - 图像字节数据
@@ -173,33 +222,17 @@ class ImageSaveUtils {
     bool useCoords = false,
     bool useStealth = false,
   }) async {
-    final existingMetadata = _extractEmbeddedPngMetadata(imageBytes);
-    final embeddedBytes = existingMetadata != null && !useStealth
-        ? imageBytes
-        : await _embedNaiAlignedMetadata(
-            imageBytes: imageBytes,
-            commentJson: buildCommentJson(
-              params: params,
-              actualSeed: actualSeed,
-              fixedPrefixTags: fixedPrefixTags,
-              fixedSuffixTags: fixedSuffixTags,
-              charCaptions: charCaptions,
-              charNegCaptions: charNegCaptions,
-              useCoords: useCoords,
-            ),
-            description:
-                existingMetadata?.description ??
-                buildPromptSemanticsSnapshot(
-                  prompt: params.prompt,
-                  negativePrompt: params.negativePrompt,
-                  model: params.model,
-                  qualityToggle: params.qualityToggle,
-                  ucPreset: params.ucPreset,
-                ).effectivePrompt,
-            source: existingMetadata?.source ?? _getModelSourceName(params.model),
-            software: existingMetadata?.software ?? 'NovelAI',
-            useStealth: useStealth,
-          );
+    final embeddedBytes = await rebuildImageBytesWithMetadata(
+      imageBytes: imageBytes,
+      params: params,
+      actualSeed: actualSeed,
+      fixedPrefixTags: fixedPrefixTags,
+      fixedSuffixTags: fixedSuffixTags,
+      charCaptions: charCaptions,
+      charNegCaptions: charNegCaptions,
+      useCoords: useCoords,
+      useStealth: useStealth,
+    );
 
     // 确保目录存在
     final file = File(filePath);
@@ -358,8 +391,7 @@ class ImageSaveUtils {
       return _EmbeddedPngMetadata(
         commentJson: commentJson,
         description:
-            textData['Description'] ??
-            (commentJson['prompt'] as String? ?? ''),
+            textData['Description'] ?? (commentJson['prompt'] as String? ?? ''),
         software: textData['Software'] ?? 'NovelAI',
         source: textData['Source'] ?? 'NovelAI',
       );

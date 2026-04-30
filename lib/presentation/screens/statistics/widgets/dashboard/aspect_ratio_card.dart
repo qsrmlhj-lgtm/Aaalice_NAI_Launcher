@@ -22,13 +22,13 @@ class AspectRatioCard extends StatelessWidget {
     // 计算宽高比分布
     final aspectRatios = <String, int>{};
     for (final res in stats.resolutionDistribution) {
-      final parts = res.label.split('x');
-      if (parts.length == 2) {
-        final w = int.tryParse(parts[0]) ?? 1;
-        final h = int.tryParse(parts[1]) ?? 1;
-        final ratio = _simplifyRatio(w, h);
-        aspectRatios[ratio] = (aspectRatios[ratio] ?? 0) + res.count;
-      }
+      if (res.count <= 0) continue;
+
+      final dimensions = _parseResolutionLabel(res.label);
+      if (dimensions == null) continue;
+
+      final ratio = _simplifyRatio(dimensions.width, dimensions.height);
+      aspectRatios[ratio] = (aspectRatios[ratio] ?? 0) + res.count;
     }
 
     if (aspectRatios.isEmpty) {
@@ -57,12 +57,30 @@ class AspectRatioCard extends StatelessWidget {
     );
   }
 
+  ({int width, int height})? _parseResolutionLabel(String label) {
+    final match = RegExp(r'^\s*(\d+)\s*[xX×]\s*(\d+)\s*$').firstMatch(label);
+    if (match == null) return null;
+
+    final width = int.tryParse(match.group(1)!);
+    final height = int.tryParse(match.group(2)!);
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return null;
+    }
+
+    return (width: width, height: height);
+  }
+
   String _simplifyRatio(int w, int h) {
     final gcd = _gcd(w, h);
+    if (gcd <= 0) return '1:1';
     return '${w ~/ gcd}:${h ~/ gcd}';
   }
 
-  int _gcd(int a, int b) => b == 0 ? a : _gcd(b, a % b);
+  int _gcd(int a, int b) {
+    final absA = a.abs();
+    final absB = b.abs();
+    return absB == 0 ? absA : _gcd(absB, absA % absB);
+  }
 
   String _getRatioLabel(String ratio, AppLocalizations l10n) {
     final parts = ratio.split(':');

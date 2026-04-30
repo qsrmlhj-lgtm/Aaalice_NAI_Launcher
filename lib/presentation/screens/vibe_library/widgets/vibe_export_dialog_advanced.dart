@@ -117,6 +117,12 @@ class _VibeExportDialogAdvancedState
   }
 
   void _rebuildCarrierImageOptions() {
+    if (widget.entries.length != 1) {
+      _carrierImageOptions = const [];
+      _selectedCarrierImageId = null;
+      return;
+    }
+
     final options = <_CarrierImageOption>[];
     for (final entry in widget.entries) {
       for (final candidate in VibeExportUtils.collectImageCandidates(entry)) {
@@ -548,6 +554,7 @@ class _VibeExportDialogAdvancedState
   /// 构建嵌入图片选项
   Widget _buildEmbedIntoImageOption(ThemeData theme) {
     final isBundleInternalExport = _isSingleBundle && !_exportWholeBundle;
+    final isBatchPngExport = widget.entries.length > 1;
 
     // 从 bundle 导出内部单个 vibe 时暂不支持嵌入图片
     final isDisabled = isBundleInternalExport;
@@ -578,7 +585,15 @@ class _VibeExportDialogAdvancedState
                 const SizedBox(height: 12),
                 const Divider(height: 1),
                 const SizedBox(height: 12),
-                if (_carrierImageOptions.isNotEmpty) ...[
+                if (isBatchPngExport) ...[
+                  Text(
+                    '批量导出会使用每个 Vibe 的第一张可用图片；没有图片的条目会自动跳过',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ] else if (_carrierImageOptions.isNotEmpty) ...[
                   Text(
                     '导出载体图',
                     style: theme.textTheme.bodySmall?.copyWith(
@@ -619,7 +634,7 @@ class _VibeExportDialogAdvancedState
                   const SizedBox(height: 12),
                 ],
                 // 图片选择
-                if (_selectedImagePath == null) ...[
+                if (!isBatchPngExport && _selectedImagePath == null) ...[
                   OutlinedButton.icon(
                     onPressed: _isValidatingImage ? null : _pickImage,
                     icon: _isValidatingImage
@@ -631,7 +646,7 @@ class _VibeExportDialogAdvancedState
                         : const Icon(Icons.folder_open),
                     label: const Text('选择外部 PNG 图片...'),
                   ),
-                ] else ...[
+                ] else if (!isBatchPngExport) ...[
                   Row(
                     children: [
                       // 图片预览
@@ -680,14 +695,16 @@ class _VibeExportDialogAdvancedState
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '当前使用外部 PNG 作为导出载体图',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                      fontStyle: FontStyle.italic,
+                  if (_selectedImagePath != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '当前使用外部 PNG 作为导出载体图',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ],
             )
@@ -849,7 +866,14 @@ class _VibeExportDialogAdvancedState
     }
 
     // 嵌入图片需要选择图片
-    if (_embedIntoImage && _currentCarrierImageBytes() == null) {
+    if (_embedIntoImage && widget.entries.length > 1) {
+      if (VibeExportUtils.buildEmbeddedPngExportPlans(widget.entries).isEmpty) {
+        return const _ValidationResult(
+          isValid: false,
+          errorMessage: '当前选中的 Vibe 都没有可用图片，无法导出 PNG',
+        );
+      }
+    } else if (_embedIntoImage && _currentCarrierImageBytes() == null) {
       return const _ValidationResult(
         isValid: false,
         errorMessage: '请选择一个 PNG 载体图用于导出',
@@ -947,7 +971,7 @@ class _VibeExportDialogAdvancedState
       }
 
       // 嵌入图片
-      if (_embedIntoImage && _selectedImagePath != null) {
+      if (_embedIntoImage) {
         setState(() => _statusMessage = '正在嵌入图片...');
         final embedPath = await _embedIntoImageFile();
         if (embedPath != null) {
@@ -1064,6 +1088,16 @@ class _VibeExportDialogAdvancedState
   /// 嵌入到图片
   Future<String?> _embedIntoImageFile() async {
     if (widget.entries.isEmpty) return null;
+    if (widget.entries.length > 1) {
+      final exportedPaths = await VibeExportUtils.exportEntriesToEmbeddedPngDirectory(
+        widget.entries,
+      );
+      if (exportedPaths.isEmpty) {
+        return null;
+      }
+      return exportedPaths.join(',');
+    }
+
     final carrierImageBytes = _currentCarrierImageBytes();
     if (carrierImageBytes == null) {
       return null;

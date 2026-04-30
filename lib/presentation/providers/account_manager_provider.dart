@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:hive/hive.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/network/nai_api_endpoint.dart';
 import '../../core/storage/secure_storage_service.dart';
 import '../../data/models/auth/saved_account.dart';
 
@@ -11,22 +12,26 @@ part 'account_manager_provider.g.dart';
 /// 账号管理状态
 class AccountManagerState {
   final List<SavedAccount> accounts;
+  final Map<String, NaiApiEndpointConfig> accountApiEndpoints;
   final bool isLoading;
   final String? error;
 
   const AccountManagerState({
     this.accounts = const [],
+    this.accountApiEndpoints = const {},
     this.isLoading = false,
     this.error,
   });
 
   AccountManagerState copyWith({
     List<SavedAccount>? accounts,
+    Map<String, NaiApiEndpointConfig>? accountApiEndpoints,
     bool? isLoading,
     String? error,
   }) {
     return AccountManagerState(
       accounts: accounts ?? this.accounts,
+      accountApiEndpoints: accountApiEndpoints ?? this.accountApiEndpoints,
       isLoading: isLoading ?? this.isLoading,
       error: error,
     );
@@ -38,6 +43,7 @@ class AccountManagerState {
 class AccountManagerNotifier extends _$AccountManagerNotifier {
   static const String _boxName = 'accounts';
   static const String _accountsKey = 'saved_accounts';
+  static const String _accountApiEndpointsKey = 'account_api_endpoints';
 
   Box? _box;
 
@@ -65,8 +71,21 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
             .toList();
       }
 
+      Map<String, NaiApiEndpointConfig> accountApiEndpoints = {};
+      final endpointsJson = _box?.get(_accountApiEndpointsKey) as String?;
+      if (endpointsJson != null) {
+        final decoded = jsonDecode(endpointsJson) as Map<String, dynamic>;
+        accountApiEndpoints = decoded.map(
+          (accountId, value) => MapEntry(
+            accountId,
+            NaiApiEndpointConfig.fromJson(value as Map<String, dynamic>),
+          ),
+        );
+      }
+
       state = AccountManagerState(
         accounts: accounts,
+        accountApiEndpoints: accountApiEndpoints,
         isLoading: false,
       );
     } catch (e) {
@@ -81,6 +100,18 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
   Future<void> _saveAccounts(List<SavedAccount> accounts) async {
     final json = jsonEncode(accounts.map((e) => e.toJson()).toList());
     await _box?.put(_accountsKey, json);
+  }
+
+  /// 保存账号 API 端点配置
+  Future<void> _saveAccountApiEndpoints(
+    Map<String, NaiApiEndpointConfig> endpoints,
+  ) async {
+    final json = jsonEncode(
+      endpoints.map((accountId, endpoint) {
+        return MapEntry(accountId, endpoint.toJson());
+      }),
+    );
+    await _box?.put(_accountApiEndpointsKey, json);
   }
 
   /// 获取账号 Token
@@ -98,6 +129,17 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     await _secureStorage.deleteAccountToken(accountId);
   }
 
+  /// 获取账号 API 端点配置；未配置时使用 NovelAI 官方端点。
+  NaiApiEndpointConfig getAccountApiEndpoint(String accountId) {
+    return state.accountApiEndpoints[accountId] ??
+        NaiApiEndpointConfig.official;
+  }
+
+  /// 判断账号是否使用第三方 API 端点。
+  bool hasCustomApiEndpoint(String accountId) {
+    return getAccountApiEndpoint(accountId).isThirdParty;
+  }
+
   /// 添加账号
   ///
   /// [identifier] 账号标识符（用于内部存储）
@@ -111,6 +153,7 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     required String nickname,
     bool setAsDefault = false,
     AccountType accountType = AccountType.token,
+    NaiApiEndpointConfig apiEndpoint = NaiApiEndpointConfig.official,
   }) async {
     // 检查是否已存在相同标识符的账号
     final existingIndex =
@@ -140,8 +183,20 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
         }
       }
 
+      final endpoints = Map<String, NaiApiEndpointConfig>.from(
+        state.accountApiEndpoints,
+      );
+      if (apiEndpoint.isOfficial) {
+        endpoints.remove(existing.id);
+      } else {
+        endpoints[existing.id] = apiEndpoint;
+      }
       await _saveAccounts(newAccounts);
-      state = state.copyWith(accounts: newAccounts);
+      await _saveAccountApiEndpoints(endpoints);
+      state = state.copyWith(
+        accounts: newAccounts,
+        accountApiEndpoints: endpoints,
+      );
       return newAccounts[existingIndex];
     }
 
@@ -156,6 +211,13 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     // 保存 Token
     await _saveAccountToken(newAccount.id, token);
 
+    final endpoints = Map<String, NaiApiEndpointConfig>.from(
+      state.accountApiEndpoints,
+    );
+    if (apiEndpoint.isThirdParty) {
+      endpoints[newAccount.id] = apiEndpoint;
+    }
+
     // 更新账号列表
     var newAccounts = [...state.accounts, newAccount];
 
@@ -168,7 +230,11 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     }
 
     await _saveAccounts(newAccounts);
-    state = state.copyWith(accounts: newAccounts);
+    await _saveAccountApiEndpoints(endpoints);
+    state = state.copyWith(
+      accounts: newAccounts,
+      accountApiEndpoints: endpoints,
+    );
     return newAccount;
   }
 
@@ -178,6 +244,9 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     await _deleteAccountToken(accountId);
     // 删除 accessKey（用于 token 刷新）
     await _secureStorage.deleteAccountAccessKey(accountId);
+    final endpoints = Map<String, NaiApiEndpointConfig>.from(
+      state.accountApiEndpoints,
+    )..remove(accountId);
 
     // 更新账号列表
     final newAccounts = state.accounts.where((a) => a.id != accountId).toList();
@@ -191,7 +260,11 @@ class AccountManagerNotifier extends _$AccountManagerNotifier {
     }
 
     await _saveAccounts(newAccounts);
-    state = state.copyWith(accounts: newAccounts);
+    await _saveAccountApiEndpoints(endpoints);
+    state = state.copyWith(
+      accounts: newAccounts,
+      accountApiEndpoints: endpoints,
+    );
   }
 
   /// 更新账号信息

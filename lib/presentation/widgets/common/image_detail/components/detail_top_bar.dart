@@ -18,6 +18,8 @@ class DetailTopBar extends StatelessWidget {
   final VoidCallback? onFavoriteToggle;
   final VoidCallback? onSave;
   final VoidCallback? onCopyImage;
+  final VoidCallback? onSendToImg2Img;
+  final VoidCallback? onSendToReversePrompt;
 
   const DetailTopBar({
     super.key,
@@ -29,6 +31,8 @@ class DetailTopBar extends StatelessWidget {
     this.onFavoriteToggle,
     this.onSave,
     this.onCopyImage,
+    this.onSendToImg2Img,
+    this.onSendToReversePrompt,
   });
 
   @override
@@ -105,6 +109,22 @@ class DetailTopBar extends StatelessWidget {
               tooltip: '复用参数',
             ),
 
+          // 发送到图生图
+          if (onSendToImg2Img != null)
+            IconButton(
+              icon: const Icon(Icons.image_search, color: Colors.white),
+              onPressed: onSendToImg2Img,
+              tooltip: '发送到图生图',
+            ),
+
+          // 发送到反推模块
+          if (onSendToReversePrompt != null)
+            IconButton(
+              icon: const Icon(Icons.auto_fix_high, color: Colors.white),
+              onPressed: onSendToReversePrompt,
+              tooltip: '发送到反推',
+            ),
+
           // 复制图像按钮
           if (onCopyImage != null)
             IconButton(
@@ -120,9 +140,9 @@ class DetailTopBar extends StatelessWidget {
                 // 如果是本地图库图片，实时监听收藏状态
                 final isLocalImage = currentImage.identifier.isNotEmpty &&
                     currentImage is LocalImageDetailData;
-                
+
                 bool isFavorite = currentImage.isFavorite;
-                
+
                 if (isLocalImage) {
                   final galleryState = ref.watch(localGalleryNotifierProvider);
                   final record = galleryState.currentImages
@@ -135,7 +155,7 @@ class DetailTopBar extends StatelessWidget {
                     isFavorite = record.isFavorite;
                   }
                 }
-                
+
                 return AnimatedFavoriteButton(
                   isFavorite: isFavorite,
                   size: 24,

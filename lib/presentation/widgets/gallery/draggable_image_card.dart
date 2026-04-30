@@ -190,11 +190,13 @@ class _DraggableImageCardState extends ConsumerState<DraggableImageCard> {
     final filePath = widget.record.path;
     final stripMetadata = ref
         .read(shareImageSettingsProvider)
-        .stripMetadataForCopyAndDrag;
+        .effectiveStripMetadataForCopyAndDrag;
 
     final item = DragItem(
       suggestedName: fileName,
-      localData: {'source': 'gallery_internal', 'path': filePath},
+      localData: stripMetadata
+          ? {'source': 'gallery_sanitized'}
+          : {'source': 'gallery_internal', 'path': filePath},
     );
 
     if (stripMetadata) {
@@ -209,7 +211,8 @@ class _DraggableImageCardState extends ConsumerState<DraggableImageCard> {
         );
         item.add(Formats.png(sanitized.bytes));
 
-        final tempFile = await ImageShareSanitizer.writeTempShareFile(sanitized);
+        final tempFile =
+            await ImageShareSanitizer.writeTempShareFile(sanitized);
         item.add(Formats.fileUri(tempFile.uri));
       }
       return item;
@@ -308,11 +311,13 @@ class _DragWrapperState extends ConsumerState<_DragWrapper> {
     final filePath = widget.record.path;
     final stripMetadata = ref
         .read(shareImageSettingsProvider)
-        .stripMetadataForCopyAndDrag;
+        .effectiveStripMetadataForCopyAndDrag;
 
     final item = DragItem(
       suggestedName: fileName,
-      localData: {'source': 'gallery_internal', 'path': filePath},
+      localData: stripMetadata
+          ? {'source': 'gallery_sanitized'}
+          : {'source': 'gallery_internal', 'path': filePath},
     );
 
     if (stripMetadata) {
@@ -327,7 +332,8 @@ class _DragWrapperState extends ConsumerState<_DragWrapper> {
         );
         item.add(Formats.png(sanitized.bytes));
 
-        final tempFile = await ImageShareSanitizer.writeTempShareFile(sanitized);
+        final tempFile =
+            await ImageShareSanitizer.writeTempShareFile(sanitized);
         item.add(Formats.fileUri(tempFile.uri));
       }
       return item;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 
+import '../../../core/utils/file_explorer_utils.dart';
 import '../../../data/models/gallery/local_image_record.dart';
 
 import '../common/app_toast.dart';
@@ -113,14 +114,7 @@ class ImageContextMenu {
     String filePath,
   ) async {
     try {
-      if (Platform.isWindows) {
-        // 使用 Process.start 避免等待进程完成导致的延迟
-        await Process.start('explorer', ['/select,', filePath]);
-      } else if (Platform.isMacOS) {
-        await Process.start('open', ['-R', filePath]);
-      } else if (Platform.isLinux) {
-        await Process.start('xdg-open', [path.dirname(filePath)]);
-      }
+      await FileExplorerUtils.revealFile(filePath);
     } catch (e) {
       if (context.mounted) {
         AppToast.info(context, '无法打开文件夹: $e');

@@ -44,7 +44,7 @@ class CollapsibleImagePanel extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  backgroundImage!,
+                  _CollapsedBackgroundImage(child: backgroundImage!),
                   // Dark Overlay
                   Container(
                     decoration: BoxDecoration(
@@ -52,8 +52,8 @@ class CollapsibleImagePanel extends StatelessWidget {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.black.withOpacity(0.5),
-                          Colors.black.withOpacity(0.75),
+                          Colors.black.withValues(alpha: 0.5),
+                          Colors.black.withValues(alpha: 0.75),
                         ],
                       ),
                     ),
@@ -82,7 +82,8 @@ class CollapsibleImagePanel extends StatelessWidget {
                             ? Colors.white
                             : hasData
                                 ? theme.colorScheme.primary
-                                : theme.colorScheme.onSurface.withOpacity(0.6),
+                                : theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.6),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -98,7 +99,8 @@ class CollapsibleImagePanel extends StatelessWidget {
                         ),
                       ),
                       // Header actions (e.g. export button)
-                      if (headerActions != null && headerActions!.isNotEmpty) ...[
+                      if (headerActions != null &&
+                          headerActions!.isNotEmpty) ...[
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: headerActions!,
@@ -138,6 +140,40 @@ class CollapsibleImagePanel extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CollapsedBackgroundImage extends StatelessWidget {
+  const _CollapsedBackgroundImage({required this.child});
+
+  static const double _previewHeight = 180;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        if (!width.isFinite || width <= 0) {
+          return child;
+        }
+        return ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.center,
+            minWidth: width,
+            maxWidth: width,
+            minHeight: _previewHeight,
+            maxHeight: _previewHeight,
+            child: SizedBox(
+              width: width,
+              height: _previewHeight,
+              child: child,
+            ),
+          ),
+        );
+      },
     );
   }
 }

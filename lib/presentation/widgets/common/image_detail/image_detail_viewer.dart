@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../../core/shortcuts/shortcuts.dart';
+import '../../../../core/utils/app_logger.dart';
 import '../../../../core/utils/image_share_sanitizer.dart';
+import '../../../../core/utils/window_focus_tracker.dart';
 import '../../../../data/models/metadata/metadata_import_options.dart';
 import '../../../providers/share_image_settings_provider.dart';
 import '../../shortcuts/shortcuts.dart';
@@ -36,11 +38,19 @@ class ImageDetailCallbacks {
   /// 复制图像回调
   final Future<void> Function(ImageDetailData image)? onCopyImage;
 
+  /// 发送到图生图回调
+  final Future<void> Function(ImageDetailData image)? onSendToImg2Img;
+
+  /// 发送到反推模块回调
+  final Future<void> Function(ImageDetailData image)? onSendToReversePrompt;
+
   const ImageDetailCallbacks({
     this.onFavoriteToggle,
     this.onReuseMetadata,
     this.onSave,
     this.onCopyImage,
+    this.onSendToImg2Img,
+    this.onSendToReversePrompt,
   });
 }
 
@@ -95,26 +105,39 @@ class ImageDetailViewer extends ConsumerStatefulWidget {
     ImageDetailCallbacks? callbacks,
     String? heroTagPrefix,
   }) {
+    final isWindows = Platform.isWindows;
+    final transitionDuration =
+        isWindows ? Duration.zero : const Duration(milliseconds: 300);
+    final reverseTransitionDuration =
+        isWindows ? Duration.zero : const Duration(milliseconds: 250);
+
     return Navigator.of(context).push(
       PageRouteBuilder(
-        opaque: false,
+        // Windows + 外部截图工具 + 焦点切换下，透明路由和快照过渡更容易触发
+        // Flutter 引擎原生崩溃；Windows 走纯黑不透明且无动画路径。
+        opaque: isWindows,
         barrierColor: Colors.black,
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 250),
+        allowSnapshotting: !isWindows,
+        transitionDuration: transitionDuration,
+        reverseTransitionDuration: reverseTransitionDuration,
         pageBuilder: (context, animation, secondaryAnimation) {
+          final viewer = ImageDetailViewer(
+            images: images,
+            initialIndex: initialIndex,
+            showMetadataPanel: showMetadataPanel,
+            showThumbnails: showThumbnails,
+            callbacks: callbacks,
+            heroTagPrefix: heroTagPrefix,
+          );
+          if (isWindows) {
+            return viewer;
+          }
           return FadeTransition(
             opacity: CurvedAnimation(
               parent: animation,
               curve: Curves.easeOut,
             ),
-            child: ImageDetailViewer(
-              images: images,
-              initialIndex: initialIndex,
-              showMetadataPanel: showMetadataPanel,
-              showThumbnails: showThumbnails,
-              callbacks: callbacks,
-              heroTagPrefix: heroTagPrefix,
-            ),
+            child: viewer,
           );
         },
       ),
@@ -145,6 +168,10 @@ class ImageDetailViewer extends ConsumerStatefulWidget {
 }
 
 class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
+  static const Duration _windowsEscFocusCooldown = Duration(milliseconds: 1200);
+  static const Duration _windowsEscBounceCooldown = Duration(seconds: 4);
+  static const Duration _closeRequestThrottle = Duration(milliseconds: 700);
+
   late PageController _pageController;
   late ScrollController _thumbnailController;
   late int _currentIndex;
@@ -152,6 +179,8 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
   final bool _showControls = true;
   final _focusNode = FocusNode();
   final Map<int, TransformationController> _transformationControllers = {};
+  bool _isClosing = false;
+  DateTime? _lastCloseRequestedAt;
 
   @override
   void initState() {
@@ -217,7 +246,7 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
         _goToPage(_currentIndex + 1);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.escape:
-        Navigator.of(context).pop();
+        _handleKeyboardCloseRequest();
         return KeyEventResult.handled;
       case LogicalKeyboardKey.home:
         _goToPage(0);
@@ -228,6 +257,65 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
       default:
         return KeyEventResult.ignored;
     }
+  }
+
+  void _handleKeyboardCloseRequest() {
+    if (_shouldSuppressEscCloseOnWindows()) {
+      final elapsedFocus = WindowFocusTracker.elapsedSinceFocus();
+      final elapsedBlur = WindowFocusTracker.elapsedSinceBlur();
+      AppLogger.w(
+        'Suppressed ESC close after focus bounce '
+            '(focus=${elapsedFocus?.inMilliseconds ?? -1}ms, '
+            'blur=${elapsedBlur?.inMilliseconds ?? -1}ms)',
+        'ImageDetailViewer',
+      );
+      return;
+    }
+    _requestClose('keyboard-escape');
+  }
+
+  bool _shouldSuppressEscCloseOnWindows() {
+    if (!Platform.isWindows) return false;
+    if (WindowFocusTracker.isWithinCooldown(_windowsEscFocusCooldown)) {
+      return true;
+    }
+    return WindowFocusTracker.hadRecentFocusBounce(
+      maxSinceFocus: _windowsEscBounceCooldown,
+    );
+  }
+
+  void _requestClose(String reason) {
+    if (!mounted || _isClosing) return;
+    final now = DateTime.now();
+    final lastCloseAt = _lastCloseRequestedAt;
+    if (lastCloseAt != null &&
+        now.difference(lastCloseAt) <= _closeRequestThrottle) {
+      AppLogger.d(
+          'Ignored duplicated close request: $reason', 'ImageDetailViewer');
+      return;
+    }
+    _lastCloseRequestedAt = now;
+
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      AppLogger.d(
+        'Ignored close request on non-current route: $reason',
+        'ImageDetailViewer',
+      );
+      return;
+    }
+
+    _isClosing = true;
+    AppLogger.d('Viewer close requested: $reason', 'ImageDetailViewer');
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).maybePop().whenComplete(() {
+        if (mounted) {
+          _isClosing = false;
+        }
+      });
+    });
   }
 
   ImageDetailData get _currentImage => widget.images[_currentIndex];
@@ -283,7 +371,7 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
   void _toggleFullscreen() {
     // 使用窗口管理器切换全屏
     // 由于查看器是弹窗形式，关闭查看器即可
-    Navigator.of(context).pop();
+    _requestClose('toggle-fullscreen');
   }
 
   /// 切换收藏
@@ -347,7 +435,7 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
       // 全屏切换
       ShortcutIds.toggleFullscreen: _toggleFullscreen,
       // 关闭查看器
-      ShortcutIds.closeViewer: () => Navigator.of(context).pop(),
+      ShortcutIds.closeViewer: _handleKeyboardCloseRequest,
       // 收藏切换
       ShortcutIds.toggleFavorite: _toggleFavorite,
       // 复制 Prompt
@@ -423,7 +511,7 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
             currentIndex: _currentIndex,
             totalImages: widget.images.length,
             currentImage: _currentImage,
-            onClose: () => Navigator.of(context).pop(),
+            onClose: () => _requestClose('top-bar-close'),
             onReuseMetadata: widget.callbacks?.onReuseMetadata != null
                 ? () => _handleReuseMetadata(context)
                 : null,
@@ -434,6 +522,15 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
                 ? () => widget.callbacks!.onSave!(_currentImage)
                 : null,
             onCopyImage: () => _copyImageToClipboard(context),
+            onSendToImg2Img: widget.callbacks?.onSendToImg2Img != null
+                ? () => widget.callbacks!.onSendToImg2Img!(_currentImage)
+                : null,
+            onSendToReversePrompt:
+                widget.callbacks?.onSendToReversePrompt != null
+                    ? () => widget.callbacks!.onSendToReversePrompt!(
+                          _currentImage,
+                        )
+                    : null,
           ),
         ),
 
@@ -556,8 +653,9 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
     try {
       final imageBytes = await _currentImage.getImageBytes();
       final fileName = _currentImage.fileInfo?.fileName ?? 'shared.png';
-      final stripMetadata =
-          ref.read(shareImageSettingsProvider).stripMetadataForCopyAndDrag;
+      final stripMetadata = ref
+          .read(shareImageSettingsProvider)
+          .effectiveStripMetadataForCopyAndDrag;
       final shareImage = await ImageShareSanitizer.prepareForCopyOrDrag(
         imageBytes,
         fileName: fileName,
@@ -586,7 +684,8 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
       if (result.exitCode != 0) {
         final errorOutput = result.stderr.toString();
         throw Exception(
-            'PowerShell 命令失败 (exitCode: ${result.exitCode}): $errorOutput');
+          'PowerShell 命令失败 (exitCode: ${result.exitCode}): $errorOutput',
+        );
       }
 
       // 延迟删除临时文件，确保 PowerShell 完成读取
@@ -632,12 +731,16 @@ class _ImageDetailViewerState extends ConsumerState<ImageDetailViewer> {
 
     // 关闭图像详情页
     if (context.mounted) {
-      Navigator.of(context).pop();
+      _requestClose('reuse-metadata');
     }
   }
 
   @override
   void dispose() {
+    for (final controller in _transformationControllers.values) {
+      controller.dispose();
+    }
+    _transformationControllers.clear();
     _pageController.dispose();
     _thumbnailController.dispose();
     _focusNode.dispose();

@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/utils/localization_extension.dart';
-import '../../../data/models/image/image_params.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/prompt_maximize_provider.dart';
+import '../../utils/asset_protection_guard.dart';
 import '../../widgets/anlas/anlas_balance_chip.dart';
 import '../../widgets/common/themed_divider.dart';
 import '../../widgets/common/themed_scaffold.dart';
@@ -32,7 +32,6 @@ class _MobileGenerationLayoutState
   @override
   Widget build(BuildContext context) {
     final generationState = ref.watch(imageGenerationNotifierProvider);
-    final params = ref.watch(generationParamsNotifierProvider);
     final isPromptMaximized = ref.watch(promptMaximizeNotifierProvider);
     final theme = Theme.of(context);
 
@@ -154,7 +153,7 @@ class _MobileGenerationLayoutState
               Expanded(
                 child: _MobileGenerateButton(
                   isGenerating: generationState.isGenerating,
-                  onGenerate: () => _handleGenerate(context, ref, params),
+                  onGenerate: () => _handleGenerate(context, ref),
                   onCancel: () => ref
                       .read(imageGenerationNotifierProvider.notifier)
                       .cancel(),
@@ -167,13 +166,21 @@ class _MobileGenerationLayoutState
     );
   }
 
-  void _handleGenerate(
+  Future<void> _handleGenerate(
     BuildContext context,
     WidgetRef ref,
-    ImageParams params,
-  ) {
+  ) async {
+    final params = ref.read(generationParamsNotifierProvider);
     if (params.prompt.isEmpty) {
       AppToast.info(context, context.l10n.generation_pleaseInputPrompt);
+      return;
+    }
+
+    final confirmed = await AssetProtectionGuard.confirmHighAnlasCost(
+      context: context,
+      ref: ref,
+    );
+    if (!confirmed || !context.mounted) {
       return;
     }
 

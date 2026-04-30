@@ -4,18 +4,26 @@ import 'vibe_library_storage_service.dart';
 
 /// VibeLibraryNotifier 的导入仓库适配器
 /// 实现 VibeLibraryImportRepository 接口以适配 VibeImportService
-class VibeLibraryNotifierImportRepository implements VibeLibraryImportRepository {
+class VibeLibraryNotifierImportRepository
+    implements VibeLibraryImportRepository {
   VibeLibraryNotifierImportRepository({
     required this.onGetAllEntries,
+    required this.onFindEntryByName,
     required this.onSaveEntry,
   });
 
   final Future<List<VibeLibraryEntry>> Function() onGetAllEntries;
+  final Future<VibeLibraryEntry?> Function(String name) onFindEntryByName;
   final Future<VibeLibraryEntry?> Function(VibeLibraryEntry) onSaveEntry;
 
   @override
   Future<List<VibeLibraryEntry>> getAllEntries() async {
     return onGetAllEntries();
+  }
+
+  @override
+  Future<VibeLibraryEntry?> findEntryByName(String name) {
+    return onFindEntryByName(name);
   }
 
   @override
@@ -32,7 +40,8 @@ class VibeLibraryNotifierImportRepository implements VibeLibraryImportRepository
 ///
 /// 批量导入期间避免每保存一个条目就触发 provider 全量重建，
 /// 导入完成后再统一 reload UI。
-class VibeLibraryStorageImportRepository implements VibeLibraryImportRepository {
+class VibeLibraryStorageImportRepository
+    implements VibeLibraryImportRepository {
   VibeLibraryStorageImportRepository(this._storage);
 
   final VibeLibraryStorageService _storage;
@@ -40,6 +49,11 @@ class VibeLibraryStorageImportRepository implements VibeLibraryImportRepository 
   @override
   Future<List<VibeLibraryEntry>> getAllEntries() {
     return _storage.getAllEntries();
+  }
+
+  @override
+  Future<VibeLibraryEntry?> findEntryByName(String name) {
+    return _storage.findEntryByName(name);
   }
 
   @override

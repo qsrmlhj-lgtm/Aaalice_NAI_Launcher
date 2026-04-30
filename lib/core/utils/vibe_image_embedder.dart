@@ -735,10 +735,12 @@ class VibeImageEmbedder {
             : 'unknown';
     final vibeEncoding =
         (dataRaw['vibeEncoding'] ?? dataRaw['encoding']) as String? ?? '';
-    final strength =
-        _parseDouble(dataRaw['strength'], 0.6).clamp(0.0, 1.0).toDouble();
-    final infoExtracted =
-        _parseDouble(dataRaw['infoExtracted'], 0.7).clamp(0.0, 1.0).toDouble();
+    final strength = VibeReference.sanitizeStrength(
+      _parseDouble(dataRaw['strength'], 0.6),
+    );
+    final infoExtracted = VibeReference.sanitizeInfoExtracted(
+      _parseDouble(dataRaw['infoExtracted'], 0.7),
+    );
     final sourceType = _parseSourceType(dataRaw['sourceType'], vibeEncoding);
     final thumbnail = _extractThumbnailFromPayload(dataRaw);
 

@@ -99,6 +99,8 @@ class VibeImportResult {
 abstract class VibeLibraryImportRepository {
   Future<List<VibeLibraryEntry>> getAllEntries();
 
+  Future<VibeLibraryEntry?> findEntryByName(String name);
+
   Future<VibeLibraryEntry> saveEntry(VibeLibraryEntry entry);
 }
 
@@ -263,10 +265,7 @@ class VibeImportService {
   }) async {
     if (sources.isEmpty) return VibeImportResult.empty();
 
-    final existingEntries = await _repository.getAllEntries();
-    final nameMap = <String, VibeLibraryEntry>{
-      for (final entry in existingEntries) _normalizeName(entry.name): entry,
-    };
+    final nameMap = <String, VibeLibraryEntry>{};
 
     final importedEntries = <VibeLibraryEntry>[];
     final errors = <ImportError>[];
@@ -310,7 +309,7 @@ class VibeImportService {
 
         candidateName = customName.trim();
         if (isBatch) {
-          candidateName = _resolveBatchNaming(
+          candidateName = await _resolveBatchNaming(
             baseName: candidateName,
             usageMap: batchNamingIndexMap,
             existingNameMap: nameMap,
@@ -322,10 +321,11 @@ class VibeImportService {
           '$progressPrefix($current/${sources.length}): $baseName');
 
       try {
-        final conflictEntry = nameMap[_normalizeName(candidateName)];
+        final conflictEntry =
+            await _findEntryByNameCached(candidateName, nameMap);
         if (conflictEntry != null) hasConflicts = true;
 
-        final resolvedName = _resolveName(
+        final resolvedName = await _resolveName(
           preferredName: candidateName,
           existingNameMap: nameMap,
           strategy: conflictResolution,
@@ -437,17 +437,34 @@ class VibeImportService {
     return name.trim().toLowerCase();
   }
 
-  String _resolveBatchNaming({
+  Future<VibeLibraryEntry?> _findEntryByNameCached(
+    String name,
+    Map<String, VibeLibraryEntry> nameMap,
+  ) async {
+    final normalized = _normalizeName(name);
+    final cached = nameMap[normalized];
+    if (cached != null) {
+      return cached;
+    }
+
+    final existing = await _repository.findEntryByName(name);
+    if (existing != null) {
+      nameMap[_normalizeName(existing.name)] = existing;
+    }
+    return existing;
+  }
+
+  Future<String> _resolveBatchNaming({
     required String baseName,
     required Map<String, int> usageMap,
     required Map<String, VibeLibraryEntry> existingNameMap,
-  }) {
+  }) async {
     final normalizedBase = _normalizeName(baseName);
     var index = usageMap[normalizedBase] ?? 0;
 
     while (true) {
       final candidate = index == 0 ? baseName : '$baseName-$index';
-      if (!existingNameMap.containsKey(_normalizeName(candidate))) {
+      if (await _findEntryByNameCached(candidate, existingNameMap) == null) {
         usageMap[normalizedBase] = index + 1;
         return candidate;
       }
@@ -548,29 +565,32 @@ class VibeImportService {
     return fileName;
   }
 
-  String? _resolveName({
+  Future<String?> _resolveName({
     required String preferredName,
     required Map<String, VibeLibraryEntry> existingNameMap,
     required ConflictResolution strategy,
     required VibeLibraryEntry? conflictEntry,
-  }) {
+  }) async {
     if (conflictEntry == null) return preferredName;
 
-    return switch (strategy) {
-      ConflictResolution.skip || ConflictResolution.ask => null,
-      ConflictResolution.replace => preferredName,
-      ConflictResolution.rename =>
-        _generateUniqueName(preferredName, existingNameMap),
-    };
+    switch (strategy) {
+      case ConflictResolution.skip:
+      case ConflictResolution.ask:
+        return null;
+      case ConflictResolution.replace:
+        return preferredName;
+      case ConflictResolution.rename:
+        return await _generateUniqueName(preferredName, existingNameMap);
+    }
   }
 
-  String _generateUniqueName(
+  Future<String> _generateUniqueName(
     String baseName,
     Map<String, VibeLibraryEntry> existingNameMap,
-  ) {
+  ) async {
     var index = 2;
     var candidate = '$baseName ($index)';
-    while (existingNameMap.containsKey(_normalizeName(candidate))) {
+    while (await _findEntryByNameCached(candidate, existingNameMap) != null) {
       index++;
       candidate = '$baseName ($index)';
     }

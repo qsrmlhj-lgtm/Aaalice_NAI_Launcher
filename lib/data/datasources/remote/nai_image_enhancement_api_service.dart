@@ -8,6 +8,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint_service.dart';
 import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/zip_utils.dart';
 
@@ -16,8 +17,12 @@ part 'nai_image_enhancement_api_service.g.dart';
 /// NovelAI Image Enhancement API 服务
 class NAIImageEnhancementApiService {
   final Dio _dio;
+  final NaiApiEndpointService _endpointService;
 
-  NAIImageEnhancementApiService(this._dio);
+  NAIImageEnhancementApiService(
+    this._dio, [
+    NaiApiEndpointService? endpointService,
+  ]) : _endpointService = endpointService ?? NaiApiEndpointService();
 
   // ==================== 图像增强类型常量 ====================
   static const String _reqTypeEmotion = 'emotion';
@@ -33,22 +38,41 @@ class NAIImageEnhancementApiService {
   static const String _annotateTypeOpenpose = 'openpose';
 
   // ==================== 图像放大 API ====================
+
+  /// 调用 NovelAI `/ai/upscale` 端点进行超分辨率放大。
+  /// 该端点位于主 API (`api.novelai.net`)，而非图像生成域。
   Future<Uint8List> upscaleImage(
     Uint8List image, {
-    int scale = 2,
+    int scale = 4,
     void Function(int, int)? onProgress,
   }) async {
     try {
+      final decoded = img.decodeImage(image);
+      if (decoded == null) {
+        throw Exception('无法解析图像尺寸');
+      }
+
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.upscaleEndpoint}',
-        data: {'image': base64Encode(image), 'scale': scale},
+        _endpointService.mainUrl(ApiConstants.upscaleEndpoint),
+        data: {
+          'image': base64Encode(image),
+          'scale': scale,
+          'width': decoded.width,
+          'height': decoded.height,
+        },
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Accept': 'application/x-zip-compressed'},
+        ),
         onReceiveProgress: onProgress,
-        options: Options(responseType: ResponseType.bytes),
       );
 
-      return response.data as Uint8List;
+      final raw = response.data as Uint8List;
+      final images = ZipUtils.extractAllImages(raw);
+      if (images.isNotEmpty) return images.first;
+      return raw;
     } on DioException catch (e) {
-      AppLogger.w('Upscale failed: ${e.message}', 'NAIEnhancement');
+      AppLogger.w('Upscale image failed: ${e.message}', 'NAIEnhancement');
       throw Exception('图像放大失败: ${_mapDioError(e)}');
     }
   }
@@ -61,11 +85,11 @@ class NAIImageEnhancementApiService {
   }) async {
     try {
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.encodeVibeEndpoint}',
+        _endpointService.imageUrl(ApiConstants.encodeVibeEndpoint),
         data: {
           'image': base64Encode(image),
           'model': model,
-          'informationExtracted': informationExtracted,
+          'information_extracted': informationExtracted,
         },
         options: Options(responseType: ResponseType.bytes),
       );
@@ -100,7 +124,7 @@ class NAIImageEnhancementApiService {
       };
 
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.augmentImageEndpoint}',
+        _endpointService.imageUrl(ApiConstants.augmentImageEndpoint),
         data: requestData,
         options: Options(
           responseType: ResponseType.bytes,
@@ -163,7 +187,7 @@ class NAIImageEnhancementApiService {
   }) async {
     try {
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.annotateImageEndpoint}',
+        _endpointService.imageUrl(ApiConstants.annotateImageEndpoint),
         data: {
           'image': base64Encode(image),
           'req_type': annotateType,
@@ -195,11 +219,24 @@ class NAIImageEnhancementApiService {
       case DioExceptionType.badResponse:
         final statusCode = e.response?.statusCode;
         final responseData = e.response?.data;
-        final detail = responseData == null
-            ? null
-            : responseData is String
-                ? responseData
-                : jsonEncode(responseData);
+        String? detail;
+        if (responseData is String) {
+          detail = responseData;
+        } else if (responseData is List<int>) {
+          try {
+            final text = utf8.decode(responseData, allowMalformed: true);
+            final json = jsonDecode(text);
+            if (json is Map && json.containsKey('message')) {
+              detail = json['message'] as String?;
+            } else {
+              detail = text;
+            }
+          } catch (_) {
+            detail = String.fromCharCodes(responseData);
+          }
+        } else if (responseData != null) {
+          detail = jsonEncode(responseData);
+        }
         return detail == null || detail.isEmpty
             ? '服务器返回错误: $statusCode'
             : '服务器返回错误: $statusCode ($detail)';
@@ -227,5 +264,6 @@ class NAIImageEnhancementApiService {
 @riverpod
 NAIImageEnhancementApiService naiImageEnhancementApiService(Ref ref) {
   final dio = ref.watch(dioClientProvider);
-  return NAIImageEnhancementApiService(dio);
+  final endpointService = ref.watch(naiApiEndpointServiceProvider);
+  return NAIImageEnhancementApiService(dio, endpointService);
 }

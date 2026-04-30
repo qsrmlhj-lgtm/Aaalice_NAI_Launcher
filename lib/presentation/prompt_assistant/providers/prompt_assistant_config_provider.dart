@@ -74,11 +74,6 @@ class PromptAssistantConfigNotifier
     await _save();
   }
 
-  Future<void> setStreamOutput(bool value) async {
-    state = state.copyWith(streamOutput: value);
-    await _save();
-  }
-
   Future<void> upsertProvider(ProviderConfig provider) async {
     final providers = [...state.providers];
     final idx = providers.indexWhere((p) => p.id == provider.id);
@@ -106,6 +101,18 @@ class PromptAssistantConfigNotifier
       routing = routing.copyWith(
         translateProviderId: 'pollinations',
         translateModel: 'openai-large',
+      );
+    }
+    if (routing.reverseProviderId == providerId) {
+      routing = routing.copyWith(
+        reverseProviderId: 'pollinations',
+        reverseModel: 'openai-large',
+      );
+    }
+    if (routing.characterReplaceProviderId == providerId) {
+      routing = routing.copyWith(
+        characterReplaceProviderId: 'pollinations',
+        characterReplaceModel: 'openai-large',
       );
     }
     final keys = Map<String, bool>.from(state.providerHasApiKey)
@@ -166,6 +173,10 @@ class PromptAssistantConfigNotifier
   }
 
   Future<void> removeRule(String ruleId) async {
+    final matchingRules = state.rules.where((r) => r.id == ruleId);
+    if (matchingRules.isNotEmpty && matchingRules.first.isDefault) {
+      return;
+    }
     state = state.copyWith(
       rules: state.rules.where((r) => r.id != ruleId).toList(),
     );

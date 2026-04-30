@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/cache/danbooru_image_cache_manager.dart';
 import '../../router/app_router.dart';
 import '../../../data/models/online_gallery/danbooru_post.dart';
 import '../../../data/models/queue/replication_task.dart';
@@ -15,6 +16,7 @@ import '../../providers/character_prompt_provider.dart';
 import '../../providers/online_gallery_provider.dart';
 import '../../providers/pending_prompt_provider.dart';
 import '../../providers/replication_queue_provider.dart';
+import '../../providers/reverse_prompt_provider.dart';
 import '../tag_chip.dart';
 import '../../widgets/common/themed_divider.dart';
 import '../../widgets/common/app_toast.dart';
@@ -183,45 +185,15 @@ class _PostDetailDialogState extends ConsumerState<PostDetailDialog>
           children: [
             // 根据媒体类型渲染不同组件
             if (widget.post.isVideo)
-            // 视频播放器
-            VideoPlayerWidget(
-              videoUrl: widget.post.fileUrl ?? widget.post.sampleUrl ?? '',
-            )
-          else if (widget.post.isAnimated)
-            // GIF 自动循环播放
-            CachedNetworkImage(
-              imageUrl: widget.post.fileUrl ??
-                  widget.post.sampleUrl ??
-                  widget.post.previewUrl,
-              fit: BoxFit.contain,
-              errorListener: (error) {
-                // 静默处理图片加载错误
-              },
-              placeholder: (context, url) => const Center(
-                child: CircularProgressIndicator(color: Colors.white),
-              ),
-              errorWidget: (context, url, error) => const Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.error, color: Colors.white54, size: 48),
-                    SizedBox(height: 8),
-                    Text(
-                      'GIF加载失败',
-                      style: TextStyle(color: Colors.white54),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else
-            // 普通图片（支持缩放平移）
-            InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 4.0,
-              child: CachedNetworkImage(
-                imageUrl: widget.post.sampleUrl ??
-                    widget.post.fileUrl ??
+              // 视频播放器
+              VideoPlayerWidget(
+                videoUrl: widget.post.fileUrl ?? widget.post.sampleUrl ?? '',
+              )
+            else if (widget.post.isAnimated)
+              // GIF 自动循环播放
+              CachedNetworkImage(
+                imageUrl: widget.post.fileUrl ??
+                    widget.post.sampleUrl ??
                     widget.post.previewUrl,
                 fit: BoxFit.contain,
                 errorListener: (error) {
@@ -237,55 +209,86 @@ class _PostDetailDialogState extends ConsumerState<PostDetailDialog>
                       Icon(Icons.error, color: Colors.white54, size: 48),
                       SizedBox(height: 8),
                       Text(
-                        '加载失败',
+                        'GIF加载失败',
                         style: TextStyle(color: Colors.white54),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ),
-          // 关闭按钮
-          Positioned(
-            top: 8,
-            left: 8,
-            child: IconButton.filled(
-              onPressed: _close,
-              icon: const Icon(Icons.close),
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.black.withOpacity(0.5),
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ),
-          // 缩放提示（仅图片显示）
-          if (!widget.post.isVideo && !widget.post.isAnimated)
-            Positioned(
-              bottom: 8,
-              left: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.zoom_in, color: Colors.white54, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      '双指缩放',
-                      style: TextStyle(color: Colors.white54, fontSize: 11),
+              )
+            else
+              // 普通图片（支持缩放平移）
+              InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: CachedNetworkImage(
+                  imageUrl: widget.post.sampleUrl ??
+                      widget.post.fileUrl ??
+                      widget.post.previewUrl,
+                  fit: BoxFit.contain,
+                  errorListener: (error) {
+                    // 静默处理图片加载错误
+                  },
+                  placeholder: (context, url) => const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                  errorWidget: (context, url, error) => const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.error, color: Colors.white54, size: 48),
+                        SizedBox(height: 8),
+                        Text(
+                          '加载失败',
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
+                ),
+              ),
+            // 关闭按钮
+            Positioned(
+              top: 8,
+              left: 8,
+              child: IconButton.filled(
+                onPressed: _close,
+                icon: const Icon(Icons.close),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.black.withOpacity(0.5),
+                  foregroundColor: Colors.white,
                 ),
               ),
             ),
-        ],
+            // 缩放提示（仅图片显示）
+            if (!widget.post.isVideo && !widget.post.isAnimated)
+              Positioned(
+                bottom: 8,
+                left: 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.zoom_in, color: Colors.white54, size: 14),
+                      SizedBox(width: 4),
+                      Text(
+                        '双指缩放',
+                        style: TextStyle(color: Colors.white54, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
   }
 
   /// 信息面板
@@ -504,6 +507,17 @@ class _PostDetailDialogState extends ConsumerState<PostDetailDialog>
               ),
               const SizedBox(width: 8),
               Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _sendToReversePrompt,
+                  icon: const Icon(Icons.manage_search_rounded, size: 16),
+                  label: const Text('反推'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
                 child: FilledButton.icon(
                   onPressed: _sendToGenerate,
                   icon: const Icon(Icons.send, size: 16),
@@ -574,6 +588,30 @@ class _PostDetailDialogState extends ConsumerState<PostDetailDialog>
     context.go(AppRoutes.generation);
 
     AppToast.success(context, '提示词已发送到生成页面');
+  }
+
+  Future<void> _sendToReversePrompt() async {
+    final imageUrl =
+        widget.post.sampleUrl ?? widget.post.fileUrl ?? widget.post.previewUrl;
+    if (imageUrl.isEmpty) {
+      AppToast.info(context, '此图片没有可用地址');
+      return;
+    }
+    try {
+      final file =
+          await DanbooruImageCacheManager.instance.getSingleFile(imageUrl);
+      final bytes = await file.readAsBytes();
+      await ref.read(reversePromptProvider.notifier).addImage(
+            bytes,
+            name: 'danbooru_${widget.post.id}',
+          );
+      if (!mounted) return;
+      Navigator.pop(context);
+      context.go(AppRoutes.generation);
+      AppToast.success(context, '图片已发送到反推模块');
+    } catch (e) {
+      if (mounted) AppToast.error(context, '发送反推失败: $e');
+    }
   }
 
   /// 加入队列

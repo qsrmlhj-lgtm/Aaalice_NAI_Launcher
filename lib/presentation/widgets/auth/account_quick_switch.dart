@@ -39,6 +39,9 @@ class AccountQuickSwitch extends ConsumerWidget {
                   context: context,
                   account: account,
                   isCurrent: account.id == currentAccountId,
+                  isThirdParty: accountState
+                          .accountApiEndpoints[account.id]?.isThirdParty ??
+                      false,
                   onTap: () async {
                     // 切换到该账号
                     final token = await ref
@@ -135,6 +138,7 @@ class AccountQuickSwitch extends ConsumerWidget {
     required BuildContext context,
     required SavedAccount account,
     required bool isCurrent,
+    required bool isThirdParty,
     required VoidCallback onTap,
     required VoidCallback onDelete,
   }) {
@@ -161,9 +165,11 @@ class AccountQuickSwitch extends ConsumerWidget {
           ),
         ),
         subtitle: Text(
-          account.accountType == AccountType.credentials
-              ? context.l10n.auth_credentialsLogin
-              : context.l10n.auth_tokenLogin,
+          isThirdParty
+              ? '第三方站点'
+              : account.accountType == AccountType.credentials
+                  ? context.l10n.auth_credentialsLogin
+                  : context.l10n.auth_tokenLogin,
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
@@ -186,7 +192,7 @@ class AccountQuickSwitch extends ConsumerWidget {
                     icon: Icon(
                       Icons.delete_outline,
                       size: 20,
-                      color: theme.colorScheme.error.withOpacity(0.7),
+                      color: theme.colorScheme.error.withValues(alpha: 0.7),
                     ),
                     onPressed: onDelete,
                     tooltip: context.l10n.auth_deleteAccount,

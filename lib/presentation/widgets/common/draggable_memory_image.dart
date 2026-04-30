@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -19,6 +20,10 @@ class DraggableMemoryImage extends ConsumerStatefulWidget {
     this.fileName = 'history.png',
     this.sourceFilePath,
     this.enabled = true,
+    this.requirePreparedDragFile = false,
+    this.preparedDragFile,
+    this.preparedDragStripMetadata,
+    this.disabledReason,
     this.feedbackHint,
     this.feedbackWidth = 280,
     this.dragOpacity = 0.3,
@@ -29,6 +34,10 @@ class DraggableMemoryImage extends ConsumerStatefulWidget {
   final String fileName;
   final String? sourceFilePath;
   final bool enabled;
+  final bool requirePreparedDragFile;
+  final File? preparedDragFile;
+  final bool? preparedDragStripMetadata;
+  final String? disabledReason;
   final String? feedbackHint;
   final double feedbackWidth;
   final double dragOpacity;
@@ -41,11 +50,13 @@ class DraggableMemoryImage extends ConsumerStatefulWidget {
 class _DraggableMemoryImageState extends ConsumerState<DraggableMemoryImage> {
   bool _isDragging = false;
   late ImageProvider _previewProvider;
+  ShareImageTransferCache? _transferCache;
 
   @override
   void initState() {
     super.initState();
     _previewProvider = MemoryImage(widget.imageBytes);
+    _transferCache = _shouldUsePreparedDragFile ? null : _createTransferCache();
   }
 
   @override
@@ -54,12 +65,43 @@ class _DraggableMemoryImageState extends ConsumerState<DraggableMemoryImage> {
     if (oldWidget.imageBytes != widget.imageBytes) {
       _previewProvider = MemoryImage(widget.imageBytes);
     }
+    if (oldWidget.imageBytes != widget.imageBytes ||
+        oldWidget.fileName != widget.fileName ||
+        oldWidget.sourceFilePath != widget.sourceFilePath ||
+        oldWidget.requirePreparedDragFile != widget.requirePreparedDragFile) {
+      final previousCache = _transferCache;
+      _transferCache =
+          _shouldUsePreparedDragFile ? null : _createTransferCache();
+      if (previousCache != null) {
+        unawaited(previousCache.dispose());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    final cache = _transferCache;
+    if (cache != null) {
+      unawaited(cache.dispose());
+    }
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) {
       return widget.child;
+    }
+
+    if (_shouldUsePreparedDragFile && widget.preparedDragFile == null) {
+      final reason = widget.disabledReason;
+      if (reason == null || reason.isEmpty) {
+        return widget.child;
+      }
+      return Tooltip(
+        message: reason,
+        child: widget.child,
+      );
     }
 
     final dragData = ImageDragData(
@@ -72,6 +114,7 @@ class _DraggableMemoryImageState extends ConsumerState<DraggableMemoryImage> {
     );
 
     return Listener(
+      onPointerHover: (_) => _warmTransferCache(),
       onPointerDown: (_) => setState(() => _isDragging = true),
       onPointerUp: (_) => setState(() => _isDragging = false),
       onPointerCancel: (_) => setState(() => _isDragging = false),
@@ -105,23 +148,81 @@ class _DraggableMemoryImageState extends ConsumerState<DraggableMemoryImage> {
   Future<DragItem> _createDragItem() async {
     final stripMetadata = ref
         .read(shareImageSettingsProvider)
-        .stripMetadataForCopyAndDrag;
-    final image = await prepareDragImageForTransfer(
-      imageBytes: widget.imageBytes,
-      fileName: widget.fileName,
-      stripMetadata: stripMetadata,
-      sourceFilePath: widget.sourceFilePath,
-    );
+        .effectiveStripMetadataForCopyAndDrag;
 
     final item = DragItem(
-      suggestedName: image.fileName,
+      suggestedName: widget.fileName,
       localData: {'source': 'history_internal'},
     );
+
+    final preparedFile = widget.preparedDragFile;
+    if (preparedFile != null) {
+      final preparedStripMetadata = widget.preparedDragStripMetadata;
+      if (preparedStripMetadata != null &&
+          preparedStripMetadata != stripMetadata) {
+        throw StateError(
+          'Prepared drag file does not match current metadata setting',
+        );
+      }
+      if (!await preparedFile.exists()) {
+        throw StateError('Prepared drag file is no longer available');
+      }
+      item.add(Formats.fileUri(preparedFile.uri));
+      return item;
+    }
+
+    if (_shouldUsePreparedDragFile) {
+      throw StateError('Prepared drag file is not ready');
+    }
+
+    final sourceFilePath = widget.sourceFilePath?.trim();
+    final hasReusableSourceFile = !stripMetadata &&
+        sourceFilePath != null &&
+        sourceFilePath.isNotEmpty &&
+        await File(sourceFilePath).exists();
+
+    if (hasReusableSourceFile) {
+      item.add(Formats.fileUri(Uri.file(sourceFilePath)));
+      return item;
+    }
+
+    final transferCache = _transferCache;
+    if (transferCache == null) {
+      throw StateError('Image transfer cache is unavailable');
+    }
+
+    final image = await transferCache.prepareImage(
+      stripMetadata: stripMetadata,
+    );
     item.add(Formats.png(image.bytes));
-    final tempFile = await ImageShareSanitizer.writeTempShareFile(image);
-    item.add(Formats.fileUri(tempFile.uri));
+    final transferFile = await transferCache.prepareFile(
+      stripMetadata: stripMetadata,
+    );
+    item.add(Formats.fileUri(transferFile.uri));
     return item;
   }
+
+  ShareImageTransferCache _createTransferCache() {
+    return ShareImageTransferCache(
+      imageBytes: widget.imageBytes,
+      fileName: widget.fileName,
+      sourceFilePath: widget.sourceFilePath,
+    );
+  }
+
+  void _warmTransferCache() {
+    if (_shouldUsePreparedDragFile) {
+      return;
+    }
+    final transferCache = _transferCache;
+    if (transferCache == null) return;
+    final stripMetadata = ref
+        .read(shareImageSettingsProvider)
+        .effectiveStripMetadataForCopyAndDrag;
+    transferCache.warmUp(stripMetadata: stripMetadata);
+  }
+
+  bool get _shouldUsePreparedDragFile => widget.requirePreparedDragFile;
 }
 
 Future<SanitizedShareImage> prepareDragImageForTransfer({

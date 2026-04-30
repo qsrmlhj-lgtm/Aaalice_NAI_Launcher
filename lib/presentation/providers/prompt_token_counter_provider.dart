@@ -46,7 +46,15 @@ final promptTokenCounterServiceProvider =
 final promptTokenUsageProvider =
     FutureProvider.family<PromptTokenUsage?, PromptTokenCountTarget>(
   (ref, target) async {
-    final params = ref.watch(generationParamsNotifierProvider);
+    final promptState = ref.watch(
+      generationParamsNotifierProvider.select(
+        (params) => (
+          prompt: params.prompt,
+          negativePrompt: params.negativePrompt,
+          model: params.model,
+        ),
+      ),
+    );
     final characterConfig = ref.watch(characterPromptNotifierProvider);
     final fixedTagsState = ref.watch(fixedTagsNotifierProvider);
     final qualityToggle = ref.watch(qualityTagsSettingsProvider);
@@ -56,9 +64,9 @@ final promptTokenUsageProvider =
 
     final payload = buildPromptTokenCountPayload(
       target: target,
-      prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
-      model: params.model,
+      prompt: promptState.prompt,
+      negativePrompt: promptState.negativePrompt,
+      model: promptState.model,
       fixedTagsState: fixedTagsState,
       qualityToggle: qualityToggle,
       ucPreset: ucPreset.index,
@@ -89,7 +97,7 @@ final promptTokenUsageProvider =
     }
 
     return service.countUsageFromTexts(
-      model: params.model,
+      model: promptState.model,
       mainText: payload.mainText,
       extraTexts: payload.extraTexts,
       breakdown: breakdown,

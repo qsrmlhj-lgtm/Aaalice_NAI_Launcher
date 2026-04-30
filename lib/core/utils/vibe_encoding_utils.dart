@@ -37,12 +37,12 @@ class VibeEncodingUtils {
 
       final displayName = _parseName(data);
       final vibeEncoding = _parseVibeEncoding(data);
-      final strength = _parseDouble(data['strength'], 0.6)
-          .clamp(0.0, 1.0)
-          .toDouble();
-      final infoExtracted = _parseDouble(data['infoExtracted'], 0.7)
-          .clamp(0.0, 1.0)
-          .toDouble();
+      final strength = VibeReference.sanitizeStrength(
+        _parseDouble(data['strength'], 0.6),
+      );
+      final infoExtracted = VibeReference.sanitizeInfoExtracted(
+        _parseDouble(data['infoExtracted'], 0.7),
+      );
       final sourceType = _parseSourceType(data['sourceType'], vibeEncoding);
 
       return VibeReference(

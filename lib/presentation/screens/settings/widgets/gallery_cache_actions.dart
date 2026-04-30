@@ -12,26 +12,27 @@ import '../../../widgets/common/app_toast.dart';
 import 'cache_statistics_tile.dart';
 
 /// 画廊重新扫描按钮
-/// 
+///
 /// 触发全局扫描任务（与自动扫描使用同一套逻辑）：
 /// - 检查数据一致性（标记不存在的文件）
 /// - 查漏补缺（新文件、变更文件）
 /// - 提取元数据
-/// 
+///
 /// 注意：不清空数据，只做增量更新
 class GalleryCacheActions extends ConsumerStatefulWidget {
   const GalleryCacheActions({super.key});
 
   @override
-  ConsumerState<GalleryCacheActions> createState() => _GalleryCacheActionsState();
+  ConsumerState<GalleryCacheActions> createState() =>
+      _GalleryCacheActionsState();
 }
 
 class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
     with TickerProviderStateMixin {
   late AnimationController _scanController;
-  
+
   bool _isScanning = false;
-  
+
   // 扫描进度（来自全局 ScanStateManager）
   double? _scanProgress;
   String? _scanPhase;
@@ -54,7 +55,7 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
   }
 
   /// 重新扫描
-  /// 
+  ///
   /// 触发全局扫描任务（与自动扫描使用同一套逻辑）：
   /// - 检查数据一致性（标记不存在的文件）
   /// - 查漏补缺（新文件、变更文件）
@@ -75,7 +76,7 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
           '这将执行以下操作：\n\n'
           '1. 检查数据一致性（标记不存在的文件）\n'
           '2. 扫描新文件和变更的文件\n'
-          '3. 提取缺失的元数据\n\n'
+          '3. 重新尝试历史上未提取成功的元数据（含失败记录）\n\n'
           '此操作不会清空已有数据，也不会删除图片文件。',
         ),
         actions: [
@@ -95,7 +96,7 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
     if (confirmed != true) return;
 
     if (!mounted) return;
-    
+
     // 检查是否已有扫描在进行中
     if (ScanStateManager.instance.isScanning) {
       AppToast.warning(context, '已有扫描任务在进行中，请等待完成后再试');
@@ -113,9 +114,9 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
 
     try {
       final rootPath = await GalleryFolderRepository.instance.getRootPath();
-      
+
       if (!mounted) return;
-      
+
       if (rootPath == null) {
         AppToast.error(context, '未设置画廊目录');
         return;
@@ -132,7 +133,7 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
       // 这与自动扫描使用同一套逻辑
       final dataSource = GalleryDataSource();
       final scanner = GalleryStreamScanner(dataSource: dataSource);
-      
+
       // 订阅统计流以实时更新UI
       final statsSubscription = scanner.statsStream.listen((stats) {
         if (!mounted) return;
@@ -140,16 +141,19 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
           _totalCount = stats.totalDiscovered;
           _processedCount = stats.processed + stats.skipped;
           _scanProgress = stats.progress;
-          _scanPhase = '正在扫描 ${stats.processed + stats.skipped}/${stats.totalDiscovered}...';
+          _scanPhase =
+              '正在扫描 ${stats.processed + stats.skipped}/${stats.totalDiscovered}...';
         });
       });
 
       await scanner.startScanning(
         dir,
+        retryMissingMetadata: true,
+        retryFailedMetadata: true,
         onFileProcessed: (result, stats) {
           AppLogger.d(
             '[Rescan] Processed: ${result.path.split(Platform.pathSeparator).last}, '
-            'stage: ${result.stage}',
+                'stage: ${result.stage}',
             'RescanGallery',
           );
         },
@@ -194,7 +198,9 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
             animation: _scanController,
             builder: (context, child) {
               return RotationTransition(
-                turns: _isScanning ? _scanController : const AlwaysStoppedAnimation(0),
+                turns: _isScanning
+                    ? _scanController
+                    : const AlwaysStoppedAnimation(0),
                 child: Container(
                   width: 40,
                   height: 40,
@@ -217,7 +223,9 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
                   ),
                   child: Icon(
                     Icons.refresh_rounded,
-                    color: _isScanning ? Colors.green : Colors.green.withOpacity(0.8),
+                    color: _isScanning
+                        ? Colors.green
+                        : Colors.green.withOpacity(0.8),
                     size: 22,
                   ),
                 ),
@@ -234,9 +242,7 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _isScanning
-                    ? (_scanPhase ?? '正在扫描...')
-                    : '检查数据一致性、查漏补缺、提取元数据',
+                _isScanning ? (_scanPhase ?? '正在扫描...') : '检查数据一致性、查漏补缺、提取元数据',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurface.withOpacity(0.6),
                 ),
@@ -246,7 +252,8 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
                 LinearProgressIndicator(
                   value: _scanProgress,
                   backgroundColor: colorScheme.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(colorScheme.primary),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 if (_totalCount > 0) ...[
@@ -272,7 +279,8 @@ class _GalleryCacheActionsState extends ConsumerState<GalleryCacheActions>
                   ),
                 )
               : Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [

@@ -354,7 +354,8 @@ class ThumbnailCacheService {
   }) async {
     // 【修复】防止为缩略图生成缩略图
     if (originalPath.contains('.thumb.') ||
-        originalPath.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}')) {
+        originalPath.contains(
+            '${Platform.pathSeparator}.thumbs${Platform.pathSeparator}')) {
       // AppLogger.w('Refusing to generate thumbnail for thumbnail: $originalPath', 'ThumbnailCache');
       return null;
     }
@@ -386,6 +387,7 @@ class ThumbnailCacheService {
     }
 
     // 直接生成
+    _activeGenerationCount++;
     return _doGenerateThumbnail(originalPath, size: size);
   }
 
@@ -409,49 +411,20 @@ class ThumbnailCacheService {
         await thumbDir.create(recursive: true);
       }
 
-      // 读取并解码原始图片
-      final file = File(originalPath);
-
-      // 内存压力防护：检查文件大小
-      final fileSize = await file.length();
-      if (fileSize > _maxFileSizeBytes) {
-        throw Exception(
-          'File too large: ${fileSize ~/ (1024 * 1024)}MB exceeds limit of 50MB',
-        );
-      }
-
-      final bytes = await file.readAsBytes();
-
-      // 解码原始图片
-      final originalImage = img.decodeImage(bytes);
-      if (originalImage == null) {
-        throw Exception('Failed to decode image: $originalPath');
-      }
-
-      // 计算缩略图尺寸（保持宽高比）
-      final aspectRatio = originalImage.height > 0 ? originalImage.width / originalImage.height : 1.0;
-      int thumbWidth = size.width;
-      int thumbHeight = size.height;
-
-      final targetAspectRatio = size.height > 0 ? size.width / size.height : 1.0;
-      if (aspectRatio > targetAspectRatio) {
-        // 图片较宽，以宽度为准
-        thumbHeight = aspectRatio > 0 ? (size.width / aspectRatio).round() : size.height;
-      } else {
-        // 图片较高，以高度为准
-        thumbWidth = (size.height * aspectRatio).round();
-      }
-
-      // 生成缩略图
-      final thumbnail = img.copyResize(
-        originalImage,
-        width: thumbWidth,
-        height: thumbHeight,
-        interpolation: img.Interpolation.linear,
+      final result = await compute(
+        _generateThumbnailBytesInIsolate,
+        <String, Object?>{
+          'originalPath': originalPath,
+          'maxFileSizeBytes': _maxFileSizeBytes,
+          'targetWidth': size.width,
+          'targetHeight': size.height,
+          'jpegQuality': jpegQuality,
+        },
+        debugLabel: 'thumbnail_${p.basename(originalPath)}',
       );
 
-      // 编码为 JPEG 并写入文件
-      final thumbBytes = img.encodeJpg(thumbnail, quality: jpegQuality);
+      final thumbBytes = result['bytes'] as Uint8List;
+
       await File(thumbnailPath).writeAsBytes(thumbBytes);
       _recentFailureTimes.remove(_failureKey(originalPath, size: size));
 
@@ -474,7 +447,8 @@ class ThumbnailCacheService {
       return thumbnailPath;
     } catch (e, stack) {
       _stats.recordFailed();
-      _recentFailureTimes[_failureKey(originalPath, size: size)] = DateTime.now();
+      _recentFailureTimes[_failureKey(originalPath, size: size)] =
+          DateTime.now();
       AppLogger.e(
         'Failed to generate thumbnail for $originalPath: $e',
         e,
@@ -503,7 +477,8 @@ class ThumbnailCacheService {
     // 检查队列是否已满
     if (_taskQueue.length >= maxQueueSize) {
       // 移除优先级最低的任务
-      _taskQueue.sort((a, b) => a.effectivePriority.compareTo(b.effectivePriority));
+      _taskQueue
+          .sort((a, b) => a.effectivePriority.compareTo(b.effectivePriority));
       final lowestPriorityTask = _taskQueue.last;
       if (lowestPriorityTask.effectivePriority > priority) {
         _taskQueue.removeLast();
@@ -538,7 +513,8 @@ class ThumbnailCacheService {
 
   /// 按优先级排序队列
   void _sortQueueByPriority() {
-    _taskQueue.sort((a, b) => a.effectivePriority.compareTo(b.effectivePriority));
+    _taskQueue
+        .sort((a, b) => a.effectivePriority.compareTo(b.effectivePriority));
   }
 
   /// 等待正在进行的生成任务完成
@@ -566,7 +542,8 @@ class ThumbnailCacheService {
 
   /// 处理队列中的任务
   void _processQueue() {
-    if (_taskQueue.isEmpty || _activeGenerationCount >= maxConcurrentGenerations) {
+    if (_taskQueue.isEmpty ||
+        _activeGenerationCount >= maxConcurrentGenerations) {
       return;
     }
 
@@ -709,7 +686,8 @@ class ThumbnailCacheService {
   ///   - 'resetStats': bool - 是否重置统计信息（默认 true）
   ///   - 'preserveAccessTimes': bool - 是否保留访问时间记录（默认 false）
   /// 返回被删除的目录数量
-  Future<int> clearCache(String rootPath, {Map<String, dynamic>? options}) async {
+  Future<int> clearCache(String rootPath,
+      {Map<String, dynamic>? options}) async {
     try {
       final rootDir = Directory(rootPath);
       if (!await rootDir.exists()) {
@@ -718,13 +696,15 @@ class ThumbnailCacheService {
       }
 
       final resetStats = options?['resetStats'] as bool? ?? true;
-      final preserveAccessTimes = options?['preserveAccessTimes'] as bool? ?? false;
+      final preserveAccessTimes =
+          options?['preserveAccessTimes'] as bool? ?? false;
 
       int deletedCount = 0;
       final List<String> deletedPaths = [];
 
       // 遍历所有子目录，删除 .thumbs 文件夹
-      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
         if (entity is Directory) {
           final dirName = entity.path.split(Platform.pathSeparator).last;
           if (dirName == thumbsDirName) {
@@ -778,7 +758,8 @@ class ThumbnailCacheService {
 
       int deletedCount = 0;
 
-      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
         if (entity is Directory) {
           final dirName = entity.path.split(Platform.pathSeparator).last;
           if (dirName == thumbsDirName) {
@@ -802,7 +783,8 @@ class ThumbnailCacheService {
 
       return deletedCount;
     } catch (e, stack) {
-      AppLogger.e('Failed to clear cache before date: $e', e, stack, 'ThumbnailCache');
+      AppLogger.e(
+          'Failed to clear cache before date: $e', e, stack, 'ThumbnailCache');
       return 0;
     }
   }
@@ -821,7 +803,8 @@ class ThumbnailCacheService {
     try {
       // 找到所有.thumbs目录
       final thumbsDirs = <Directory>[];
-      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
         if (entity is Directory) {
           final dirName = p.basename(entity.path);
           if (dirName == thumbsDirName) {
@@ -832,7 +815,8 @@ class ThumbnailCacheService {
 
       // 检查每个.thumbs目录是否有嵌套的.thumbs子目录
       for (final thumbsDir in thumbsDirs) {
-        await for (final entity in thumbsDir.list(recursive: true, followLinks: false)) {
+        await for (final entity
+            in thumbsDir.list(recursive: true, followLinks: false)) {
           if (entity is Directory) {
             final dirName = p.basename(entity.path);
             if (dirName == thumbsDirName) {
@@ -849,7 +833,8 @@ class ThumbnailCacheService {
 
       return cleanedCount;
     } catch (e, stack) {
-      AppLogger.e('Failed to cleanup nested thumbs: $e', e, stack, 'ThumbnailCache');
+      AppLogger.e(
+          'Failed to cleanup nested thumbs: $e', e, stack, 'ThumbnailCache');
       return 0;
     }
   }
@@ -920,7 +905,8 @@ class ThumbnailCacheService {
         sizeCounts[size.name] = 0;
       }
 
-      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
         if (entity is Directory) {
           final dirName = entity.path.split(Platform.pathSeparator).last;
           if (dirName == thumbsDirName) {
@@ -1016,7 +1002,7 @@ class ThumbnailCacheService {
       if (currentSizeMB <= targetSize && allThumbnails.length <= targetFiles) {
         AppLogger.d(
           'LRU eviction skipped: size=$currentSizeMB/${targetSize}MB, '
-          'files=${allThumbnails.length}/$targetFiles',
+              'files=${allThumbnails.length}/$targetFiles',
           'ThumbnailCache',
         );
         return 0;
@@ -1091,7 +1077,8 @@ class ThumbnailCacheService {
         return thumbnails;
       }
 
-      await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      await for (final entity
+          in rootDir.list(recursive: true, followLinks: false)) {
         if (entity is Directory) {
           final dirName = entity.path.split(Platform.pathSeparator).last;
           if (dirName == thumbsDirName) {
@@ -1118,7 +1105,8 @@ class ThumbnailCacheService {
                       height: 0,
                       createdAt: stat.modified,
                       size: size,
-                      lastAccessedAt: _lastAccessTimes[file.path] ?? stat.accessed,
+                      lastAccessedAt:
+                          _lastAccessTimes[file.path] ?? stat.accessed,
                       accessCount: 1,
                       isVisible: visibility?.isVisible ?? false,
                       visibilityPriority: visibility?.priority ?? 5,
@@ -1133,7 +1121,8 @@ class ThumbnailCacheService {
         }
       }
     } catch (e, stack) {
-      AppLogger.e('Failed to get all thumbnails: $e', e, stack, 'ThumbnailCache');
+      AppLogger.e(
+          'Failed to get all thumbnails: $e', e, stack, 'ThumbnailCache');
     }
 
     return thumbnails;
@@ -1158,12 +1147,15 @@ class ThumbnailCacheService {
         originalPath.contains('%2e%2e') ||
         originalPath.contains('%2E%2E') ||
         normalizedPath.contains('..')) {
-      throw ArgumentError('Invalid path: path traversal detected in "$originalPath"');
+      throw ArgumentError(
+          'Invalid path: path traversal detected in "$originalPath"');
     }
 
     // 额外验证：如果设置了根目录，确保路径在根目录内
     final rootPath = _rootPath;
-    if (rootPath != null && rootPath.isNotEmpty && !p.isWithin(rootPath, originalPath)) {
+    if (rootPath != null &&
+        rootPath.isNotEmpty &&
+        !p.isWithin(rootPath, originalPath)) {
       throw ArgumentError(
         'Invalid path: "$originalPath" is outside of root directory "$rootPath"',
       );
@@ -1210,7 +1202,8 @@ class ThumbnailCacheService {
     String originalPath, {
     required ThumbnailSize size,
   }) {
-    final lastFailureAt = _recentFailureTimes[_failureKey(originalPath, size: size)];
+    final lastFailureAt =
+        _recentFailureTimes[_failureKey(originalPath, size: size)];
     if (lastFailureAt == null) {
       return false;
     }
@@ -1332,6 +1325,59 @@ class _ThumbnailStats {
 /// 简单的同步锁实现
 void synchronized(Object lock, void Function() action) {
   action();
+}
+
+Map<String, Object?> _generateThumbnailBytesInIsolate(
+  Map<String, Object?> request,
+) {
+  final originalPath = request['originalPath'] as String;
+  final maxFileSizeBytes = request['maxFileSizeBytes'] as int;
+  final targetWidth = request['targetWidth'] as int;
+  final targetHeight = request['targetHeight'] as int;
+  final jpegQuality = request['jpegQuality'] as int;
+
+  final file = File(originalPath);
+  final fileSize = file.lengthSync();
+  if (fileSize > maxFileSizeBytes) {
+    throw Exception(
+      'File too large: ${fileSize ~/ (1024 * 1024)}MB exceeds limit of '
+      '${maxFileSizeBytes ~/ (1024 * 1024)}MB',
+    );
+  }
+
+  final originalImage = img.decodeImage(file.readAsBytesSync());
+  if (originalImage == null) {
+    throw Exception('Failed to decode image: $originalPath');
+  }
+
+  final aspectRatio = originalImage.height > 0
+      ? originalImage.width / originalImage.height
+      : 1.0;
+  var thumbWidth = targetWidth;
+  var thumbHeight = targetHeight;
+
+  final targetAspectRatio = targetHeight > 0 ? targetWidth / targetHeight : 1.0;
+  if (aspectRatio > targetAspectRatio) {
+    thumbHeight =
+        aspectRatio > 0 ? (targetWidth / aspectRatio).round() : targetHeight;
+  } else {
+    thumbWidth = (targetHeight * aspectRatio).round();
+  }
+
+  final thumbnail = img.copyResize(
+    originalImage,
+    width: thumbWidth,
+    height: thumbHeight,
+    interpolation: img.Interpolation.linear,
+  );
+
+  return {
+    'bytes': Uint8List.fromList(img.encodeJpg(thumbnail, quality: jpegQuality)),
+    'originalWidth': originalImage.width,
+    'originalHeight': originalImage.height,
+    'thumbnailWidth': thumbnail.width,
+    'thumbnailHeight': thumbnail.height,
+  };
 }
 
 /// ThumbnailCacheService Provider

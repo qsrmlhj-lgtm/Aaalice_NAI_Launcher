@@ -14,6 +14,7 @@ import '../../../../data/models/character/character_prompt.dart';
 import '../../../../data/repositories/gallery_folder_repository.dart';
 import '../../../../data/services/alias_resolver_service.dart';
 import '../../../../data/services/image_metadata_service.dart';
+import '../../../providers/generation/generation_params_selectors.dart';
 import '../../../providers/character_panel_dock_provider.dart';
 import '../../../providers/character_prompt_provider.dart';
 import '../../../providers/fixed_tags_provider.dart';
@@ -33,7 +34,6 @@ import '../../../widgets/image_editor/image_editor_screen.dart';
 import '../../../utils/image_detail_opener.dart';
 import '../../tag_library_page/widgets/entry_add_dialog.dart';
 import '../../../widgets/tag_library/tag_library_picker_dialog.dart';
-import 'upscale_dialog.dart';
 
 /// 图像预览组件
 class ImagePreviewWidget extends ConsumerStatefulWidget {
@@ -80,9 +80,11 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
     }
 
     // 使用批次分辨率（点击生成时捕获），fallback 到全局参数
-    final params = ref.watch(generationParamsNotifierProvider);
-    final batchWidth = state.batchWidth ?? params.width;
-    final batchHeight = state.batchHeight ?? params.height;
+    final previewDimensions = ref.watch(
+      generationParamsNotifierProvider.select(selectPreviewDimensionsViewData),
+    );
+    final batchWidth = state.batchWidth ?? previewDimensions.width;
+    final batchHeight = state.batchHeight ?? previewDimensions.height;
 
     // 生成中状态
     if (state.isGenerating) {
@@ -193,9 +195,11 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
           ),
           itemCount: images.length,
           itemBuilder: (context, index) {
-            final imageBytes = images[index].bytes;
+            final image = images[index];
+            final imageBytes = image.bytes;
             return SelectableImageCard(
               imageBytes: imageBytes,
+              sourceFilePath: image.filePath,
               index: index,
               showIndex: true,
               enableSelection: false,
@@ -206,17 +210,23 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
                 imageBytes,
                 mode: ImageEditorMode.edit,
               ),
+              onInpaint: () =>
+                  ImageWorkflowLauncher.openInpaint(context, ref, imageBytes),
               onGenerateVariations: () =>
-                  ImageWorkflowLauncher.prepareVariations(
+                  ImageWorkflowLauncher.generateVariations(
                 context,
                 ref,
                 imageBytes,
               ),
-              onDirectorTools: () =>
-                  ImageWorkflowLauncher.openDirectorTools(ref, imageBytes),
+              onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
+                context,
+                ref,
+                imageBytes,
+              ),
               onEnhance: () =>
                   ImageWorkflowLauncher.openEnhance(ref, imageBytes),
-              onUpscale: () => UpscaleDialog.show(context, image: imageBytes),
+              onUpscale: () =>
+                  ImageWorkflowLauncher.openUpscale(ref, imageBytes),
               onSaveToLibrary: (bytes, _) =>
                   _showSaveToLibraryDialog(context, bytes),
             );
@@ -270,9 +280,11 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             }
 
             // 已完成的图像
-            final imageBytes = completedImages[index].bytes;
+            final image = completedImages[index];
+            final imageBytes = image.bytes;
             return SelectableImageCard(
               imageBytes: imageBytes,
+              sourceFilePath: image.filePath,
               index: index,
               showIndex: true,
               enableSelection: false,
@@ -283,17 +295,23 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
                 imageBytes,
                 mode: ImageEditorMode.edit,
               ),
+              onInpaint: () =>
+                  ImageWorkflowLauncher.openInpaint(context, ref, imageBytes),
               onGenerateVariations: () =>
-                  ImageWorkflowLauncher.prepareVariations(
+                  ImageWorkflowLauncher.generateVariations(
                 context,
                 ref,
                 imageBytes,
               ),
-              onDirectorTools: () =>
-                  ImageWorkflowLauncher.openDirectorTools(ref, imageBytes),
+              onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
+                context,
+                ref,
+                imageBytes,
+              ),
               onEnhance: () =>
                   ImageWorkflowLauncher.openEnhance(ref, imageBytes),
-              onUpscale: () => UpscaleDialog.show(context, image: imageBytes),
+              onUpscale: () =>
+                  ImageWorkflowLauncher.openUpscale(ref, imageBytes),
               onSaveToLibrary: (bytes, _) =>
                   _showSaveToLibraryDialog(context, bytes),
             );
@@ -495,6 +513,7 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
           aspectRatio: image.aspectRatio,
           child: SelectableImageCard(
             imageBytes: image.bytes,
+            sourceFilePath: image.filePath,
             showIndex: false,
             enableSelection: false,
             onTap: () => _showFullscreenImage(image.bytes),
@@ -504,16 +523,23 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
               image.bytes,
               mode: ImageEditorMode.edit,
             ),
-            onGenerateVariations: () => ImageWorkflowLauncher.prepareVariations(
+            onInpaint: () =>
+                ImageWorkflowLauncher.openInpaint(context, ref, image.bytes),
+            onGenerateVariations: () =>
+                ImageWorkflowLauncher.generateVariations(
               context,
               ref,
               image.bytes,
             ),
-            onDirectorTools: () =>
-                ImageWorkflowLauncher.openDirectorTools(ref, image.bytes),
+            onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
+              context,
+              ref,
+              image.bytes,
+            ),
             onEnhance: () =>
                 ImageWorkflowLauncher.openEnhance(ref, image.bytes),
-            onUpscale: () => UpscaleDialog.show(context, image: image.bytes),
+            onUpscale: () =>
+                ImageWorkflowLauncher.openUpscale(ref, image.bytes),
             onSaveToLibrary: (bytes, _) =>
                 _showSaveToLibraryDialog(context, bytes),
           ),

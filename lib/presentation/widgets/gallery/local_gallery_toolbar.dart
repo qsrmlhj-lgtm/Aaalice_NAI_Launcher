@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/shortcuts/default_shortcuts.dart';
@@ -77,6 +78,10 @@ class LocalGalleryToolbar extends ConsumerStatefulWidget {
   /// 分类面板切换按钮回调
   final VoidCallback? onToggleCategoryPanel;
 
+  /// Whether search autocomplete is enabled.
+  /// 是否启用搜索自动补全。
+  final bool enableSearchAutocomplete;
+
   const LocalGalleryToolbar({
     super.key,
     this.use3DCardView = true,
@@ -96,6 +101,7 @@ class LocalGalleryToolbar extends ConsumerStatefulWidget {
     this.onMoveToFolder,
     this.showCategoryPanel = true,
     this.onToggleCategoryPanel,
+    this.enableSearchAutocomplete = true,
   });
 
   @override
@@ -105,9 +111,15 @@ class LocalGalleryToolbar extends ConsumerStatefulWidget {
 
 class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
   final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocusNode = FocusNode();
+  late final FocusNode _searchFocusNode;
   Timer? _debounceTimer;
   Future<LocalTagStrategy>? _searchStrategyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+  }
 
   @override
   void dispose() {
@@ -125,6 +137,23 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
     _debounceTimer = Timer(const Duration(milliseconds: 300), () {
       ref.read(localGalleryNotifierProvider.notifier).setSearchQuery(value);
     });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyA) {
+      return KeyEventResult.ignored;
+    }
+
+    final keyboard = HardwareKeyboard.instance;
+    if (!keyboard.isControlPressed && !keyboard.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+
+    _searchController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _searchController.text.length,
+    );
+    return KeyEventResult.handled;
   }
 
   @override
@@ -383,6 +412,63 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
   /// Build search field
   /// 构建搜索框 - 类似在线画廊的简洁圆角样式
   Widget _buildSearchField(ThemeData theme, LocalGalleryState state) {
+    final searchField = Container(
+      height: 36,
+      constraints: const BoxConstraints(maxWidth: 300),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: TextField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        style: theme.textTheme.bodyMedium,
+        decoration: InputDecoration(
+          hintText: '搜索文件名或 Prompt...',
+          hintStyle: TextStyle(
+            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+            fontSize: 13,
+          ),
+          prefixIcon: Icon(
+            Icons.search,
+            size: 18,
+            color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+          ),
+          suffixIcon: _searchController.text.isNotEmpty
+              ? IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                  ),
+                  onPressed: () {
+                    _searchController.clear();
+                    ref
+                        .read(localGalleryNotifierProvider.notifier)
+                        .setSearchQuery('');
+                    setState(() {});
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          isDense: true,
+        ),
+        onChanged: (value) {
+          setState(() {}); // 更新清除按钮可见性
+          _onSearchChanged(value);
+        },
+        onSubmitted: (value) {
+          _debounceTimer?.cancel();
+          ref.read(localGalleryNotifierProvider.notifier).setSearchQuery(value);
+        },
+      ),
+    );
+
+    if (!widget.enableSearchAutocomplete) {
+      return searchField;
+    }
+
     // 缓存策略 Future，避免每次build都创建新的
     _searchStrategyFuture ??= LocalTagStrategy.create(
       ref,
@@ -404,61 +490,7 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
         _debounceTimer?.cancel();
         ref.read(localGalleryNotifierProvider.notifier).setSearchQuery(value);
       },
-      child: Container(
-        height: 36,
-        constraints: const BoxConstraints(maxWidth: 300),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: TextField(
-          controller: _searchController,
-          focusNode: _searchFocusNode,
-          style: theme.textTheme.bodyMedium,
-          decoration: InputDecoration(
-            hintText: '搜索文件名或 Prompt...',
-            hintStyle: TextStyle(
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-              fontSize: 13,
-            ),
-            prefixIcon: Icon(
-              Icons.search,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-            ),
-            suffixIcon: _searchController.text.isNotEmpty
-                ? IconButton(
-                    icon: Icon(
-                      Icons.close,
-                      size: 16,
-                      color:
-                          theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
-                    ),
-                    onPressed: () {
-                      _searchController.clear();
-                      ref
-                          .read(localGalleryNotifierProvider.notifier)
-                          .setSearchQuery('');
-                      setState(() {});
-                    },
-                  )
-                : null,
-            border: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(vertical: 8),
-            isDense: true,
-          ),
-          onChanged: (value) {
-            setState(() {}); // 更新清除按钮可见性
-            _onSearchChanged(value);
-          },
-          onSubmitted: (value) {
-            _debounceTimer?.cancel();
-            ref
-                .read(localGalleryNotifierProvider.notifier)
-                .setSearchQuery(value);
-          },
-        ),
-      ),
+      child: searchField,
     );
   }
 

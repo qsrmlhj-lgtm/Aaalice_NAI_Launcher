@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../data/models/vibe/vibe_library_entry.dart';
+import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../widgets/common/animated_favorite_button.dart';
 
 /// 统一 Vibe 卡片组件
@@ -13,7 +15,7 @@ import '../../../widgets/common/animated_favorite_button.dart';
 /// 支持 Bundle 和非 Bundle 类型：
 /// - 非 Bundle: 简洁悬停效果
 /// - Bundle: 扑克牌层叠展开效果
-class VibeCard extends StatefulWidget {
+class VibeCard extends ConsumerStatefulWidget {
   final VibeLibraryEntry entry;
   final double width;
   final double? height;
@@ -48,12 +50,14 @@ class VibeCard extends StatefulWidget {
   });
 
   @override
-  State<VibeCard> createState() => _VibeCardState();
+  ConsumerState<VibeCard> createState() => _VibeCardState();
 }
 
-class _VibeCardState extends State<VibeCard>
+class _VibeCardState extends ConsumerState<VibeCard>
     with SingleTickerProviderStateMixin {
   bool _isHovered = false;
+  Uint8List? _lazyThumbnailData;
+  Future<void>? _thumbnailLoadFuture;
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -68,12 +72,52 @@ class _VibeCardState extends State<VibeCard>
       parent: _animationController,
       curve: Curves.easeOutCubic,
     );
+    _loadThumbnailIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant VibeCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.id != widget.entry.id) {
+      _lazyThumbnailData = null;
+      _thumbnailLoadFuture = null;
+      _loadThumbnailIfNeeded();
+      return;
+    }
+
+    if (_thumbnailData == null) {
+      _loadThumbnailIfNeeded();
+    }
   }
 
   @override
   void dispose() {
     _animationController.dispose();
     super.dispose();
+  }
+
+  void _loadThumbnailIfNeeded() {
+    if (_thumbnailData != null || _thumbnailLoadFuture != null) {
+      return;
+    }
+
+    final entryId = widget.entry.id;
+    _thumbnailLoadFuture = ref
+        .read(vibeLibraryStorageServiceProvider)
+        .getDisplayThumbnail(entryId)
+        .then((thumbnail) {
+      if (!mounted || widget.entry.id != entryId) {
+        return;
+      }
+
+      if (thumbnail != null && thumbnail.isNotEmpty) {
+        setState(() => _lazyThumbnailData = thumbnail);
+      }
+    }).whenComplete(() {
+      if (mounted && widget.entry.id == entryId) {
+        _thumbnailLoadFuture = null;
+      }
+    });
   }
 
   void _onHoverEnter(PointerEvent event) {
@@ -97,7 +141,7 @@ class _VibeCardState extends State<VibeCard>
     final vibeThumbnail = widget.entry.vibeThumbnail;
     if (vibeThumbnail != null && vibeThumbnail.isNotEmpty) return vibeThumbnail;
 
-    return null;
+    return _lazyThumbnailData;
   }
 
   @override
@@ -146,20 +190,16 @@ class _VibeCardState extends State<VibeCard>
                   _buildInfoOverlay(),
 
                   // 收藏按钮
-                  if (widget.showFavoriteIndicator)
-                    _buildFavoriteButton(),
+                  if (widget.showFavoriteIndicator) _buildFavoriteButton(),
 
                   // Bundle 数量标识
-                  if (widget.entry.isBundle)
-                    _buildBundleBadge(),
+                  if (widget.entry.isBundle) _buildBundleBadge(),
 
                   // 选中状态
-                  if (widget.isSelected)
-                    _buildSelectionOverlay(colorScheme),
+                  if (widget.isSelected) _buildSelectionOverlay(colorScheme),
 
                   // 操作按钮
-                  if (_isHovered && !widget.isSelected)
-                    _buildActionButtons(),
+                  if (_isHovered && !widget.isSelected) _buildActionButtons(),
                 ],
               ),
             ),
@@ -226,7 +266,8 @@ class _VibeCardState extends State<VibeCard>
                 return Container(
                   color: Colors.grey[300],
                   child: const Center(
-                    child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+                    child:
+                        Icon(Icons.broken_image, size: 48, color: Colors.grey),
                   ),
                 );
               },
@@ -338,7 +379,12 @@ class _VibeCardState extends State<VibeCard>
   }
 
   /// 扇形展开的卡片
-  Widget _buildFanCard(Uint8List preview, int index, int total, double progress) {
+  Widget _buildFanCard(
+    Uint8List preview,
+    int index,
+    int total,
+    double progress,
+  ) {
     final cardWidth = widget.width * 0.55;
     final cardHeight = (widget.height ?? widget.width) * 0.7;
     final pixelRatio = MediaQuery.of(context).devicePixelRatio;
@@ -398,7 +444,11 @@ class _VibeCardState extends State<VibeCard>
               gaplessPlayback: true,
               errorBuilder: (context, error, stackTrace) => Container(
                 color: Colors.grey[800],
-                child: const Icon(Icons.image_not_supported, color: Colors.grey, size: 20),
+                child: const Icon(
+                  Icons.image_not_supported,
+                  color: Colors.grey,
+                  size: 20,
+                ),
               ),
             ),
           ),
@@ -726,7 +776,8 @@ class _ActionButtonState extends State<_ActionButton> {
                   opacity: _showTooltip ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 100),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.88),
                       borderRadius: BorderRadius.circular(6),

@@ -33,6 +33,7 @@ import '../../../widgets/character/character_prompt_button.dart';
 import '../../../widgets/prompt/fixed_tags_button.dart';
 import '../../../providers/pending_prompt_provider.dart';
 import '../../../prompt_assistant/providers/prompt_assistant_config_provider.dart';
+import '../../../prompt_assistant/providers/prompt_assistant_history_provider.dart';
 
 bool usesRichPromptTypeTooltip(TargetPlatform platform) =>
     platform != TargetPlatform.windows;
@@ -344,11 +345,6 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
                     value: config.desktopOverlayEnabled,
                     onChanged: notifier.setDesktopOverlayEnabled,
                   ),
-                  SwitchListTile(
-                    title: const Text('流式输出'),
-                    value: config.streamOutput,
-                    onChanged: notifier.setStreamOutput,
-                  ),
                 ],
               ),
             );
@@ -364,7 +360,13 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
 
     // 监听 Provider 变化，自动同步到本地状态
     // 注意：队列运行时不同步，避免替换用户正在编辑的提示词
-    ref.listen(generationParamsNotifierProvider, (previous, next) {
+    ref.listen(
+        generationParamsNotifierProvider.select(
+          (params) => (
+            prompt: params.prompt,
+            negativePrompt: params.negativePrompt,
+          ),
+        ), (previous, next) {
       // 检查队列执行状态，队列运行/就绪时跳过同步
       bool isQueueActive = false;
       try {
@@ -453,7 +455,9 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
         .length;
 
     // 获取模型
-    final model = ref.watch(generationParamsNotifierProvider).model;
+    final model = ref.watch(
+      generationParamsNotifierProvider.select((params) => params.model),
+    );
 
     return Wrap(
       spacing: 8, // 水平间距
@@ -570,15 +574,17 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
 
     // 获取质量词数据
     final qualityState = ref.watch(qualityPresetNotifierProvider);
-    final params = ref.watch(generationParamsNotifierProvider);
+    final model = ref.watch(
+      generationParamsNotifierProvider.select((params) => params.model),
+    );
     final qualityContent = ref
         .watch(qualityPresetNotifierProvider.notifier)
-        .getEffectiveContent(params.model);
+        .getEffectiveContent(model);
 
     // 获取负面词预设数据
     final ucState = ref.watch(ucPresetNotifierProvider);
     final ucPresetContent =
-        UcPresets.getPresetContent(params.model, ucState.presetType);
+        UcPresets.getPresetContent(model, ucState.presetType);
 
     // 获取多角色数据
     final characterConfig = ref.watch(characterPromptNotifierProvider);
@@ -650,7 +656,7 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
       key: const ValueKey('generation_prompt_positive_input'),
       controller: _promptController,
       focusNode: _promptFocusNode,
-      sessionId: 'generation_prompt_main',
+      sessionId: PromptHistorySessionIds.generationPrompt,
       onOpenAssistantSettings: _openAssistantQuickSettings,
       config: UnifiedPromptConfig(
         enableSyntaxHighlight: enableHighlight,
@@ -754,7 +760,7 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
       key: const ValueKey('generation_prompt_negative_input'),
       controller: _negativeController,
       focusNode: _negativeFocusNode,
-      sessionId: 'generation_prompt_negative',
+      sessionId: PromptHistorySessionIds.generationNegative,
       onOpenAssistantSettings: _openAssistantQuickSettings,
       config: UnifiedPromptConfig(
         enableSyntaxHighlight: enableHighlight,
@@ -798,7 +804,7 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
           child: UnifiedPromptInput(
             controller: _promptController,
             focusNode: _promptFocusNode,
-            sessionId: 'generation_prompt_compact',
+            sessionId: PromptHistorySessionIds.generationPrompt,
             onOpenAssistantSettings: _openAssistantQuickSettings,
             config: UnifiedPromptConfig(
               enableSyntaxHighlight: enableHighlight,

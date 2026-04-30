@@ -50,7 +50,7 @@ void main() {
           home: Scaffold(
             body: PromptTokenCountBar(
               usage: PromptTokenUsage(
-                usedTokens: 129,
+                usedTokens: 121,
                 limit: 512,
                 breakdown: [
                   PromptTokenBreakdownEntry(label: '提示词', tokens: 100),
@@ -67,6 +67,33 @@ void main() {
       expect(
         tooltip.message,
         equals('提示词 100\n固定词 20\n网页端校准 1'),
+      );
+    });
+
+    testWidgets('shows whole-prompt adjustment when breakdown sum differs',
+        (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: PromptTokenCountBar(
+              usage: PromptTokenUsage(
+                usedTokens: 129,
+                limit: 512,
+                breakdown: [
+                  PromptTokenBreakdownEntry(label: '提示词', tokens: 100),
+                  PromptTokenBreakdownEntry(label: '固定词', tokens: 20),
+                  PromptTokenBreakdownEntry(label: '网页端校准', tokens: 1),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final tooltip = tester.widget<Tooltip>(find.byType(Tooltip));
+      expect(
+        tooltip.message,
+        equals('提示词 100\n固定词 28\n网页端校准 1'),
       );
     });
   });

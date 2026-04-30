@@ -1352,6 +1352,38 @@ class AppLocalizationsEn extends AppLocalizations {
       'Applied the Director Tool result as the new source image';
 
   @override
+  String get img2img_directorDefry => 'Defry';
+
+  @override
+  String get img2img_directorDefryHint =>
+      'Reduce noise or over-saturation in the result (0 = off, 5 = max)';
+
+  @override
+  String get img2img_directorEmotionLevel => 'Emotion Level';
+
+  @override
+  String get img2img_directorEmotionLevelHint =>
+      'How strongly the emotion is applied (0 = subtle, 5 = strong)';
+
+  @override
+  String get img2img_directorEmotionPresets => 'Presets';
+
+  @override
+  String get img2img_directorApplyAsSource => 'Use as Source';
+
+  @override
+  String get img2img_directorSave => 'Save';
+
+  @override
+  String get img2img_directorSourceImage => 'Source Image';
+
+  @override
+  String get img2img_directorCompare => 'Compare';
+
+  @override
+  String get img2img_variationsStarted => 'Generating variations...';
+
+  @override
   String get img2img_directorRemoveBackground => 'Remove Background';
 
   @override
@@ -1391,6 +1423,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get editor_done => 'Done';
+
+  @override
+  String get editor_tolerance => 'Tolerance';
+
+  @override
+  String get editor_intensity => 'Intensity';
+
+  @override
+  String get editor_sourcePoint => 'Alt+Click to set source point';
 
   @override
   String get editor_saveAndClose => 'Save & Close';
@@ -7675,6 +7716,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get selection_invert_selection => 'Invert Selection';
+
+  @override
+  String get selection_cut_to_layer => 'Cut to Layer';
 
   @override
   String get search_results => 'Search Results';

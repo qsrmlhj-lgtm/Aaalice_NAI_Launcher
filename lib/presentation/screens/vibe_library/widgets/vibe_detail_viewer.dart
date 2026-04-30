@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/shortcuts/default_shortcuts.dart';
 import '../../../../data/models/vibe/vibe_library_entry.dart';
+import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../providers/vibe_library_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../../widgets/shortcuts/shortcut_aware_widget.dart';
@@ -32,19 +34,19 @@ class VibeDetailCallbacks {
   final Future<String?> Function(VibeLibraryEntry entry, String newName)?
       onRename;
 
-  /// 参数更新回调（可选，用于保存调整后的参数）
-  final void Function(
+  /// 显式保存参数回调（仅在用户点击保存时触发）
+  final Future<VibeLibraryEntry?> Function(
     VibeLibraryEntry entry,
     double strength,
     double infoExtracted,
-  )? onParamsChanged;
+  )? onSaveParams;
 
   const VibeDetailCallbacks({
     this.onSendToGeneration,
     this.onExport,
     this.onDelete,
     this.onRename,
-    this.onParamsChanged,
+    this.onSaveParams,
   });
 }
 
@@ -101,9 +103,20 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
   late double _strength;
   late double _infoExtracted;
   bool _isRenaming = false;
+  bool _isSavingParams = false;
 
   /// Bundle: 当前选中的子 vibe 索引（-1 表示"使用全部"）
   int _selectedSubVibeIndex = -1;
+
+  bool get _hasParamChanges =>
+      _strength != _entry.strength || _infoExtracted != _entry.infoExtracted;
+
+  bool get _canPersistParamChanges {
+    if (_entry.isBundle) return false;
+    final infoChanged = _infoExtracted != _entry.infoExtracted;
+    if (!infoChanged) return true;
+    return _entry.canReencodeFromRawSource;
+  }
 
   @override
   void initState() {
@@ -111,6 +124,7 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
     _entry = widget.entry;
     _strength = _entry.strength;
     _infoExtracted = _entry.infoExtracted;
+    unawaited(_loadActualEntry());
   }
 
   // ============================================================
@@ -135,8 +149,9 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
   void _sendToGeneration() {
     // 检测是否按住 Shift 键
     final physicalKeys = HardwareKeyboard.instance.physicalKeysPressed;
-    final isShiftPressed = physicalKeys.contains(PhysicalKeyboardKey.shiftLeft) ||
-        physicalKeys.contains(PhysicalKeyboardKey.shiftRight);
+    final isShiftPressed =
+        physicalKeys.contains(PhysicalKeyboardKey.shiftLeft) ||
+            physicalKeys.contains(PhysicalKeyboardKey.shiftRight);
 
     widget.callbacks?.onSendToGeneration?.call(
       _entry,
@@ -272,13 +287,45 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
     _handleThumbnailChanged(previews[index]);
   }
 
-  void _close() {
-    if (_strength != _entry.strength ||
-        _infoExtracted != _entry.infoExtracted) {
-      widget.callbacks?.onParamsChanged
-          ?.call(_entry, _strength, _infoExtracted);
+  void _close() => Navigator.of(context).pop();
+
+  Future<void> _saveParams() async {
+    final callback = widget.callbacks?.onSaveParams;
+    if (callback == null || !_hasParamChanges || !_canPersistParamChanges) {
+      return;
     }
-    Navigator.of(context).pop();
+
+    setState(() => _isSavingParams = true);
+    try {
+      final updatedEntry = await callback(_entry, _strength, _infoExtracted);
+      if (!mounted) return;
+
+      if (updatedEntry != null) {
+        setState(() {
+          _entry = updatedEntry;
+          _strength = updatedEntry.strength;
+          _infoExtracted = updatedEntry.infoExtracted;
+        });
+        AppToast.success(context, '参数已保存');
+      } else {
+        AppToast.error(context, '保存参数失败');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingParams = false);
+      }
+    }
+  }
+
+  Future<void> _loadActualEntry() async {
+    final actualEntry =
+        await ref.read(vibeLibraryStorageServiceProvider).getEntry(_entry.id);
+    if (!mounted || actualEntry == null) return;
+    setState(() {
+      _entry = actualEntry;
+      _strength = actualEntry.strength;
+      _infoExtracted = actualEntry.infoExtracted;
+    });
   }
 
   void _prevSubVibe() {
@@ -333,9 +380,7 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
             SafeArea(
               child: Padding(
                 padding: EdgeInsets.only(bottom: isBundle ? 100.0 : 0.0),
-                child: isDesktop
-                    ? _buildDesktopLayout()
-                    : _buildMobileLayout(),
+                child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
               ),
             ),
 
@@ -354,8 +399,7 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
                     onSelected: (index) =>
                         setState(() => _selectedSubVibeIndex = index),
                     onLongPressSetCover: _setSubVibeAsCover,
-                    onUseAll: () =>
-                        setState(() => _selectedSubVibeIndex = -1),
+                    onUseAll: () => setState(() => _selectedSubVibeIndex = -1),
                   ),
                 ),
               ),
@@ -419,6 +463,10 @@ class _VibeDetailViewerState extends ConsumerState<VibeDetailViewer> {
       onToggleFavorite: _toggleFavorite,
       onTagsChanged: _updateTags,
       isRenaming: _isRenaming,
+      onSaveParams: _saveParams,
+      canSaveParams: _hasParamChanges && _canPersistParamChanges,
+      showInfoExtractedControl: _entry.canReencodeFromRawSource,
+      isSavingParams: _isSavingParams,
     );
   }
 }

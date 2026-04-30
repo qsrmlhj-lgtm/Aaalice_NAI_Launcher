@@ -2534,6 +2534,66 @@ abstract class AppLocalizations {
   /// **'Applied the Director Tool result as the new source image'**
   String get img2img_directorApplied;
 
+  /// No description provided for @img2img_directorDefry.
+  ///
+  /// In en, this message translates to:
+  /// **'Defry'**
+  String get img2img_directorDefry;
+
+  /// No description provided for @img2img_directorDefryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Reduce noise or over-saturation in the result (0 = off, 5 = max)'**
+  String get img2img_directorDefryHint;
+
+  /// No description provided for @img2img_directorEmotionLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Emotion Level'**
+  String get img2img_directorEmotionLevel;
+
+  /// No description provided for @img2img_directorEmotionLevelHint.
+  ///
+  /// In en, this message translates to:
+  /// **'How strongly the emotion is applied (0 = subtle, 5 = strong)'**
+  String get img2img_directorEmotionLevelHint;
+
+  /// No description provided for @img2img_directorEmotionPresets.
+  ///
+  /// In en, this message translates to:
+  /// **'Presets'**
+  String get img2img_directorEmotionPresets;
+
+  /// No description provided for @img2img_directorApplyAsSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as Source'**
+  String get img2img_directorApplyAsSource;
+
+  /// No description provided for @img2img_directorSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get img2img_directorSave;
+
+  /// No description provided for @img2img_directorSourceImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Source Image'**
+  String get img2img_directorSourceImage;
+
+  /// No description provided for @img2img_directorCompare.
+  ///
+  /// In en, this message translates to:
+  /// **'Compare'**
+  String get img2img_directorCompare;
+
+  /// No description provided for @img2img_variationsStarted.
+  ///
+  /// In en, this message translates to:
+  /// **'Generating variations...'**
+  String get img2img_variationsStarted;
+
   /// No description provided for @img2img_directorRemoveBackground.
   ///
   /// In en, this message translates to:
@@ -2611,6 +2671,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Done'**
   String get editor_done;
+
+  /// No description provided for @editor_tolerance.
+  ///
+  /// In en, this message translates to:
+  /// **'Tolerance'**
+  String get editor_tolerance;
+
+  /// No description provided for @editor_intensity.
+  ///
+  /// In en, this message translates to:
+  /// **'Intensity'**
+  String get editor_intensity;
+
+  /// No description provided for @editor_sourcePoint.
+  ///
+  /// In en, this message translates to:
+  /// **'Alt+Click to set source point'**
+  String get editor_sourcePoint;
 
   /// No description provided for @editor_saveAndClose.
   ///
@@ -13970,6 +14048,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Invert Selection'**
   String get selection_invert_selection;
+
+  /// No description provided for @selection_cut_to_layer.
+  ///
+  /// In en, this message translates to:
+  /// **'Cut to Layer'**
+  String get selection_cut_to_layer;
 
   /// No description provided for @search_results.
   ///
