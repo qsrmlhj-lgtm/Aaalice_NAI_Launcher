@@ -300,6 +300,17 @@ class EditorState extends ChangeNotifier {
     setBrushOpacity((brushOpacity - step).clamp(0.0, 1.0));
   }
 
+  void setBrushHardness(double hardness) {
+    final tool = toolManager.currentTool;
+    if (tool is BrushTool) {
+      tool.setHardness(hardness);
+      notifyListeners();
+    } else if (tool is EraserTool) {
+      tool.setHardness(hardness);
+      notifyListeners();
+    }
+  }
+
   // ===== 撤销/重做 =====
 
   bool undo() {

@@ -70,6 +70,7 @@ class StorageKeys {
       'selected_resolution_preset_id';
   static const String imageSavePath = 'image_save_path';
   static const String autoSaveImages = 'auto_save_images';
+  static const String shareStripMetadata = 'share_strip_metadata';
   static const String addQualityTags = 'add_quality_tags';
   static const String ucPresetType = 'uc_preset_type';
 
@@ -100,6 +101,7 @@ class StorageKeys {
   static const String lastSmeaDyn = 'last_smea_dyn';
   static const String lastCfgRescale = 'last_cfg_rescale';
   static const String lastNoiseSchedule = 'last_noise_schedule';
+  static const String lastVarietyPlus = 'last_variety_plus';
 
   // Gallery Keys (画廊相关)
   static const String generationHistory = 'generation_history';

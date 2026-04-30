@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../../constants/api_constants.dart';
 import '../../enums/precise_ref_type.dart';
 import '../../utils/app_logger.dart';
+import '../../utils/inpaint_mask_utils.dart';
 import '../../utils/nai_api_utils.dart';
 import '../../../data/models/image/image_params.dart';
 
@@ -37,9 +38,10 @@ class NAIImageRequestBuilder {
     required this.params,
     required this.encodeVibe,
     List<PreciseReference>? preciseReferences,
-  }) : _preciseReferences =
-           preciseReferences ??
-           (params.isV4Model ? params.preciseReferences : <PreciseReference>[]);
+  }) : _preciseReferences = preciseReferences ??
+            (params.isV45Model
+                ? params.preciseReferences
+                : <PreciseReference>[]);
 
   final ImageParams params;
   final EncodeVibeFn encodeVibe;
@@ -65,13 +67,16 @@ class NAIImageRequestBuilder {
       'dynamic_thresholding': params.isV3Model && params.decrisp,
       'controlnet_strength': 1,
       'legacy': false,
-      'add_original_image': params.addOriginalImage,
+      'add_original_image': params.action == ImageGenerationAction.infill
+          ? false
+          : params.addOriginalImage,
       'cfg_rescale': NAIApiUtils.toJsonNumber(params.cfgRescale),
       'noise_schedule': params.isV4Model
           ? (params.noiseSchedule == 'native' ? 'karras' : params.noiseSchedule)
           : params.noiseSchedule,
       'normalize_reference_strength_multiple': true,
-      'inpaintImg2ImgStrength': 1,
+      'inpaintImg2ImgStrength':
+          NAIApiUtils.toJsonNumber(params.inpaintStrength),
       'seed': seed,
       'negative_prompt': effectiveNegativePrompt,
       'deliberate_euler_ancestral_bug': false,
@@ -176,6 +181,16 @@ class NAIImageRequestBuilder {
     required bool isStream,
   }) async {
     final vibeEncodingMap = <int, String>{};
+    if (_preciseReferences.isNotEmpty) {
+      // NovelAI 官方说明 Precise Reference 与 Vibe Transfer 不兼容，
+      // 因此两者同时存在时优先保留 Precise Reference，避免结果偏离网页端。
+      return vibeEncodingMap;
+    }
+    if (params.action == ImageGenerationAction.infill) {
+      // NovelAI 的 infill 请求会直接携带 image + mask，继续附带
+      // Vibe Transfer payload 会触发服务端 500，因此局部重绘时跳过。
+      return vibeEncodingMap;
+    }
     if (params.vibeReferencesV4.isEmpty) {
       return vibeEncodingMap;
     }
@@ -390,8 +405,16 @@ class NAIImageRequestBuilder {
     if (params.action == ImageGenerationAction.infill &&
         params.sourceImage != null &&
         params.maskImage != null) {
+      final normalizedMask = InpaintMaskUtils.prepareRequestMaskBytes(
+        params.maskImage!,
+        closingIterations: params.inpaintMaskClosingIterations,
+        expansionIterations: params.inpaintMaskExpansionIterations,
+        alignToLatentGrid: params.isV4Model,
+      );
       requestParameters['image'] = base64Encode(params.sourceImage!);
-      requestParameters['mask'] = base64Encode(params.maskImage!);
+      requestParameters['mask'] = base64Encode(normalizedMask);
+      requestParameters['strength'] = NAIApiUtils.toJsonNumber(params.strength);
+      requestParameters['noise'] = NAIApiUtils.toJsonNumber(params.noise);
     }
 
     final vibeEncodingMap = await buildVibeTransferParameters(

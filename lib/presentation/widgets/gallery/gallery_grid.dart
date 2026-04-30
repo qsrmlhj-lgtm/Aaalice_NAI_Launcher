@@ -313,7 +313,6 @@ class _GalleryImageCardState extends State<_GalleryImageCard> {
       // 解决 GestureDetector 与拖拽手势的冲突问题
       dragWrapper: widget.enableDrag
           ? DraggableImageCard.createDragWrapper(
-              context: context,
               record: widget.record,
             )
           : null,

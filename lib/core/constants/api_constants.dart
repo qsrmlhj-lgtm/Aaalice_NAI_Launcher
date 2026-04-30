@@ -74,6 +74,10 @@ class ImageModels {
   // V4.5 系列 (新增)
   static const String animeDiffusionV45Curated = 'nai-diffusion-4-5-curated';
   static const String animeDiffusionV45Full = 'nai-diffusion-4-5-full';
+  static const String animeDiffusionV45CuratedInpainting =
+      'nai-diffusion-4-5-curated-inpainting';
+  static const String animeDiffusionV45FullInpainting =
+      'nai-diffusion-4-5-full-inpainting';
 
   static const List<String> allModels = [
     animeDiffusionV45Full,
@@ -419,7 +423,7 @@ class UcPresets {
     final presetContent = getPresetContent(model, type);
     if (presetContent.isEmpty) return negativePrompt;
 
-    final trimmedNegative = negativePrompt.trim();
+    final trimmedNegative = stripPreset(negativePrompt, model, type);
     if (trimmedNegative.isEmpty) return presetContent;
 
     // 预设内容添加到用户负面提示词前面
@@ -460,6 +464,55 @@ class UcPresets {
   ) {
     final presetType = getPresetTypeFromInt(ucPreset);
     return applyPreset(negativePrompt, model, presetType);
+  }
+
+  /// 如果负面提示词已经包含当前预设前缀，则剥离掉预设部分，恢复为用户输入部分。
+  static String stripPreset(
+    String negativePrompt,
+    String model,
+    UcPresetType type,
+  ) {
+    final trimmedNegative = negativePrompt.trim();
+    if (trimmedNegative.isEmpty || type == UcPresetType.none) {
+      return trimmedNegative;
+    }
+
+    final presetContent = getPresetContent(model, type).trim();
+    if (presetContent.isEmpty) {
+      return trimmedNegative;
+    }
+
+    final promptTags = _splitPromptTags(trimmedNegative);
+    final presetTags = _splitPromptTags(presetContent);
+    if (promptTags.length < presetTags.length) {
+      return trimmedNegative;
+    }
+
+    for (var i = 0; i < presetTags.length; i++) {
+      if (promptTags[i].toLowerCase() != presetTags[i].toLowerCase()) {
+        return trimmedNegative;
+      }
+    }
+
+    return promptTags.sublist(presetTags.length).join(', ');
+  }
+
+  /// 根据整数 ucPreset 值剥离预设内容，恢复用户输入的负面提示词。
+  static String stripPresetByInt(
+    String negativePrompt,
+    String model,
+    int ucPreset,
+  ) {
+    final presetType = getPresetTypeFromInt(ucPreset);
+    return stripPreset(negativePrompt, model, presetType);
+  }
+
+  static List<String> _splitPromptTags(String prompt) {
+    return prompt
+        .split(',')
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toList();
   }
 
   /// 从字符串中移除 nsfw tag

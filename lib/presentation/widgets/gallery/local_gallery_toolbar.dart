@@ -264,7 +264,9 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
                   const SizedBox(width: 6),
                   // 日期分组视图切换按钮
                   CompactIconButton(
-                    icon: state.isGroupedView ? Icons.view_module : Icons.calendar_today,
+                    icon: state.isGroupedView
+                        ? Icons.view_module
+                        : Icons.calendar_today,
                     label: state.isGroupedView ? '网格' : '日期',
                     tooltip: state.isGroupedView ? '切换到网格视图' : '切换到日期分组视图',
                     shortcutId: ShortcutIds.jumpToDate,
@@ -272,7 +274,9 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
                     onPressed: () {
                       if (state.isGroupedView) {
                         // 退出分组视图
-                        ref.read(localGalleryNotifierProvider.notifier).setGroupedView(false);
+                        ref
+                            .read(localGalleryNotifierProvider.notifier)
+                            .setGroupedView(false);
                       } else {
                         // 进入分组视图
                         _pickDateAndJump(context);
@@ -461,7 +465,8 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
   /// Build date range button
   /// 构建日期范围按钮
   Widget _buildDateRangeButton(ThemeData theme, LocalGalleryState state) {
-    final hasDateRange = state.filterCriteria.dateStart != null || state.filterCriteria.dateEnd != null;
+    final hasDateRange = state.filterCriteria.dateStart != null ||
+        state.filterCriteria.dateEnd != null;
 
     return OutlinedButton.icon(
       onPressed: () => _selectDateRange(context, state),
@@ -472,7 +477,8 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       ),
       label: Text(
         hasDateRange
-            ? _formatDateRange(state.filterCriteria.dateStart, state.filterCriteria.dateEnd)
+            ? _formatDateRange(
+                state.filterCriteria.dateStart, state.filterCriteria.dateEnd)
             : '日期过滤',
         style: TextStyle(
           fontSize: 12,
@@ -513,8 +519,11 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       context: context,
       firstDate: DateTime(2020),
       lastDate: now,
-      initialDateRange: state.filterCriteria.dateStart != null && state.filterCriteria.dateEnd != null
-          ? DateTimeRange(start: state.filterCriteria.dateStart!, end: state.filterCriteria.dateEnd!)
+      initialDateRange: state.filterCriteria.dateStart != null &&
+              state.filterCriteria.dateEnd != null
+          ? DateTimeRange(
+              start: state.filterCriteria.dateStart!,
+              end: state.filterCriteria.dateEnd!)
           : DateTimeRange(
               start: now.subtract(const Duration(days: 30)),
               end: now,
@@ -522,7 +531,7 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            dialogTheme: DialogTheme(
+            dialogTheme: DialogThemeData(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -554,7 +563,7 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
       builder: (pickerContext, child) {
         return Theme(
           data: Theme.of(pickerContext).copyWith(
-            dialogTheme: DialogTheme(
+            dialogTheme: DialogThemeData(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -613,5 +622,3 @@ class _LocalGalleryToolbarState extends ConsumerState<LocalGalleryToolbar> {
     }
   }
 }
-
-

@@ -10,10 +10,12 @@ import 'layer_painter.dart';
 /// 处理绑制、手势和键盘交互
 class EditorCanvas extends StatefulWidget {
   final EditorState state;
+  final bool suppressSelectionOverlay;
 
   const EditorCanvas({
     super.key,
     required this.state,
+    this.suppressSelectionOverlay = false,
   });
 
   @override
@@ -124,6 +126,8 @@ class _EditorCanvasState extends State<EditorCanvas>
                                 painter: SelectionPainter(
                                   state: widget.state,
                                   animation: _selectionAnimationController,
+                                  suppressSelectionOverlay:
+                                      widget.suppressSelectionOverlay,
                                 ),
                               ),
                             ),

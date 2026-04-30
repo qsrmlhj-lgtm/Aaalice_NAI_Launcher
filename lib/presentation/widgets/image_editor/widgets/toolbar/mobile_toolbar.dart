@@ -9,15 +9,32 @@ class MobileToolbar extends StatelessWidget {
   final EditorState state;
   final VoidCallback? onUndo;
   final VoidCallback? onRedo;
+  final VoidCallback? onClear;
+  final VoidCallback? onFillMask;
+  final bool Function()? canFillMask;
   final VoidCallback? onLayersPressed;
+  final Set<String>? allowedToolIds;
 
   const MobileToolbar({
     super.key,
     required this.state,
     this.onUndo,
     this.onRedo,
+    this.onClear,
+    this.onFillMask,
+    this.canFillMask,
     this.onLayersPressed,
+    this.allowedToolIds,
   });
+
+  List<EditorTool> get _visibleTools {
+    if (allowedToolIds == null || allowedToolIds!.isEmpty) {
+      return state.tools;
+    }
+    return state.tools
+        .where((tool) => allowedToolIds!.contains(tool.id))
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -38,7 +55,8 @@ class MobileToolbar extends StatelessWidget {
         children: [
           // 撤销/重做 - 监听历史管理器
           ListenableBuilder(
-            listenable: state.historyManager,
+            listenable:
+                Listenable.merge([state.historyManager, state.layerManager]),
             builder: (context, _) {
               return Row(
                 children: [
@@ -52,12 +70,29 @@ class MobileToolbar extends StatelessWidget {
                     enabled: state.canRedo,
                     onTap: onRedo ?? () => state.redo(),
                   ),
+                  if (onClear != null)
+                    _ActionButton(
+                      icon: Icons.delete_outline,
+                      enabled: true,
+                      onTap: onClear!,
+                    ),
+                  if (onFillMask != null)
+                    _ActionButton(
+                      icon: Icons.format_color_fill,
+                      enabled: canFillMask?.call() ?? false,
+                      onTap: onFillMask!,
+                    ),
                 ],
               );
             },
           ),
 
-          const ThemedDivider(height: 1, vertical: true, indent: 12, endIndent: 12),
+          const ThemedDivider(
+            height: 1,
+            vertical: true,
+            indent: 12,
+            endIndent: 12,
+          ),
 
           // 工具列表 - 监听工具切换
           Expanded(
@@ -68,7 +103,7 @@ class MobileToolbar extends StatelessWidget {
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Row(
-                    children: state.tools.map((tool) {
+                    children: _visibleTools.map((tool) {
                       return _MobileToolButton(
                         tool: tool,
                         isSelected: tool.id == currentToolId,
@@ -81,7 +116,12 @@ class MobileToolbar extends StatelessWidget {
             ),
           ),
 
-          const ThemedDivider(height: 1, vertical: true, indent: 12, endIndent: 12),
+          const ThemedDivider(
+            height: 1,
+            vertical: true,
+            indent: 12,
+            endIndent: 12,
+          ),
 
           // 图层按钮
           _ActionButton(
@@ -167,7 +207,7 @@ class _ActionButton extends StatelessWidget {
             size: 22,
             color: enabled
                 ? theme.colorScheme.onSurface
-                : theme.colorScheme.onSurface.withOpacity(0.3),
+                : theme.colorScheme.onSurface.withValues(alpha: 0.3),
           ),
         ),
       ),
@@ -204,7 +244,7 @@ class MobileToolSettingsSheet extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(2),
             ),
           ),

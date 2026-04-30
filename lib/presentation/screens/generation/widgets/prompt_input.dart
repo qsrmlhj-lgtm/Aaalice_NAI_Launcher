@@ -15,6 +15,7 @@ import '../../../providers/character_prompt_provider.dart';
 import '../../../providers/fixed_tags_provider.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../providers/prompt_maximize_provider.dart';
+import '../../../providers/prompt_token_counter_provider.dart';
 import '../../../providers/quality_preset_provider.dart';
 import '../../../providers/queue_execution_provider.dart';
 import '../../../providers/uc_preset_provider.dart';
@@ -23,6 +24,7 @@ import '../../../widgets/common/app_toast.dart';
 import '../../../widgets/prompt/unified/unified_prompt_input.dart';
 import '../../../widgets/prompt/unified/unified_prompt_config.dart';
 import '../../../widgets/prompt/nai_syntax_controller.dart';
+import '../../../widgets/prompt/prompt_token_count_bar.dart';
 import '../../../widgets/prompt/quality_tags_selector.dart';
 import '../../../widgets/prompt/random_mode_selector.dart';
 import '../../../widgets/prompt/toolbar/toolbar.dart';
@@ -31,6 +33,9 @@ import '../../../widgets/character/character_prompt_button.dart';
 import '../../../widgets/prompt/fixed_tags_button.dart';
 import '../../../providers/pending_prompt_provider.dart';
 import '../../../prompt_assistant/providers/prompt_assistant_config_provider.dart';
+
+bool usesRichPromptTypeTooltip(TargetPlatform platform) =>
+    platform != TargetPlatform.windows;
 
 /// Prompt 输入组件 (带自动补全)
 class PromptInputWidget extends ConsumerStatefulWidget {
@@ -401,6 +406,14 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
   }
 
   Widget _buildFullLayout(ThemeData theme) {
+    final tokenUsage = ref.watch(
+      promptTokenUsageProvider(
+        _isNegativeMode
+            ? PromptTokenCountTarget.negative
+            : PromptTokenCountTarget.positive,
+      ),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -414,6 +427,16 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
           child: _isNegativeMode
               ? _buildTextNegativeInput(theme)
               : _buildTextPromptInput(theme),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: tokenUsage.when(
+            data: (usage) => usage == null
+                ? const SizedBox.shrink()
+                : PromptTokenCountBar(usage: usage),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
         ),
       ],
     );
@@ -624,6 +647,7 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
     final enableSdSyntaxAutoConvert =
         ref.watch(sdSyntaxAutoConvertSettingsProvider);
     return UnifiedPromptInput(
+      key: const ValueKey('generation_prompt_positive_input'),
       controller: _promptController,
       focusNode: _promptFocusNode,
       sessionId: 'generation_prompt_main',
@@ -727,6 +751,7 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
     final enableSdSyntaxAutoConvert =
         ref.watch(sdSyntaxAutoConvertSettingsProvider);
     return UnifiedPromptInput(
+      key: const ValueKey('generation_prompt_negative_input'),
       controller: _negativeController,
       focusNode: _negativeFocusNode,
       sessionId: 'generation_prompt_negative',
@@ -761,59 +786,83 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
   Widget _buildCompactLayout(ThemeData theme) {
     final enableHighlight = ref.watch(highlightEmphasisSettingsProvider);
     final enableAutocomplete = ref.watch(autocompleteSettingsProvider);
-    return UnifiedPromptInput(
-      controller: _promptController,
-      focusNode: _promptFocusNode,
-      sessionId: 'generation_prompt_compact',
-      onOpenAssistantSettings: _openAssistantQuickSettings,
-      config: UnifiedPromptConfig(
-        enableSyntaxHighlight: enableHighlight,
-        enableAutocomplete: enableAutocomplete,
-        enableComfyuiImport: true,
-        autocompleteConfig: const AutocompleteConfig(
-          maxSuggestions: 15,
-          showTranslation: true,
-          autoInsertComma: true,
-        ),
-        hintText: context.l10n.prompt_inputPrompt,
-      ),
-      decoration: InputDecoration(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        suffixIcon: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.fullscreen),
-              tooltip: context.l10n.tooltip_fullscreenEdit,
-              onPressed: widget.onToggleMaximize ??
-                  () => ref
-                      .read(promptMaximizeNotifierProvider.notifier)
-                      .toggle(),
-            ),
-            if (_promptController.text.isNotEmpty)
-              IconButton(
-                icon: const Icon(Icons.clear, size: 20),
-                onPressed: _clearPrompt,
+    final tokenUsage =
+        ref.watch(promptTokenUsageProvider(PromptTokenCountTarget.positive));
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 72,
+          child: UnifiedPromptInput(
+            controller: _promptController,
+            focusNode: _promptFocusNode,
+            sessionId: 'generation_prompt_compact',
+            onOpenAssistantSettings: _openAssistantQuickSettings,
+            config: UnifiedPromptConfig(
+              enableSyntaxHighlight: enableHighlight,
+              enableAutocomplete: enableAutocomplete,
+              enableComfyuiImport: true,
+              autocompleteConfig: const AutocompleteConfig(
+                maxSuggestions: 15,
+                showTranslation: true,
+                autoInsertComma: true,
               ),
-          ],
+              hintText: context.l10n.prompt_inputPrompt,
+            ),
+            decoration: InputDecoration(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.fullscreen),
+                    tooltip: context.l10n.tooltip_fullscreenEdit,
+                    onPressed: widget.onToggleMaximize ??
+                        () => ref
+                            .read(promptMaximizeNotifierProvider.notifier)
+                            .toggle(),
+                  ),
+                  if (_promptController.text.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear, size: 20),
+                      onPressed: _clearPrompt,
+                    ),
+                ],
+              ),
+            ),
+            maxLines: 2,
+            minLines: 1,
+            onComfyuiImport: (globalPrompt, characters) {
+              ref.read(characterPromptNotifierProvider.notifier).clearAll();
+              ref
+                  .read(characterPromptNotifierProvider.notifier)
+                  .replaceAll(characters);
+              ref
+                  .read(generationParamsNotifierProvider.notifier)
+                  .updatePrompt(globalPrompt);
+              AppToast.success(context, '已导入 ${characters.length} 个角色');
+            },
+            onChanged: (value) {
+              ref
+                  .read(generationParamsNotifierProvider.notifier)
+                  .updatePrompt(value);
+            },
+          ),
         ),
-      ),
-      maxLines: 2,
-      minLines: 1,
-      onComfyuiImport: (globalPrompt, characters) {
-        ref.read(characterPromptNotifierProvider.notifier).clearAll();
-        ref
-            .read(characterPromptNotifierProvider.notifier)
-            .replaceAll(characters);
-        ref
-            .read(generationParamsNotifierProvider.notifier)
-            .updatePrompt(globalPrompt);
-        AppToast.success(context, '已导入 ${characters.length} 个角色');
-      },
-      onChanged: (value) {
-        ref.read(generationParamsNotifierProvider.notifier).updatePrompt(value);
-      },
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: tokenUsage.when(
+            data: (usage) => usage == null
+                ? const SizedBox.shrink()
+                : PromptTokenCountBar(usage: usage),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1600,6 +1649,7 @@ class _PromptTypeButtonState extends State<_PromptTypeButton>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final useRichTooltip = usesRichPromptTypeTooltip(theme.platform);
 
     final button = MouseRegion(
       onEnter: (_) => setState(() => _isHovering = true),
@@ -1727,12 +1777,15 @@ class _PromptTypeButtonState extends State<_PromptTypeButton>
     // 如果有 tooltipBuilder，包裹 Tooltip
     if (widget.tooltipBuilder != null) {
       return Tooltip(
-        richMessage: WidgetSpan(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: widget.tooltipBuilder!(theme),
-          ),
-        ),
+        message: useRichTooltip ? null : widget.label,
+        richMessage: useRichTooltip
+            ? WidgetSpan(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: widget.tooltipBuilder!(theme),
+                ),
+              )
+            : null,
         preferBelow: true,
         verticalOffset: 20,
         waitDuration: const Duration(milliseconds: 300),

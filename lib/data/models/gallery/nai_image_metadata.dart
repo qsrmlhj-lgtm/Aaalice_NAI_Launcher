@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:hive/hive.dart';
 
+import '../../../core/constants/api_constants.dart';
 import '../../../core/utils/app_logger.dart';
 import '../vibe/vibe_reference.dart';
 
@@ -199,6 +200,19 @@ class NaiImageMetadata with _$NaiImageMetadata {
       negativePrompt = commentData['uc'] as String? ?? '';
     } catch (_) {}
 
+    final inferredModel = _safeGetString(commentData, 'model') ??
+        _inferModelFromSource(
+          source,
+          prompt: prompt,
+          negativePrompt: negativePrompt,
+        );
+    final inferredUcPreset =
+        _toInt(commentData['uc_preset']) ??
+            _inferUcPreset(negativePrompt, inferredModel);
+    final inferredQualityToggle =
+        _safeGetBool(commentData, 'quality_toggle') ??
+            _inferQualityToggle(prompt, inferredModel);
+
     // 构建元数据对象（使用try-catch包装每个字段）
     try {
       return NaiImageMetadata(
@@ -210,13 +224,13 @@ class NaiImageMetadata with _$NaiImageMetadata {
         scale: _extractScale(commentData),
         width: _toInt(commentData['width']),
         height: _toInt(commentData['height']),
-        model: _safeGetString(commentData, 'model'),
+        model: inferredModel,
         smea: _safeGetBool(commentData, 'sm'),
         smeaDyn: _safeGetBool(commentData, 'sm_dyn'),
         noiseSchedule: _safeGetString(commentData, 'noise_schedule'),
         cfgRescale: _toDouble(commentData['cfg_rescale']),
-        ucPreset: _toInt(commentData['uc_preset']),
-        qualityToggle: _safeGetBool(commentData, 'quality_toggle'),
+        ucPreset: inferredUcPreset,
+        qualityToggle: inferredQualityToggle,
         isImg2Img: commentData['image'] != null,
         strength: _toDouble(commentData['strength']),
         noise: _toDouble(commentData['noise']),
@@ -463,6 +477,146 @@ class NaiImageMetadata with _$NaiImageMetadata {
     return null;
   }
 
+  static String? _inferModelFromSource(
+    String? source, {
+    required String prompt,
+    required String negativePrompt,
+  }) {
+    if (source == null || source.isEmpty) {
+      return null;
+    }
+
+    final normalizedSource = source.toLowerCase();
+    if (normalizedSource.contains('v4.5')) {
+      if (_looksLikeCuratedModel(
+        prompt,
+        negativePrompt,
+        ImageModels.animeDiffusionV45Curated,
+      )) {
+        return ImageModels.animeDiffusionV45Curated;
+      }
+      return ImageModels.animeDiffusionV45Full;
+    }
+
+    if (normalizedSource.contains('v4')) {
+      if (_looksLikeCuratedModel(
+        prompt,
+        negativePrompt,
+        ImageModels.animeDiffusionV4Curated,
+      )) {
+        return ImageModels.animeDiffusionV4Curated;
+      }
+      return ImageModels.animeDiffusionV4Full;
+    }
+
+    if (normalizedSource.contains('furry') && normalizedSource.contains('v3')) {
+      return ImageModels.furryDiffusionV3;
+    }
+
+    if (normalizedSource.contains('v3')) {
+      return ImageModels.animeDiffusionV3;
+    }
+
+    return null;
+  }
+
+  static bool _looksLikeCuratedModel(
+    String prompt,
+    String negativePrompt,
+    String curatedModel,
+  ) {
+    final curatedQualityTags = QualityTags.getQualityTags(curatedModel);
+    if (_containsOrderedPromptFragment(prompt, curatedQualityTags)) {
+      return true;
+    }
+
+    for (final preset in const [0, 1, 2]) {
+      if (UcPresets.stripPresetByInt(negativePrompt, curatedModel, preset) !=
+          negativePrompt) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  static int? _inferUcPreset(String negativePrompt, String? model) {
+    if (negativePrompt.isEmpty || model == null || model.isEmpty) {
+      return null;
+    }
+
+    final candidates = <MapEntry<int, int>>[];
+    for (final preset in const [2, 0, 1]) {
+      final stripped =
+          UcPresets.stripPresetByInt(negativePrompt, model, preset);
+      if (stripped == negativePrompt) {
+        continue;
+      }
+      final presetTagCount = UcPresets.getPresetContentByInt(model, preset)
+          .split(',')
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty)
+          .length;
+      candidates.add(MapEntry(preset, presetTagCount));
+    }
+
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    candidates.sort((a, b) => b.value.compareTo(a.value));
+    return candidates.first.key;
+  }
+
+  static bool? _inferQualityToggle(String prompt, String? model) {
+    if (prompt.isEmpty || model == null || model.isEmpty) {
+      return null;
+    }
+
+    final qualityTags = QualityTags.getQualityTags(model);
+    if (qualityTags == null || qualityTags.isEmpty) {
+      return null;
+    }
+
+    return _containsOrderedPromptFragment(prompt, qualityTags);
+  }
+
+  static bool _containsOrderedPromptFragment(String prompt, String? fragment) {
+    if (fragment == null || fragment.isEmpty) {
+      return false;
+    }
+
+    final promptTags = prompt
+        .split(',')
+        .map((tag) => tag.trim().toLowerCase())
+        .where((tag) => tag.isNotEmpty)
+        .toList();
+    final fragmentTags = fragment
+        .split(',')
+        .map((tag) => tag.trim().toLowerCase())
+        .where((tag) => tag.isNotEmpty)
+        .toList();
+
+    if (fragmentTags.isEmpty || promptTags.length < fragmentTags.length) {
+      return false;
+    }
+
+    for (var start = 0; start <= promptTags.length - fragmentTags.length; start++) {
+      var matches = true;
+      for (var offset = 0; offset < fragmentTags.length; offset++) {
+        if (promptTags[start + offset] != fragmentTags[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   // 常见的固定前缀词
   static const _commonPrefixTags = [
     'masterpiece', 'best quality', 'amazing quality', 'great quality',
@@ -578,6 +732,19 @@ class NaiImageMetadata with _$NaiImageMetadata {
       }
     }
     return buffer.toString();
+  }
+
+  /// 获取详情页展示用的负向提示词。
+  ///
+  /// 应用内部约定是将用户输入和 UC 预设分开展示，因此详情页需要剥离
+  /// 已经固化到 PNG 注释中的预设前缀，避免出现“前面几项重复”的观感。
+  String get displayNegativePrompt {
+    final modelName = model;
+    final preset = ucPreset;
+    if (negativePrompt.isEmpty || modelName == null || modelName.isEmpty || preset == null) {
+      return negativePrompt;
+    }
+    return UcPresets.stripPresetByInt(negativePrompt, modelName, preset);
   }
 
   /// 获取格式化的尺寸字符串

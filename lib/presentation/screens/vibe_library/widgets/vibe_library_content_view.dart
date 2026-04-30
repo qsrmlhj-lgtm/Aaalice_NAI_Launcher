@@ -85,6 +85,8 @@ class _VibeLibraryContentViewState
     return GridView.builder(
       key: const PageStorageKey<String>(_vibeLibraryGridKey),
       padding: const EdgeInsets.all(16),
+      cacheExtent: widget.itemWidth * 3,
+      addAutomaticKeepAlives: false,
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: widget.columns,
         mainAxisSpacing: 16,

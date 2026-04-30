@@ -10,13 +10,13 @@ import 'package:nai_launcher/l10n/app_localizations.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
+import '../../../core/constants/api_constants.dart';
 import '../../../core/enums/precise_ref_type.dart';
 import '../../../core/utils/app_logger.dart';
 import '../../../data/models/gallery/nai_image_metadata.dart';
 import '../../../data/services/image_metadata_service.dart';
 import '../../../core/utils/vibe_file_parser.dart';
 import '../../../data/models/character/character_prompt.dart' as char;
-import '../../../data/models/image/image_params.dart';
 import '../../../data/models/metadata/metadata_import_options.dart';
 import '../../../data/models/queue/replication_task.dart';
 import '../../../data/models/vibe/vibe_library_entry.dart';
@@ -24,6 +24,7 @@ import '../../../data/models/vibe/vibe_reference.dart';
 import '../../../data/services/vibe_library_storage_service.dart';
 import '../../../data/services/vibe_metadata_service.dart';
 import '../../providers/character_prompt_provider.dart';
+import '../../providers/generation/image_workflow_controller.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/replication_queue_provider.dart';
 import '../../providers/vibe_library_provider.dart';
@@ -69,8 +70,8 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       onDropOver: (event) {
         // 检查是否是应用内部拖拽（本地画廊拖拽图片）
         // 内部拖拽包含 localData，外部拖拽没有
-        final isInternalDrag = event.session.items.any((item) =>
-          item.localData != null,
+        final isInternalDrag = event.session.items.any(
+          (item) => item.localData != null,
         );
 
         // 如果是内部拖拽，不显示全局覆盖层
@@ -423,7 +424,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
 
     // 检测是否包含 Vibe 元数据（仅 PNG）
     final detectedVibe = await _detectVibeMetadata(fileName, bytes);
-    
+
     // 检测是否为 bundle（多个 vibes）
     final detectedVibes = await _detectAllVibesInPng(fileName, bytes);
 
@@ -510,7 +511,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
   ) async {
     switch (destination) {
       case ImageDestination.img2img:
-        _handleImg2Img(bytes, notifier, l10n);
+        _handleImg2Img(bytes, l10n);
         break;
 
       case ImageDestination.vibeTransfer:
@@ -555,11 +556,11 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
 
   void _handleImg2Img(
     Uint8List bytes,
-    GenerationParamsNotifier notifier,
     AppLocalizations l10n,
   ) {
-    notifier.setSourceImage(bytes);
-    notifier.updateAction(ImageGenerationAction.img2img);
+    ref
+        .read(imageWorkflowControllerProvider.notifier)
+        .replaceSourceImage(bytes);
 
     if (mounted) {
       AppToast.success(context, l10n.drop_addedToImg2Img);
@@ -666,16 +667,16 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     }
 
     final isBundle = vibes.length > 1;
-    final defaultName = isBundle 
-        ? vibes.first.displayName 
-        : vibes.first.displayName;
+    final defaultName =
+        isBundle ? vibes.first.displayName : vibes.first.displayName;
 
     // 显示保存对话框
     final nameController = TextEditingController(text: defaultName);
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(isBundle ? '保存 Vibe Bundle (${vibes.length} 个)' : '保存到 Vibe 库'),
+        title: Text(
+            isBundle ? '保存 Vibe Bundle (${vibes.length} 个)' : '保存到 Vibe 库'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -719,7 +720,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     if (result == true && mounted) {
       try {
         final storageService = ref.read(vibeLibraryStorageServiceProvider);
-        
+
         if (isBundle) {
           // 保存为 Bundle
           await storageService.saveBundleEntry(
@@ -734,13 +735,13 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
           );
           await storageService.saveEntry(entry);
         }
-        
+
         // 刷新库
         ref.read(vibeLibraryNotifierProvider.notifier).reload();
 
         if (mounted) {
           AppToast.success(
-            context, 
+            context,
             isBundle ? '已保存 Bundle (${vibes.length} 个 Vibe)' : '已保存到 Vibe 库',
           );
         }
@@ -865,8 +866,14 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       count++;
     }
 
-    if (options.importNegativePrompt && metadata.negativePrompt.isNotEmpty) {
-      notifier.updateNegativePrompt(metadata.negativePrompt);
+    if (options.importNegativePrompt &&
+        (metadata.negativePrompt.isNotEmpty || options.importUcPreset)) {
+      notifier.updateNegativePrompt(
+        _resolveImportedNegativePrompt(
+          metadata,
+          importUcPreset: options.importUcPreset,
+        ),
+      );
       count++;
     }
 
@@ -895,13 +902,30 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     return count;
   }
 
+  String _resolveImportedNegativePrompt(
+    NaiImageMetadata metadata, {
+    required bool importUcPreset,
+  }) {
+    if (!importUcPreset || metadata.ucPreset == null) {
+      return metadata.negativePrompt;
+    }
+
+    final model =
+        metadata.model ?? ref.read(generationParamsNotifierProvider).model;
+    return UcPresets.stripPresetByInt(
+      metadata.negativePrompt,
+      model,
+      metadata.ucPreset!,
+    );
+  }
+
   void _applyCharacterPrompts(NaiImageMetadata metadata) {
     final characters = <char.CharacterPrompt>[];
-    
+
     // 安全获取角色提示词列表
     final characterPrompts = metadata.characterPrompts;
     final characterNegativePrompts = metadata.characterNegativePrompts;
-    
+
     for (var i = 0; i < characterPrompts.length; i++) {
       final prompt = characterPrompts[i];
       final negPrompt = i < characterNegativePrompts.length

@@ -26,6 +26,15 @@ class NaiPromptParser {
     return tags;
   }
 
+  /// 仅剥离单个片段上的权重语法，尽量保留其他字符。
+  static String stripWeightSyntax(String segment) {
+    final trimmed = segment.trim();
+    if (trimmed.isEmpty) {
+      return trimmed;
+    }
+    return _extractWeight(trimmed).text.trim();
+  }
+
   /// 按分隔符拆分提示词
   /// 支持逗号分隔，同时保护特殊语法（如 || 随机选择）
   static List<String> _splitByDelimiters(String prompt) {

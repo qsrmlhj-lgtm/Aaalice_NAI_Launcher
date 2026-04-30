@@ -176,6 +176,19 @@ class ImageParams with _$ImageParams {
     /// 蒙版图像 (白色区域为修补区域)
     @JsonKey(includeFromJson: false, includeToJson: false) Uint8List? maskImage,
 
+    /// 局部重绘强度 (0-1)
+    @Default(1.0) double inpaintStrength,
+
+    /// Inpaint 蒙版闭运算迭代次数
+    @Default(0)
+    @JsonKey(includeFromJson: false, includeToJson: false)
+    int inpaintMaskClosingIterations,
+
+    /// Inpaint 蒙版扩边迭代次数
+    @Default(0)
+    @JsonKey(includeFromJson: false, includeToJson: false)
+    int inpaintMaskExpansionIterations,
+
     // ========== Vibe Transfer 参数 ==========
 
     /// V4 Vibe 参考列表 (支持预编码和原始图片)
@@ -293,6 +306,7 @@ class ImageGenerationParameters with _$ImageGenerationParameters {
     double? noise,
     // inpainting 参数
     String? mask,
+    @JsonKey(name: 'inpaintImg2ImgStrength') double? inpaintStrength,
     // vibe transfer 参数
     @JsonKey(name: 'reference_image_multiple')
     List<String>? referenceImageMultiple,

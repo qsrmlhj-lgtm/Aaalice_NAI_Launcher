@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
@@ -169,6 +170,10 @@ class ThumbnailCacheService {
   /// 统计信息
   final _ThumbnailStats _stats = _ThumbnailStats();
 
+  /// 最近失败记录，避免同一路径在短时间内疯狂重试。
+  final Map<String, DateTime> _recentFailureTimes = {};
+  static const Duration _failureRetryCooldown = Duration(seconds: 10);
+
   /// 缓存限制配置
   static const int defaultMaxCacheSizeMB = 500;
   static const int defaultMaxFileCount = 10000;
@@ -312,6 +317,10 @@ class ThumbnailCacheService {
     ThumbnailSize size = defaultSize,
     int priority = 5,
   }) async {
+    if (_isInFailureCooldown(originalPath, size: size)) {
+      return null;
+    }
+
     // 首先检查缓存
     final existingPath = await getThumbnailPath(originalPath, size: size);
     if (existingPath != null) {
@@ -347,6 +356,10 @@ class ThumbnailCacheService {
     if (originalPath.contains('.thumb.') ||
         originalPath.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}')) {
       // AppLogger.w('Refusing to generate thumbnail for thumbnail: $originalPath', 'ThumbnailCache');
+      return null;
+    }
+
+    if (_isInFailureCooldown(originalPath, size: size)) {
       return null;
     }
 
@@ -440,6 +453,7 @@ class ThumbnailCacheService {
       // 编码为 JPEG 并写入文件
       final thumbBytes = img.encodeJpg(thumbnail, quality: jpegQuality);
       await File(thumbnailPath).writeAsBytes(thumbBytes);
+      _recentFailureTimes.remove(_failureKey(originalPath, size: size));
 
       stopwatch.stop();
       _stats.recordGenerated();
@@ -460,6 +474,7 @@ class ThumbnailCacheService {
       return thumbnailPath;
     } catch (e, stack) {
       _stats.recordFailed();
+      _recentFailureTimes[_failureKey(originalPath, size: size)] = DateTime.now();
       AppLogger.e(
         'Failed to generate thumbnail for $originalPath: $e',
         e,
@@ -1174,18 +1189,46 @@ class ThumbnailCacheService {
     String originalPath, {
     required ThumbnailSize size,
   }) {
-    if (originalPath.isEmpty) {
-      throw ArgumentError('Invalid path: originalPath cannot be empty');
-    }
-
-    final parts = originalPath.split(Platform.pathSeparator);
-    if (parts.isEmpty) {
-      throw ArgumentError('Invalid path: unable to extract filename from "$originalPath"');
-    }
-
-    final originalFileName = parts.last;
+    final originalFileName = extractOriginalFileNameForTest(originalPath);
     if (originalFileName.isEmpty) {
       throw ArgumentError('Invalid path: filename cannot be empty');
+    }
+
+    return _buildThumbnailFileName(
+      originalFileName,
+      size: size,
+    );
+  }
+
+  String _failureKey(
+    String originalPath, {
+    required ThumbnailSize size,
+  }) =>
+      '$originalPath#${size.name}';
+
+  bool _isInFailureCooldown(
+    String originalPath, {
+    required ThumbnailSize size,
+  }) {
+    final lastFailureAt = _recentFailureTimes[_failureKey(originalPath, size: size)];
+    if (lastFailureAt == null) {
+      return false;
+    }
+
+    if (DateTime.now().difference(lastFailureAt) >= _failureRetryCooldown) {
+      _recentFailureTimes.remove(_failureKey(originalPath, size: size));
+      return false;
+    }
+
+    return true;
+  }
+
+  static String _buildThumbnailFileName(
+    String originalFileName, {
+    required ThumbnailSize size,
+  }) {
+    if (originalFileName.isEmpty) {
+      throw ArgumentError('Invalid path: originalFileName cannot be empty');
     }
 
     // 移除原始扩展名，添加尺寸标识和缩略图扩展名
@@ -1194,6 +1237,21 @@ class ThumbnailCacheService {
         ? originalFileName.substring(0, dotIndex)
         : originalFileName;
     return '$baseName${size.fileSuffix}$thumbnailExt';
+  }
+
+  @visibleForTesting
+  static String extractOriginalFileNameForTest(String originalPath) {
+    final normalizedPath = originalPath.replaceAll('\\', '/');
+    return p.posix.basename(normalizedPath);
+  }
+
+  @visibleForTesting
+  static String buildThumbnailFileNameForTest(
+    String originalPath, {
+    required ThumbnailSize size,
+  }) {
+    final originalFileName = extractOriginalFileNameForTest(originalPath);
+    return _buildThumbnailFileName(originalFileName, size: size);
   }
 }
 

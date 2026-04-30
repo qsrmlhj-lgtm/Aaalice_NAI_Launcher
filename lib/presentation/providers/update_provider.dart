@@ -87,7 +87,7 @@ class UpdateStateNotifier extends _$UpdateStateNotifier {
     state = state.copyWith(status: UpdateStatus.checking);
 
     try {
-      final service = ref.read(updateCheckServiceProvider);
+      final service = await ref.read(updateCheckServiceReadyProvider.future);
       final versionInfo = await service.checkForUpdates();
 
       if (versionInfo != null) {
@@ -124,7 +124,7 @@ class UpdateStateNotifier extends _$UpdateStateNotifier {
     if (currentVersionInfo == null) return;
 
     try {
-      final service = ref.read(updateCheckServiceProvider);
+      final service = await ref.read(updateCheckServiceReadyProvider.future);
       await service.skipVersion(currentVersionInfo.version);
 
       // 跳过之后重置为 upToDate 状态
@@ -179,7 +179,7 @@ class UpdateStateNotifier extends _$UpdateStateNotifier {
   /// [include] 是否包含
   Future<void> setIncludePrerelease(bool include) async {
     try {
-      final service = ref.read(updateCheckServiceProvider);
+      final service = await ref.read(updateCheckServiceReadyProvider.future);
       await service.setIncludePrerelease(include);
     } catch (e) {
       // 静默处理错误，不影响状态
@@ -215,6 +215,6 @@ VersionInfo? latestVersionInfo(Ref ref) {
 /// 异步 Provider：决定是否在应用启动时检查更新
 @riverpod
 Future<bool> checkUpdateOnStartup(Ref ref) async {
-  final service = ref.watch(updateCheckServiceProvider);
+  final service = await ref.watch(updateCheckServiceReadyProvider.future);
   return service.shouldCheckForUpdates();
 }

@@ -186,8 +186,9 @@ class LayerPainter extends CustomPainter {
     }
 
     final paint = Paint()
-      ..color =
-          isEraser ? Colors.grey.withOpacity(0.5) : color.withOpacity(opacity)
+      ..color = isEraser
+          ? Colors.grey.withValues(alpha: 0.5)
+          : color.withValues(alpha: opacity)
       ..strokeWidth = size
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
@@ -277,6 +278,7 @@ class LayerPainter extends CustomPainter {
 class SelectionPainter extends CustomPainter {
   final EditorState state;
   final Animation<double> animation;
+  final bool suppressSelectionOverlay;
 
   /// 缓存的选区路径
   static Path? _cachedPath;
@@ -289,10 +291,15 @@ class SelectionPainter extends CustomPainter {
   SelectionPainter({
     required this.state,
     required this.animation,
+    this.suppressSelectionOverlay = false,
   }) : super(repaint: Listenable.merge([state.renderNotifier, animation]));
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (suppressSelectionOverlay) {
+      return;
+    }
+
     final controller = state.canvasController;
     final canvasSize = state.canvasSize;
 
@@ -498,7 +505,7 @@ class CursorPainter extends CustomPainter {
     canvas.drawCircle(
       position,
       bgRadius,
-      Paint()..color = Colors.black.withOpacity(0.7),
+      Paint()..color = Colors.black.withValues(alpha: 0.7),
     );
 
     // 绘制白色边框

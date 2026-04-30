@@ -1152,7 +1152,14 @@ class NovelAiParser implements MetadataParser {
           //   'UnifiedMetadataParser',
           // );
           try {
-            final result = NaiImageMetadata.fromNaiComment(json, rawJson: text);
+            final result = NaiImageMetadata.fromNaiComment(
+              {
+                'Comment': text,
+                'Software': textData['Software'],
+                'Source': textData['Source'],
+              },
+              rawJson: text,
+            );
             // AppLogger.d('NovelAiParser: Metadata created successfully', 'UnifiedMetadataParser');
             return result;
           } catch (e, stack) {
@@ -1182,9 +1189,16 @@ class NovelAiParser implements MetadataParser {
                 'UnifiedMetadataParser',
               );
 
-              final result = NaiImageMetadata.fromNaiComment(commentJson, rawJson: text);
+              final wrappedResult = NaiImageMetadata.fromNaiComment(
+                {
+                  'Comment': jsonEncode(commentJson),
+                  'Software': textData['Software'],
+                  'Source': textData['Source'],
+                },
+                rawJson: text,
+              );
               // AppLogger.d('NovelAiParser: Metadata created from nested Comment', 'UnifiedMetadataParser');
-              return result;
+              return wrappedResult;
             } catch (e, stack) {
               AppLogger.e(
                 'NovelAiParser: Failed to parse nested Comment',
@@ -1197,7 +1211,11 @@ class NovelAiParser implements MetadataParser {
           } else if (comment is Map) {
             try {
               final result = NaiImageMetadata.fromNaiComment(
-                comment as Map<String, dynamic>,
+                {
+                  'Comment': jsonEncode(comment),
+                  'Software': textData['Software'],
+                  'Source': textData['Source'],
+                },
                 rawJson: text,
               );
               AppLogger.d('NovelAiParser: Metadata created from nested Comment Map', 'UnifiedMetadataParser');
