@@ -4,6 +4,7 @@ import '../../../../core/utils/localization_extension.dart';
 import '../../../../data/models/vibe/vibe_library_entry.dart';
 // Import for VibeSourceTypeExtension (displayLabel)
 import '../../../../data/models/vibe/vibe_reference.dart';
+import '../../../widgets/common/decoded_memory_image.dart';
 
 /// 最近使用的 Vibes 区域组件
 ///
@@ -141,10 +142,11 @@ class RecentVibeItem extends StatelessWidget {
                   children: [
                     // 主缩略图
                     entry.hasThumbnail || entry.hasVibeThumbnail
-                        ? Image.memory(
-                            entry.thumbnail ?? entry.vibeThumbnail!,
+                        ? DecodedMemoryImage(
+                            bytes: entry.thumbnail ?? entry.vibeThumbnail!,
                             fit: BoxFit.cover,
-                            width: double.infinity,
+                            maxLogicalWidth: 72,
+                            maxLogicalHeight: 50,
                           )
                         : Container(
                             color: theme.colorScheme.surfaceContainerHighest,

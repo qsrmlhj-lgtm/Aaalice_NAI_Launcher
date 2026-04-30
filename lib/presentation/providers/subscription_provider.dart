@@ -27,7 +27,7 @@ class SubscriptionNotifier extends _$SubscriptionNotifier {
   int _networkFailureCount = 0;
 
   /// 自动刷新间隔
-  static const Duration _refreshInterval = Duration(seconds: 5);
+  static const Duration _refreshInterval = Duration(seconds: 30);
   static const Duration _initialFetchTimeout = Duration(seconds: 6);
   static const Duration _maxBackoffInterval = Duration(minutes: 2);
   static const Duration _networkProbeInterval = Duration(seconds: 3);

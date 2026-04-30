@@ -11,6 +11,7 @@ import '../../../../core/utils/hive_storage_helper.dart';
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/vibe_library_path_helper.dart';
 import '../../../providers/image_save_settings_provider.dart';
+import '../../../providers/share_image_settings_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../widgets/cache_statistics_tile.dart';
 import '../widgets/gallery_cache_actions.dart';
@@ -52,6 +53,7 @@ class _StorageSettingsSectionState
   @override
   Widget build(BuildContext context) {
     final saveSettings = ref.watch(imageSaveSettingsNotifierProvider);
+    final shareSettings = ref.watch(shareImageSettingsProvider);
 
     return SettingsCard(
       title: context.l10n.settings_storage,
@@ -124,6 +126,19 @@ class _StorageSettingsSectionState
               await ref
                   .read(imageSaveSettingsNotifierProvider.notifier)
                   .setAutoSave(value);
+            },
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.cleaning_services_outlined),
+            title: const Text('复制/拖拽时移除全部元数据'),
+            subtitle: const Text(
+              '开启后会同时清除 PNG 文本块和 NAI 隐写水印；仅影响应用内复制与拖拽，本地保存始终保留原始元数据。',
+            ),
+            value: shareSettings.stripMetadataForCopyAndDrag,
+            onChanged: (value) async {
+              await ref
+                  .read(shareImageSettingsProvider.notifier)
+                  .setStripMetadataForCopyAndDrag(value);
             },
           ),
           // Vibe库保存路径设置

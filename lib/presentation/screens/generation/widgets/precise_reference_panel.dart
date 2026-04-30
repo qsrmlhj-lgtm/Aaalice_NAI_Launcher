@@ -15,6 +15,7 @@ import '../../../widgets/common/app_toast.dart';
 import '../../../widgets/common/hover_image_preview.dart';
 import '../../../widgets/common/themed_divider.dart';
 import '../../../widgets/common/collapsible_image_panel.dart';
+import '../../../widgets/common/decoded_memory_image.dart';
 
 /// Precise Reference 面板 - 支持多参考、类型选择、独立参数控制
 ///
@@ -38,10 +39,14 @@ class _PreciseReferencePanelState extends ConsumerState<PreciseReferencePanel> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final params = ref.watch(generationParamsNotifierProvider);
-    final references = params.preciseReferences;
+    final references = ref.watch(
+      generationParamsNotifierProvider
+          .select((params) => params.preciseReferences),
+    );
     final hasReferences = references.isNotEmpty;
-    final isV4Model = params.isV4Model;
+    final isV4Model = ref.watch(
+      generationParamsNotifierProvider.select((params) => params.isV4Model),
+    );
 
     // 判断是否显示背景（折叠且有数据时显示）
     final showBackground = hasReferences && !_isExpanded;
@@ -52,16 +57,21 @@ class _PreciseReferencePanelState extends ConsumerState<PreciseReferencePanel> {
       isExpanded: _isExpanded,
       onToggle: () => setState(() => _isExpanded = !_isExpanded),
       hasData: hasReferences,
-      backgroundImage: hasReferences
+      backgroundImage: showBackground
           ? (references.length == 1
-              ? Image.memory(
-                  references.first.image,
+              ? DecodedMemoryImage(
+                  bytes: references.first.image,
                   fit: BoxFit.cover,
+                  decodeScale: 0.75,
                 )
               : Row(
                   children: references.map((ref) {
                     return Expanded(
-                      child: Image.memory(ref.image, fit: BoxFit.cover),
+                      child: DecodedMemoryImage(
+                        bytes: ref.image,
+                        fit: BoxFit.cover,
+                        decodeScale: 0.75,
+                      ),
                     );
                   }).toList(),
                 ))
@@ -432,9 +442,11 @@ class _PreciseReferenceCard extends StatelessWidget {
         width: 64,
         height: 64,
         color: theme.colorScheme.surfaceContainerHighest,
-        child: Image.memory(
-          reference.image,
+        child: DecodedMemoryImage(
+          bytes: reference.image,
           fit: BoxFit.cover,
+          maxLogicalWidth: 64,
+          maxLogicalHeight: 64,
           errorBuilder: (context, error, stackTrace) {
             return _buildPlaceholder(theme);
           },
@@ -510,7 +522,7 @@ class _PreciseReferenceCard extends StatelessWidget {
               child: Text(
                 label,
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurface.withOpacity(0.8),
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
                 ),
               ),
             ),

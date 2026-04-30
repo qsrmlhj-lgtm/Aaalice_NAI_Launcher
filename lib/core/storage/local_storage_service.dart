@@ -465,6 +465,17 @@ class LocalStorageService {
     await setSetting(StorageKeys.lastNoiseSchedule, noiseSchedule);
   }
 
+  /// 获取上次的 Variety+ 设置
+  bool getLastVarietyPlus() {
+    return getSetting<bool>(StorageKeys.lastVarietyPlus, defaultValue: false) ??
+        false;
+  }
+
+  /// 保存 Variety+ 设置
+  Future<void> setLastVarietyPlus(bool value) async {
+    await setSetting(StorageKeys.lastVarietyPlus, value);
+  }
+
   // ==================== Seed Lock ====================
 
   /// 获取种子是否锁定 (默认关闭)

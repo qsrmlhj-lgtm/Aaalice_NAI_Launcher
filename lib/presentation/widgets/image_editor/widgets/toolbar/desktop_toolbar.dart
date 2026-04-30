@@ -7,7 +7,7 @@ import '../../../../widgets/common/themed_divider.dart';
 /// 检查是否可以清空当前图层
 bool _canClearActiveLayer(EditorState state) {
   final layer = state.layerManager.activeLayer;
-  return layer != null && !layer.locked && layer.strokes.isNotEmpty;
+  return layer != null && !layer.locked && layer.hasContent;
 }
 
 /// 桌面端垂直工具栏
@@ -15,13 +15,30 @@ class DesktopToolbar extends StatelessWidget {
   final EditorState state;
   final VoidCallback? onUndo;
   final VoidCallback? onRedo;
+  final VoidCallback? onClear;
+  final VoidCallback? onFillMask;
+  final bool Function()? canFillMask;
+  final Set<String>? allowedToolIds;
 
   const DesktopToolbar({
     super.key,
     required this.state,
     this.onUndo,
     this.onRedo,
+    this.onClear,
+    this.onFillMask,
+    this.canFillMask,
+    this.allowedToolIds,
   });
+
+  List<EditorTool> get _visibleTools {
+    if (allowedToolIds == null || allowedToolIds!.isEmpty) {
+      return state.tools;
+    }
+    return state.tools
+        .where((tool) => allowedToolIds!.contains(tool.id))
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +64,7 @@ class DesktopToolbar extends StatelessWidget {
             valueListenable: state.toolNotifier,
             builder: (context, currentToolId, _) {
               return Column(
-                children: state.tools
+                children: _visibleTools
                     .map(
                       (tool) => _ToolButton(
                         tool: tool,
@@ -83,10 +100,17 @@ class DesktopToolbar extends StatelessWidget {
                   ),
                   _ActionButton(
                     icon: Icons.delete_outline,
-                    tooltip: '清空图层',
+                    tooltip: onClear != null ? '重置蒙版' : '清空图层',
                     enabled: _canClearActiveLayer(state),
-                    onTap: () => state.clearActiveLayerWithHistory(),
+                    onTap: onClear ?? () => state.clearActiveLayerWithHistory(),
                   ),
+                  if (onFillMask != null)
+                    _ActionButton(
+                      icon: Icons.format_color_fill,
+                      tooltip: '填充封闭区域',
+                      enabled: canFillMask?.call() ?? false,
+                      onTap: onFillMask!,
+                    ),
                 ],
               );
             },
@@ -239,7 +263,7 @@ class _ActionButton extends StatelessWidget {
                 size: 20,
                 color: enabled
                     ? theme.colorScheme.onSurface
-                    : theme.colorScheme.onSurface.withOpacity(0.3),
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.3),
               ),
             ),
           ),

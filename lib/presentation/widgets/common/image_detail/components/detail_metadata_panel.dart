@@ -479,7 +479,8 @@ class _MetadataContent extends StatelessWidget {
       final mainPromptTags = _extractTags(mainPromptWithChars);
 
       // 负面提示词标签
-      final negativeTags = _extractTags(metadata.negativePrompt);
+      final negativePrompt = metadata.displayNegativePrompt;
+      final negativeTags = _extractTags(negativePrompt);
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -535,12 +536,12 @@ class _MetadataContent extends StatelessWidget {
             ),
           ],
           // 负向提示词（使用标签形式）
-          if (metadata.negativePrompt.isNotEmpty) ...[
+          if (negativePrompt.isNotEmpty) ...[
             const SizedBox(height: 12),
             PromptSection(
               title: context.l10n.prompt_negativePrompt,
               icon: Icons.block,
-              content: metadata.negativePrompt,
+              content: negativePrompt,
               tags: negativeTags,
               initiallyExpanded: false,
               contentColor:
@@ -554,7 +555,8 @@ class _MetadataContent extends StatelessWidget {
 
     // 旧数据：使用简单展示
     final mainPromptTags = _extractTags(metadata.fullPrompt);
-    final negativeTags = _extractTags(metadata.negativePrompt);
+    final negativePrompt = metadata.displayNegativePrompt;
+    final negativeTags = _extractTags(negativePrompt);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -571,12 +573,12 @@ class _MetadataContent extends StatelessWidget {
               _showAddToLibraryDialog(context, metadata.fullPrompt),
         ),
         // 负向提示词（使用标签形式）
-        if (metadata.negativePrompt.isNotEmpty) ...[
+        if (negativePrompt.isNotEmpty) ...[
           const SizedBox(height: 12),
           PromptSection(
             title: context.l10n.prompt_negativePrompt,
             icon: Icons.block,
-            content: metadata.negativePrompt,
+            content: negativePrompt,
             tags: negativeTags,
             initiallyExpanded: false,
             contentColor: Theme.of(context).colorScheme.error.withOpacity(0.8),

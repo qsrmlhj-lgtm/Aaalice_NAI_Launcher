@@ -557,6 +557,8 @@ class _SizeSelector extends StatefulWidget {
 class _SizeSelectorState extends State<_SizeSelector> {
   late TextEditingController _widthController;
   late TextEditingController _heightController;
+  late FocusNode _widthFocusNode;
+  late FocusNode _heightFocusNode;
   final FocusNode _dropdownFocusNode = FocusNode();
   String? _selectedPresetId;
 
@@ -565,6 +567,8 @@ class _SizeSelectorState extends State<_SizeSelector> {
     super.initState();
     _widthController = TextEditingController(text: widget.width.toString());
     _heightController = TextEditingController(text: widget.height.toString());
+    _widthFocusNode = FocusNode();
+    _heightFocusNode = FocusNode();
     _updateSelectedPreset();
   }
 
@@ -572,10 +576,39 @@ class _SizeSelectorState extends State<_SizeSelector> {
   void didUpdateWidget(covariant _SizeSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.width != widget.width || oldWidget.height != widget.height) {
-      _widthController.text = widget.width.toString();
-      _heightController.text = widget.height.toString();
+      _syncFieldController(
+        controller: _widthController,
+        focusNode: _widthFocusNode,
+        targetValue: widget.width,
+      );
+      _syncFieldController(
+        controller: _heightController,
+        focusNode: _heightFocusNode,
+        targetValue: widget.height,
+      );
       _updateSelectedPreset();
     }
+  }
+
+  void _syncFieldController({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required int targetValue,
+  }) {
+    final nextText = resolveManualSizeFieldSyncText(
+      currentText: controller.text,
+      targetValue: targetValue,
+      hasFocus: focusNode.hasFocus,
+    );
+    if (nextText == null) {
+      return;
+    }
+
+    controller.value = controller.value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+      composing: TextRange.empty,
+    );
   }
 
   void _updateSelectedPreset() {
@@ -588,6 +621,8 @@ class _SizeSelectorState extends State<_SizeSelector> {
   void dispose() {
     _widthController.dispose();
     _heightController.dispose();
+    _widthFocusNode.dispose();
+    _heightFocusNode.dispose();
     _dropdownFocusNode.dispose();
     super.dispose();
   }
@@ -742,6 +777,7 @@ class _SizeSelectorState extends State<_SizeSelector> {
             Expanded(
               child: ThemedTextField(
                 controller: _widthController,
+                focusNode: _widthFocusNode,
                 keyboardType: TextInputType.number,
                 labelText: l10n.resolution_width,
                 style: const TextStyle(fontSize: 13),
@@ -763,6 +799,7 @@ class _SizeSelectorState extends State<_SizeSelector> {
             Expanded(
               child: ThemedTextField(
                 controller: _heightController,
+                focusNode: _heightFocusNode,
                 keyboardType: TextInputType.number,
                 labelText: l10n.resolution_height,
                 style: const TextStyle(fontSize: 13),
@@ -792,6 +829,24 @@ class _SizeSelectorState extends State<_SizeSelector> {
       ],
     );
   }
+}
+
+@visibleForTesting
+String? resolveManualSizeFieldSyncText({
+  required String currentText,
+  required int targetValue,
+  required bool hasFocus,
+}) {
+  if (hasFocus) {
+    return null;
+  }
+
+  final nextText = targetValue.toString();
+  if (currentText == nextText) {
+    return null;
+  }
+
+  return nextText;
 }
 
 /// SMEA Auto 按钮 (V3 模型)

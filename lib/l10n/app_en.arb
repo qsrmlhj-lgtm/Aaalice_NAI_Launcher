@@ -591,11 +591,53 @@
     }
   },
   "img2img_edit": "Edit",
+  "img2img_editImage": "Edit Image",
+  "img2img_editApplied": "The edited image is now the new source image",
   "img2img_maskEnabled": "Inpaint Mask",
   "img2img_uploadImage": "Upload Image",
   "img2img_drawSketch": "Draw Sketch",
   "img2img_maskTooltip": "White = modify, Black = preserve",
   "img2img_maskHelpText": "In the mask, white areas will be modified during generation, while black areas will be preserved from the source image",
+  "img2img_inpaint": "Inpaint",
+  "img2img_inpaintStrength": "Inpaint Strength",
+  "img2img_inpaintStrengthHint": "Higher values make the masked area diverge more from the current source image",
+  "img2img_inpaintPendingHint": "Click Inpaint to open the canvas, mark the region you want to repaint with brush, eraser, or selection tools, then return here and use the main generate button.",
+  "img2img_inpaintReadyHint": "Mask loaded. The next generation will repaint only the masked area.",
+  "img2img_inpaintMaskReady": "Inpaint mask is ready",
+  "img2img_generateVariations": "Generate Variations",
+  "img2img_variationsReady": "Variation settings prepared from image metadata",
+  "img2img_variationsPreparedHint": "Variation settings are ready. Use the main generate button to create new results from the current image.",
+  "img2img_variationsFallbackHint": "No reusable metadata found. Kept the current prompt and switched to the base variation setup",
+  "img2img_directorTools": "Director Tools",
+  "img2img_directorToolsHint": "Send the current source image through a Director Tool. When the result is ready, you can apply it back as the new source image.",
+  "img2img_directorPrompt": "Extra Prompt",
+  "img2img_directorPromptHint": "Add guidance when needed, such as target emotion or color direction",
+  "img2img_directorRun": "Run {tool}",
+  "@img2img_directorRun": {
+    "placeholders": {
+      "tool": {}
+    }
+  },
+  "img2img_directorRunning": "Processing...",
+  "img2img_directorResult": "Result",
+  "img2img_directorResultReady": "{tool} completed",
+  "@img2img_directorResultReady": {
+    "placeholders": {
+      "tool": {}
+    }
+  },
+  "img2img_directorApplied": "Applied the Director Tool result as the new source image",
+  "img2img_directorRemoveBackground": "Remove Background",
+  "img2img_directorLineArt": "Line Art",
+  "img2img_directorSketch": "Sketch",
+  "img2img_directorColorize": "Colorize",
+  "img2img_directorEmotion": "Fix Emotion",
+  "img2img_directorDeclutter": "Declutter",
+  "img2img_enhance": "Enhance",
+  "img2img_enhanceHint": "Enhance keeps using the current prompt while it upscales and regenerates the source image in latent space.",
+  "img2img_enhanceMagnitude": "Magnitude",
+  "img2img_enhanceShowIndividualSettings": "Show Individual Settings",
+  "img2img_enhanceUpscaleAmount": "Upscale Amount",
 
   "editor_title": "Image Editor",
   "editor_done": "Done",

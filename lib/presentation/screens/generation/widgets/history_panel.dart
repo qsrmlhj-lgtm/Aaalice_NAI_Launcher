@@ -16,16 +16,29 @@ import '../../../../data/services/image_metadata_service.dart';
 import '../../../../data/repositories/gallery_folder_repository.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../providers/local_gallery_provider.dart';
+import '../../../services/image_workflow_launcher.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../../widgets/common/image_detail/file_image_detail_data.dart';
 import '../../../widgets/common/image_detail/image_detail_data.dart';
 import '../../../widgets/common/image_detail/image_detail_viewer.dart';
+import '../../../widgets/common/draggable_memory_image.dart';
 import '../../../widgets/common/selectable_image_card.dart';
+import '../../../widgets/image_editor/image_editor_screen.dart';
 import '../../../utils/image_detail_opener.dart';
 import '../../../widgets/common/themed_confirm_dialog.dart';
 import '../services/generation_save_service.dart';
 import '../../../widgets/common/themed_divider.dart';
 import '../../tag_library_page/widgets/entry_add_dialog.dart';
+
+double resolveHistoryPreviewAspectRatio(
+  double aspectRatio, {
+  double fallback = 1.0,
+}) {
+  if (!aspectRatio.isFinite || aspectRatio <= 0) {
+    return fallback;
+  }
+  return aspectRatio;
+}
 
 /// 历史面板组件
 class HistoryPanel extends ConsumerStatefulWidget {
@@ -157,13 +170,14 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
         child: Container(
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+            color: theme.colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Icon(
             Icons.chevron_right,
             size: 16,
-            color: theme.colorScheme.onSurface.withOpacity(0.6),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
       ),
@@ -178,13 +192,13 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
           Icon(
             Icons.history,
             size: 48,
-            color: theme.colorScheme.onSurface.withOpacity(0.2),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
           ),
           const SizedBox(height: 12),
           Text(
             context.l10n.generation_noHistory,
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.4),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
             ),
           ),
         ],
@@ -257,7 +271,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: AspectRatio(
-              aspectRatio: batchAspectRatio.clamp(0.5, 2.0),
+              aspectRatio: resolveHistoryPreviewAspectRatio(batchAspectRatio),
               child: _buildCurrentGenerationItem(
                 context,
                 index,
@@ -277,28 +291,54 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: AspectRatio(
-            aspectRatio: historyImage.aspectRatio.clamp(0.5, 2.0),
-            child: SelectableImageCard(
+            aspectRatio: resolveHistoryPreviewAspectRatio(
+              historyImage.aspectRatio,
+              fallback: batchAspectRatio,
+            ),
+            child: DraggableMemoryImage(
               imageBytes: historyImage.bytes,
-              index: actualHistoryIndex,
-              showIndex: false,
-              isSelected: _selectedIds.contains(historyImage.id),
-              onSelectionChanged: (selected) {
-                setState(() {
-                  if (selected) {
-                    _selectedIds.add(historyImage.id);
-                  } else {
-                    _selectedIds.remove(historyImage.id);
-                  }
-                });
-              },
-              onFullscreen: () => _showFullscreen(context, historyImage),
-              enableContextMenu: true,
-              enableHoverScale: true,
-              onOpenInExplorer: () =>
-                  _saveAndOpenInExplorer(context, historyImage.bytes),
-              onSaveToLibrary: (bytes, _) =>
-                  _showSaveToLibraryDialog(context, bytes),
+              fileName: 'history_${historyImage.id}.png',
+              sourceFilePath: historyImage.filePath,
+              child: SelectableImageCard(
+                imageBytes: historyImage.bytes,
+                index: actualHistoryIndex,
+                showIndex: false,
+                isSelected: _selectedIds.contains(historyImage.id),
+                onSelectionChanged: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedIds.add(historyImage.id);
+                    } else {
+                      _selectedIds.remove(historyImage.id);
+                    }
+                  });
+                },
+                onFullscreen: () => _showFullscreen(context, historyImage),
+                enableContextMenu: true,
+                enableHoverScale: true,
+                onEditImage: () => ImageWorkflowLauncher.openEditor(
+                  context,
+                  ref,
+                  historyImage.bytes,
+                  mode: ImageEditorMode.edit,
+                ),
+                onGenerateVariations: () =>
+                    ImageWorkflowLauncher.prepareVariations(
+                  context,
+                  ref,
+                  historyImage.bytes,
+                ),
+                onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
+                  ref,
+                  historyImage.bytes,
+                ),
+                onEnhance: () =>
+                    ImageWorkflowLauncher.openEnhance(ref, historyImage.bytes),
+                onOpenInExplorer: () =>
+                    _saveAndOpenInExplorer(context, historyImage.bytes),
+                onSaveToLibrary: (bytes, _) =>
+                    _showSaveToLibraryDialog(context, bytes),
+              ),
             ),
           ),
         );
@@ -335,25 +375,45 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
     if (index < completedImages.length) {
       final image = completedImages[index];
       final imageBytes = image.bytes;
-      return SelectableImageCard(
+      return DraggableMemoryImage(
         imageBytes: imageBytes,
-        index: index,
-        showIndex: true,
-        isSelected: _selectedIds.contains(image.id),
-        onSelectionChanged: (selected) {
-          setState(() {
-            if (selected) {
-              _selectedIds.add(image.id);
-            } else {
-              _selectedIds.remove(image.id);
-            }
-          });
-        },
-        onFullscreen: () => _showFullscreen(context, image),
-        enableContextMenu: true,
-        enableHoverScale: true,
-        onOpenInExplorer: () => _saveAndOpenInExplorer(context, imageBytes),
-        onSaveToLibrary: (bytes, _) => _showSaveToLibraryDialog(context, bytes),
+        fileName: 'current_${image.id}.png',
+        sourceFilePath: image.filePath,
+        child: SelectableImageCard(
+          imageBytes: imageBytes,
+          index: index,
+          showIndex: true,
+          isSelected: _selectedIds.contains(image.id),
+          onSelectionChanged: (selected) {
+            setState(() {
+              if (selected) {
+                _selectedIds.add(image.id);
+              } else {
+                _selectedIds.remove(image.id);
+              }
+            });
+          },
+          onFullscreen: () => _showFullscreen(context, image),
+          enableContextMenu: true,
+          enableHoverScale: true,
+          onEditImage: () => ImageWorkflowLauncher.openEditor(
+            context,
+            ref,
+            imageBytes,
+            mode: ImageEditorMode.edit,
+          ),
+          onGenerateVariations: () => ImageWorkflowLauncher.prepareVariations(
+            context,
+            ref,
+            imageBytes,
+          ),
+          onDirectorTools: () =>
+              ImageWorkflowLauncher.openDirectorTools(ref, imageBytes),
+          onEnhance: () => ImageWorkflowLauncher.openEnhance(ref, imageBytes),
+          onOpenInExplorer: () => _saveAndOpenInExplorer(context, imageBytes),
+          onSaveToLibrary: (bytes, _) =>
+              _showSaveToLibraryDialog(context, bytes),
+        ),
       );
     }
 
@@ -369,8 +429,11 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
-        border:
-            Border(top: BorderSide(color: theme.dividerColor.withOpacity(0.3))),
+        border: Border(
+          top: BorderSide(
+            color: theme.dividerColor.withValues(alpha: 0.3),
+          ),
+        ),
       ),
       child: Row(
         children: [

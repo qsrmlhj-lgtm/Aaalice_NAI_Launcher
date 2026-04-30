@@ -159,6 +159,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       smeaDyn: storage.getLastSmeaDyn(),
       cfgRescale: storage.getLastCfgRescale(),
       noiseSchedule: storage.getLastNoiseSchedule(),
+      varietyPlus: storage.getLastVarietyPlus(),
       // 从存储加载种子锁定状态
       seed: storage.getSeedLocked() && storage.getLockedSeedValue() != null
           ? storage.getLockedSeedValue()!
@@ -212,16 +213,20 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   }
 
   /// 更新模型
-  void updateModel(String model) {
+  void updateModel(String model, {bool persist = true}) {
     state = state.copyWith(model: model);
-    _storage.setDefaultModel(model);
+    if (persist) {
+      _storage.setDefaultModel(model);
+    }
   }
 
   /// 更新尺寸
-  void updateSize(int width, int height) {
+  void updateSize(int width, int height, {bool persist = true}) {
     state = state.copyWith(width: width, height: height);
-    _storage.setDefaultWidth(width);
-    _storage.setDefaultHeight(height);
+    if (persist) {
+      _storage.setDefaultWidth(width);
+      _storage.setDefaultHeight(height);
+    }
   }
 
   /// 更新步数
@@ -320,6 +325,11 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     state = state.copyWith(noise: noise);
   }
 
+  /// 更新局部重绘强度
+  void updateInpaintStrength(double strength) {
+    state = state.copyWith(inpaintStrength: strength);
+  }
+
   /// 清除 img2img 设置
   void clearImg2Img() {
     state = state.copyWith(
@@ -327,6 +337,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       sourceImage: null,
       strength: 0.7,
       noise: 0.0,
+      inpaintStrength: 1.0,
     );
   }
 
@@ -343,6 +354,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       action: ImageGenerationAction.generate,
       sourceImage: null,
       maskImage: null,
+      inpaintStrength: 1.0,
     );
   }
 
@@ -1030,6 +1042,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   /// 更新多样性增强 (V4+)
   void updateVarietyPlus(bool varietyPlus) {
     state = state.copyWith(varietyPlus: varietyPlus);
+    _storage.setLastVarietyPlus(varietyPlus);
   }
 
   /// 更新 Decrisp (V3 模型)
@@ -1053,7 +1066,8 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   Future<void> loadPanelStates() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final advancedExpanded = prefs.getBool('generation_advanced_options_expanded');
+      final advancedExpanded =
+          prefs.getBool('generation_advanced_options_expanded');
       if (advancedExpanded != null) {
         state = state.copyWith(advancedOptionsExpanded: advancedExpanded);
       }

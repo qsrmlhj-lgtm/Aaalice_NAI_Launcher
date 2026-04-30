@@ -52,13 +52,10 @@ class VibeCard extends StatefulWidget {
 }
 
 class _VibeCardState extends State<VibeCard>
-    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+    with SingleTickerProviderStateMixin {
   bool _isHovered = false;
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
-
-  @override
-  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -105,7 +102,6 @@ class _VibeCardState extends State<VibeCard>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
     final cardHeight = widget.height ?? widget.width;
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -215,6 +211,7 @@ class _VibeCardState extends State<VibeCard>
   Widget _buildMainContent() {
     final pixelRatio = MediaQuery.of(context).devicePixelRatio;
     final cacheWidth = (widget.width * pixelRatio).toInt();
+    final cacheHeight = ((widget.height ?? widget.width) * pixelRatio).toInt();
 
     return Container(
       color: Colors.black.withOpacity(0.05),
@@ -223,6 +220,7 @@ class _VibeCardState extends State<VibeCard>
               _thumbnailData!,
               fit: BoxFit.cover,
               cacheWidth: cacheWidth,
+              cacheHeight: cacheHeight,
               gaplessPlayback: true,
               errorBuilder: (context, error, stackTrace) {
                 return Container(
@@ -293,6 +291,9 @@ class _VibeCardState extends State<VibeCard>
   Widget _buildSingleCard(Uint8List preview, double progress, int index) {
     final cardWidth = widget.width * 0.65;
     final cardHeight = (widget.height ?? widget.width) * 0.75;
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final cacheWidth = (cardWidth * pixelRatio).toInt();
+    final cacheHeight = (cardHeight * pixelRatio).toInt();
 
     // 从收起状态到展开状态的动画
     final scale = 0.8 + (0.2 * progress);
@@ -327,6 +328,8 @@ class _VibeCardState extends State<VibeCard>
           child: Image.memory(
             preview,
             fit: BoxFit.cover,
+            cacheWidth: cacheWidth,
+            cacheHeight: cacheHeight,
             gaplessPlayback: true,
           ),
         ),
@@ -338,6 +341,9 @@ class _VibeCardState extends State<VibeCard>
   Widget _buildFanCard(Uint8List preview, int index, int total, double progress) {
     final cardWidth = widget.width * 0.55;
     final cardHeight = (widget.height ?? widget.width) * 0.7;
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final cacheWidth = (cardWidth * pixelRatio).toInt();
+    final cacheHeight = (cardHeight * pixelRatio).toInt();
 
     // 计算扇形角度
     const maxAngle = 0.5; // 最大展开角度（弧度）
@@ -387,6 +393,8 @@ class _VibeCardState extends State<VibeCard>
             child: Image.memory(
               preview,
               fit: BoxFit.cover,
+              cacheWidth: cacheWidth,
+              cacheHeight: cacheHeight,
               gaplessPlayback: true,
               errorBuilder: (context, error, stackTrace) => Container(
                 color: Colors.grey[800],

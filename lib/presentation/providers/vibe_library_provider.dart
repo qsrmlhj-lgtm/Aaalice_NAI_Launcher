@@ -123,6 +123,7 @@ enum VibeLibraryBulkOperationType {
 @Riverpod(keepAlive: true)
 class VibeLibraryNotifier extends _$VibeLibraryNotifier {
   late final VibeLibraryStorageService _storage;
+  Future<void>? _activeLoadFuture;
 
   @override
   VibeLibraryState build() {
@@ -137,19 +138,24 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
   /// 初始化 Vibe 库
   Future<void> initialize() async {
     if (state.entries.isNotEmpty || state.isInitializing) return;
-    await _loadData(isInitializing: true);
+    await _loadData(isInitializing: true, showLoading: true);
   }
 
   /// 重新加载数据
-  Future<void> reload() async {
+  Future<void> reload({
+    bool syncFileSystem = true,
+    bool showLoading = false,
+  }) async {
     // 先同步文件系统，确保文件增删反映在 Hive 中
-    await syncWithFileSystem();
-    await _loadData(isInitializing: false);
+    if (syncFileSystem) {
+      await syncWithFileSystem();
+    }
+    await _loadData(isInitializing: false, showLoading: showLoading);
   }
 
   /// 仅从缓存加载数据（不扫描文件系统）- 用于快速显示
-  Future<void> loadFromCache() async {
-    await _loadData(isInitializing: false);
+  Future<void> loadFromCache({bool showLoading = false}) async {
+    await _loadData(isInitializing: false, showLoading: showLoading);
   }
 
   /// 与文件系统同步
@@ -157,21 +163,23 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
   /// 同步完成后自动刷新 UI
   Future<VibeFolderSyncResult> syncWithFileSystem() async {
     try {
-      final result = await _storage.syncWithFileSystem(removeMissingEntries: true);
+      final result =
+          await _storage.syncWithFileSystem(removeMissingEntries: true);
       AppLogger.i(
         'Vibe library synced: scanned=${result.scannedCount}, '
-        'upserted=${result.upsertedCount}, deleted=${result.deletedCount}',
+            'upserted=${result.upsertedCount}, deleted=${result.deletedCount}',
         'VibeLibrary',
       );
-      
+
       // 同步完成后刷新数据
       if (result.upsertedCount > 0 || result.deletedCount > 0) {
-        await _loadData(isInitializing: false);
+        await _loadData(isInitializing: false, showLoading: false);
       }
-      
+
       return result;
     } catch (e, stackTrace) {
-      AppLogger.e('Failed to sync with file system', e, stackTrace, 'VibeLibrary');
+      AppLogger.e(
+          'Failed to sync with file system', e, stackTrace, 'VibeLibrary');
       return VibeFolderSyncResult(
         scannedCount: 0,
         upsertedCount: 0,
@@ -182,8 +190,37 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     }
   }
 
-  Future<void> _loadData({required bool isInitializing}) async {
-    state = state.copyWith(isLoading: true, isInitializing: isInitializing);
+  Future<void> _loadData({
+    required bool isInitializing,
+    required bool showLoading,
+  }) async {
+    final activeLoad = _activeLoadFuture;
+    if (activeLoad != null) {
+      return activeLoad;
+    }
+
+    final future = _performLoadData(
+      isInitializing: isInitializing,
+      showLoading: showLoading,
+    );
+    _activeLoadFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_activeLoadFuture, future)) {
+        _activeLoadFuture = null;
+      }
+    }
+  }
+
+  Future<void> _performLoadData({
+    required bool isInitializing,
+    required bool showLoading,
+  }) async {
+    state = state.copyWith(
+      isLoading: showLoading,
+      isInitializing: isInitializing,
+    );
 
     try {
       final entries = await _storage.getAllEntries();
@@ -872,7 +909,8 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
           if (exportDirectory != null && exportDirectory.isNotEmpty) {
             final filePath = entry.filePath!;
             final fileName = filePath.split('/').last.split('\\').last;
-            final targetPath = '$exportDirectory${Platform.pathSeparator}$fileName';
+            final targetPath =
+                '$exportDirectory${Platform.pathSeparator}$fileName';
 
             try {
               final sourceFile = File(filePath);

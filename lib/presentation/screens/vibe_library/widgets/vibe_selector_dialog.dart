@@ -7,6 +7,7 @@ import '../../../../data/models/vibe/vibe_reference.dart';
 import '../../../../data/services/vibe_file_storage_service.dart';
 import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../../presentation/providers/vibe_library_provider.dart';
+import '../../../widgets/common/decoded_memory_image.dart';
 import 'vibe_card.dart';
 
 /// Vibe 选择结果
@@ -74,6 +75,7 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
   bool _isLoading = true;
   bool _isReplaceMode = false;
   String _searchQuery = '';
+  List<String> _topTags = const [];
 
   // 筛选/排序状态字段 (Step 1)
   bool _favoritesOnly = false;
@@ -86,7 +88,10 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
   void initState() {
     super.initState();
     _selectedIds = Set.from(widget.initialSelectedIds);
-    _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadData();
+    });
   }
 
   @override
@@ -97,20 +102,40 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
   }
 
   Future<void> _loadData() async {
-    final service = ref.read(vibeLibraryStorageServiceProvider);
-
     try {
-      final allEntries = await service.getAllEntries();
-      final recentEntries = await service.getRecentEntries(limit: 10);
+      final cachedState = ref.read(vibeLibraryNotifierProvider);
+      if (cachedState.entries.isNotEmpty) {
+        _applyLoadedEntries(cachedState.entries);
+        return;
+      }
 
-      setState(() {
-        _allEntries = allEntries;
-        _recentEntries = recentEntries;
-        _filteredEntries = allEntries;
-      });
+      final notifier = ref.read(vibeLibraryNotifierProvider.notifier);
+      await notifier.loadFromCache(showLoading: false);
+      if (!mounted) return;
+
+      final loadedState = ref.read(vibeLibraryNotifierProvider);
+      _applyLoadedEntries(loadedState.entries);
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
+  }
+
+  void _applyLoadedEntries(List<VibeLibraryEntry> entries) {
+    if (!mounted) return;
+
+    final recentEntries = [
+      ...entries.where((entry) => entry.lastUsedAt != null),
+    ]..sort((a, b) => b.lastUsedAt!.compareTo(a.lastUsedAt!));
+    final topTags = entries.allTags.toList()..sort();
+
+    setState(() {
+      _allEntries = entries;
+      _recentEntries = recentEntries.take(10).toList();
+      _filteredEntries = _sortEntries(entries);
+      _topTags = topTags.take(6).toList();
+    });
   }
 
   // 统一的筛选方法 (Step 1)
@@ -195,7 +220,9 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
 
   void _toggleTag(String tag) {
     setState(() {
-      _selectedTags.contains(tag) ? _selectedTags.remove(tag) : _selectedTags.add(tag);
+      _selectedTags.contains(tag)
+          ? _selectedTags.remove(tag)
+          : _selectedTags.add(tag);
     });
     _applyFilters();
   }
@@ -215,7 +242,9 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
 
   void _toggleSelection(String id) {
     setState(() {
-      _selectedIds.contains(id) ? _selectedIds.remove(id) : _selectedIds.add(id);
+      _selectedIds.contains(id)
+          ? _selectedIds.remove(id)
+          : _selectedIds.add(id);
     });
   }
 
@@ -227,7 +256,6 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
     });
   }
 
-
   void _selectAll() {
     setState(() {
       _selectedIds = _filteredEntries.map((e) => e.id).toSet();
@@ -238,6 +266,15 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
     setState(() {
       _selectedIds.clear();
     });
+  }
+
+  VibeLibraryEntry? _findEntryById(String id) {
+    for (final entry in _allEntries) {
+      if (entry.id == id) {
+        return entry;
+      }
+    }
+    return null;
   }
 
   Future<void> _confirmSelection() async {
@@ -257,10 +294,8 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
         final index = int.tryParse(parts[1]) ?? -1;
         if (index < 0) continue;
 
-        final bundleEntry = _allEntries.firstWhere(
-          (e) => e.id == bundleId,
-          orElse: () => throw StateError('Bundle not found: $bundleId'),
-        );
+        final bundleEntry = _findEntryById(bundleId);
+        if (bundleEntry == null) continue;
 
         if (bundleEntry.filePath == null) continue;
 
@@ -284,10 +319,8 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
           ),
         );
       } else {
-        final entry = _allEntries.firstWhere(
-          (e) => e.id == id,
-          orElse: () => throw StateError('Entry not found: $id'),
-        );
+        final entry = _findEntryById(id);
+        if (entry == null) continue;
 
         await storageService.incrementUsedCount(id);
         selectedEntries.add(entry);
@@ -412,9 +445,6 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
 
   // 筛选工具条 (Step 2)
   Widget _buildFilterToolbar(ThemeData theme) {
-    final allTags = _allEntries.allTags.toList()..sort();
-    final topTags = allTags.take(6).toList();
-
     return SizedBox(
       height: 40,
       child: Row(
@@ -449,7 +479,7 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: topTags.map((tag) {
+                children: _topTags.map((tag) {
                   final isSelected = _selectedTags.contains(tag);
                   return Padding(
                     padding: const EdgeInsets.only(right: 6),
@@ -699,7 +729,6 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
     );
   }
 
-
   Widget _buildSectionTitle(ThemeData theme, String title) {
     return Row(
       children: [
@@ -752,16 +781,20 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (entry.hasThumbnail || entry.hasVibeThumbnail)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: Image.memory(
-                    entry.thumbnail ?? entry.vibeThumbnail!,
-                    width: 24,
-                    height: 24,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Icon(Icons.broken_image, size: 18);
-                    },
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: DecodedMemoryImage(
+                      bytes: entry.thumbnail ?? entry.vibeThumbnail!,
+                      maxLogicalWidth: 24,
+                      maxLogicalHeight: 24,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Icon(Icons.broken_image, size: 18);
+                      },
+                    ),
                   ),
                 )
               else
@@ -775,7 +808,8 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
                 child: Text(
                   entry.displayName,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    fontWeight:
+                        isSelected ? FontWeight.w600 : FontWeight.normal,
                   ),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
@@ -822,7 +856,6 @@ class _VibeSelectorDialogState extends ConsumerState<VibeSelectorDialog> {
       onTap: () => _toggleBundleSelection(entry),
     );
   }
-
 
   Widget _buildEmptyState(ThemeData theme) {
     return Expanded(

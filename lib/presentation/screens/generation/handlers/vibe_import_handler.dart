@@ -124,7 +124,9 @@ class VibeImportHandler {
               if (context.mounted) {
                 AppLogger.e('Failed to parse file: $fileName', e, null, _tag);
                 AppToast.error(
-                    context, context.l10n.vibe_import_fileParseFailed,);
+                  context,
+                  context.l10n.vibe_import_fileParseFailed,
+                );
               }
             }
           }
@@ -475,7 +477,11 @@ class VibeImportHandler {
       }
     } catch (e, stackTrace) {
       AppLogger.e(
-          'Failed to save encoded vibes to library', e, stackTrace, _tag,);
+        'Failed to save encoded vibes to library',
+        e,
+        stackTrace,
+        _tag,
+      );
       if (context.mounted) {
         AppToast.error(context, context.l10n.vibe_saveToLibrary_saveFailed);
       }
@@ -501,6 +507,15 @@ class VibeImportHandler {
     final storageService = ref.read(vibeLibraryStorageServiceProvider);
 
     try {
+      final libraryState = ref.read(vibeLibraryNotifierProvider);
+      if (libraryState.entries.isEmpty &&
+          !libraryState.isInitializing &&
+          !libraryState.isLoading) {
+        unawaited(
+          ref.read(vibeLibraryNotifierProvider.notifier).loadFromCache(),
+        );
+      }
+
       // 显示选择器对话框
       final result = await VibeSelectorDialog.show(
         context: context,

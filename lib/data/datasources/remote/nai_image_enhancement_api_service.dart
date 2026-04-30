@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
@@ -84,9 +85,16 @@ class NAIImageEnhancementApiService {
     int defry = 0,
   }) async {
     try {
+      final decoded = img.decodeImage(image);
+      if (decoded == null) {
+        throw Exception('无法解析图像尺寸');
+      }
+
       final requestData = <String, dynamic>{
         'image': base64Encode(image),
         'req_type': reqType,
+        'width': decoded.width,
+        'height': decoded.height,
         'defry': defry.clamp(0, 5),
         if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
       };
@@ -185,7 +193,16 @@ class NAIImageEnhancementApiService {
       case DioExceptionType.connectionError:
         return '网络连接错误';
       case DioExceptionType.badResponse:
-        return '服务器返回错误: ${e.response?.statusCode}';
+        final statusCode = e.response?.statusCode;
+        final responseData = e.response?.data;
+        final detail = responseData == null
+            ? null
+            : responseData is String
+                ? responseData
+                : jsonEncode(responseData);
+        return detail == null || detail.isEmpty
+            ? '服务器返回错误: $statusCode'
+            : '服务器返回错误: $statusCode ($detail)';
       default:
         return e.message ?? '未知错误';
     }

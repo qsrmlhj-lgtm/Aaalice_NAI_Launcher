@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import '../../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../../data/models/vibe/vibe_reference.dart';
 import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../providers/image_generation_provider.dart';
+import '../../../providers/vibe_library_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../vibe_library/widgets/vibe_selector_dialog.dart';
 import 'empty_state_card.dart';
@@ -114,7 +116,10 @@ class DragTargetWrapper extends ConsumerWidget {
 
   /// 构建空状态 - 双卡片并排布局：从文件添加 + 从库导入
   Widget _buildEmptyState(
-      BuildContext context, WidgetRef ref, ThemeData theme,) {
+    BuildContext context,
+    WidgetRef ref,
+    ThemeData theme,
+  ) {
     return Row(
       children: [
         // 从文件添加
@@ -170,12 +175,16 @@ class DragTargetWrapper extends ConsumerWidget {
 
   /// 从文件添加 Vibe（供外部调用）
   static Future<void> addVibeFromFile(
-      BuildContext context, WidgetRef ref,) async {
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     await _addVibeStatic(context, ref);
   }
 
   static Future<void> _addVibeStatic(
-      BuildContext context, WidgetRef ref,) async {
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -295,13 +304,23 @@ class DragTargetWrapper extends ConsumerWidget {
   }
 
   static Widget _buildEncodingDialogStatic(
-      BuildContext context, String fileName,) {
+    BuildContext context,
+    String fileName,
+  ) {
     return _buildEncodingDialogInternal(
-        context, fileName, AppLocalizations.of(context)!, Theme.of(context),);
+      context,
+      fileName,
+      AppLocalizations.of(context)!,
+      Theme.of(context),
+    );
   }
 
-  static Widget _buildEncodingDialogInternal(BuildContext context,
-      String fileName, AppLocalizations l10n, ThemeData theme,) {
+  static Widget _buildEncodingDialogInternal(
+    BuildContext context,
+    String fileName,
+    AppLocalizations l10n,
+    ThemeData theme,
+  ) {
     var encodeChecked = true;
     var autoSaveChecked = true;
 
@@ -591,6 +610,15 @@ class DragTargetWrapper extends ConsumerWidget {
     final panelNotifier = ref.read(referencePanelNotifierProvider.notifier);
 
     try {
+      final libraryState = ref.read(vibeLibraryNotifierProvider);
+      if (libraryState.entries.isEmpty &&
+          !libraryState.isInitializing &&
+          !libraryState.isLoading) {
+        unawaited(
+          ref.read(vibeLibraryNotifierProvider.notifier).loadFromCache(),
+        );
+      }
+
       final result = await VibeSelectorDialog.show(
         context: context,
         initialSelectedIds: const {},

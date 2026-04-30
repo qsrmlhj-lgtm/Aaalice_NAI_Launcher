@@ -34,28 +34,13 @@ class ImageDragData {
   });
 
   /// 从 LocalImageRecord 创建拖拽数据
-  ///
-  /// 自动读取图片文件字节数据到 previewBytes，确保预览图立即显示
   factory ImageDragData.fromRecord(
     LocalImageRecord record, {
     Uint8List? previewBytes,
   }) {
-    // 如果没有提供预览数据，尝试读取文件
-    Uint8List? bytes = previewBytes;
-    if (bytes == null && record.path.isNotEmpty) {
-      try {
-        final file = File(record.path);
-        if (file.existsSync()) {
-          bytes = file.readAsBytesSync();
-        }
-      } catch (e) {
-        // 读取失败时忽略，使用占位符
-      }
-    }
-    
     return ImageDragData(
       record: record,
-      previewBytes: bytes,
+      previewBytes: previewBytes,
     );
   }
 
@@ -98,7 +83,7 @@ Widget buildImageDragFeedback(
   ImageProvider? previewProvider,
 }) {
   final colorScheme = theme.colorScheme;
-  
+
   return Material(
     elevation: 8,
     shadowColor: Colors.black.withOpacity(0.3),
@@ -137,11 +122,12 @@ Widget buildImageDragFeedback(
                 image: previewProvider,
                 fit: BoxFit.contain,
                 filterQuality: FilterQuality.high,
-                errorBuilder: (_, __, ___) => _buildPlaceholder(theme, dragData),
+                errorBuilder: (_, __, ___) =>
+                    _buildPlaceholder(theme, dragData),
               )
             else
               _buildImageSection(theme, dragData),
-            
+
             // 中层：底部渐变遮罩（让文字更清晰）
             Positioned(
               left: 0,
@@ -161,7 +147,7 @@ Widget buildImageDragFeedback(
                 ),
               ),
             ),
-            
+
             // 上层：文件名和大小（覆层在底部）
             Positioned(
               left: 0,
@@ -211,7 +197,7 @@ Widget buildImageDragFeedback(
                 ),
               ),
             ),
-            
+
             // 提示区域（固定在底部，不透明背景）
             if (showHint)
               Positioned(
@@ -269,7 +255,7 @@ Widget _buildImageSection(ThemeData theme, ImageDragData dragData) {
       errorBuilder: (_, __, ___) => _buildPlaceholder(theme, dragData),
     );
   }
-  
+
   // 否则直接从文件路径加载（异步加载，无需等待）
   if (dragData.path.isNotEmpty) {
     final file = File(dragData.path);
@@ -282,7 +268,7 @@ Widget _buildImageSection(ThemeData theme, ImageDragData dragData) {
       );
     }
   }
-  
+
   // 回退到占位符
   return _buildPlaceholder(theme, dragData);
 }
@@ -312,7 +298,9 @@ Widget _buildPlaceholder(ThemeData theme, ImageDragData dragData) {
           borderRadius: BorderRadius.circular(10),
         ),
         child: Icon(
-          dragData.isPng ? Icons.image_rounded : Icons.insert_drive_file_rounded,
+          dragData.isPng
+              ? Icons.image_rounded
+              : Icons.insert_drive_file_rounded,
           size: 22,
           color: colorScheme.primary.withOpacity(0.6),
         ),

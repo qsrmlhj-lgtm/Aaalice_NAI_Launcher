@@ -1,5 +1,3 @@
-import 'text_space_converter.dart';
-
 /// 括号条目，记录开括号时的位置和对应的闭括号位置
 class _BracketEntry {
   final int startPosition;
@@ -154,8 +152,36 @@ class SdToNaiConverter {
       // 内部包含下划线，说明可能是 series_name 或 copyright_name
       return true;
     }
+
+    final prevNonWhitespaceIndex = _findPreviousNonWhitespaceIndex(text, openIndex);
+    if (prevNonWhitespaceIndex != -1 &&
+        isValidTagContent &&
+        !hasSpaceOrComma &&
+        !hasNestedBrackets &&
+        content.contains('_')) {
+      final previousChar = text[prevNonWhitespaceIndex];
+      final gap = text.substring(prevNonWhitespaceIndex + 1, openIndex);
+      final looksLikeInlineTagSuffix =
+          gap.trim().isEmpty &&
+          RegExp(r'[a-zA-Z0-9_\-]$').hasMatch(previousChar) &&
+          previousChar != ',' &&
+          previousChar != '(' &&
+          previousChar != '[';
+      if (looksLikeInlineTagSuffix) {
+        return true;
+      }
+    }
     
     return false;
+  }
+
+  static int _findPreviousNonWhitespaceIndex(String text, int startExclusive) {
+    for (var i = startExclusive - 1; i >= 0; i--) {
+      if (!RegExp(r'\s').hasMatch(text[i])) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   /// 检测文本是否已经包含NAI语法
@@ -186,12 +212,12 @@ class SdToNaiConverter {
   ///
   /// 示例:
   /// - `(text:1.5)` → `1.5::text::`
-  /// - `(long hair)` → `1.1::long_hair::`
+  /// - `(long hair)` → `1.1::long hair::`
   /// - `[ugly]` → `0.91::ugly::`
   /// - `\(text\)` → `(text)` (转义符保留)
   ///
   /// 注意：只负责 SD 语法转换，不做通用空格转换
-  /// 通用空格转下划线由 NaiPromptFormatter 统一负责
+  /// 是否将空格转换为下划线由 NaiPromptFormatter 统一负责
   static String convert(String text) {
     // 只有当有SD语法且没有NAI语法时，才执行转换
     if (hasSDWeightSyntax(text) && !hasNAISyntax(text)) {
@@ -458,7 +484,8 @@ class SdToNaiConverter {
 
       if (hasWeight) {
         // 有权重：使用 weight::text 格式
-        s = _convertSpacesToUnderscores(s);
+        // 不在 SD→NAI 转换阶段改写空格；是否转下划线由自动格式化决定
+        s = s.trim();
 
         // 如果前面有打开的权重区域，先关闭它
         if (isOpen) {
@@ -482,8 +509,8 @@ class SdToNaiConverter {
           buffer.write('::');
           isOpen = false;
         }
-        // 无权重的文本也需要转换空格为下划线
-        buffer.write(_convertSpacesToUnderscores(s));
+        // 无权重的文本保持原始空格；是否转下划线由自动格式化决定
+        buffer.write(s);
       }
     }
 
@@ -493,14 +520,5 @@ class SdToNaiConverter {
     }
 
     return buffer.toString();
-  }
-
-  /// 将文本中的空格转换为下划线
-  /// 保护特殊位置的空格（逗号旁边等）
-  static String _convertSpacesToUnderscores(String text) {
-    return TextSpaceConverter.convert(
-      text,
-      protectChars: TextSpaceConverter.naiFormat,
-    );
   }
 }

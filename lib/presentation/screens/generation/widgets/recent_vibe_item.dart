@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../../data/models/vibe/vibe_reference.dart';
+import '../../../widgets/common/decoded_memory_image.dart';
 
 /// 最近 Vibe 条目组件
 ///
@@ -41,10 +42,11 @@ class RecentVibeItem extends StatelessWidget {
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(7)),
                 child: entry.hasThumbnail || entry.hasVibeThumbnail
-                    ? Image.memory(
-                        entry.thumbnail ?? entry.vibeThumbnail!,
+                    ? DecodedMemoryImage(
+                        bytes: entry.thumbnail ?? entry.vibeThumbnail!,
                         fit: BoxFit.cover,
-                        width: double.infinity,
+                        maxLogicalWidth: 72,
+                        maxLogicalHeight: 50,
                       )
                     : Container(
                         color: theme.colorScheme.surfaceContainerHighest,

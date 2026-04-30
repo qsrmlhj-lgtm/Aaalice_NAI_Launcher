@@ -125,7 +125,7 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
   /// 自动补全策略 Future（异步初始化）
   Future<AutocompleteStrategy>? _autocompleteStrategyFuture;
   StreamSubscription<StreamingChunk>? _assistantStreamSub;
-  late final String _sessionId;
+  late String _sessionId;
 
   bool get _isDesktop {
     switch (defaultTargetPlatform) {
@@ -136,6 +136,38 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       default:
         return false;
     }
+  }
+
+  bool _handleHardwareKeyEvent(KeyEvent event) {
+    if (!_isDesktop ||
+        !_effectiveFocusNode.hasFocus ||
+        event is! KeyDownEvent) {
+      return false;
+    }
+
+    final logicalKey = event.logicalKey;
+
+    if (!widget.enableAssistant) {
+      return false;
+    }
+
+    final assistantConfig = ref.read(promptAssistantConfigProvider);
+    if (!assistantConfig.enabled || !assistantConfig.desktopOverlayEnabled) {
+      return false;
+    }
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+    if (isCtrl && isShift && logicalKey == LogicalKeyboardKey.keyE) {
+      unawaited(_runAssistantAction(AssistantTaskType.llm));
+      return true;
+    }
+    if (isCtrl && isShift && logicalKey == LogicalKeyboardKey.keyT) {
+      unawaited(_runAssistantAction(AssistantTaskType.translate));
+      return true;
+    }
+
+    return false;
   }
 
   /// 获取有效的文本控制器
@@ -151,13 +183,38 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
     return widget.focusNode ?? _internalFocusNode!;
   }
 
+  String _resolveSessionId(String? sessionId) {
+    final providedSessionId = sessionId?.trim();
+    if (providedSessionId != null && providedSessionId.isNotEmpty) {
+      return providedSessionId;
+    }
+    return 'prompt_${identityHashCode(this)}';
+  }
+
+  bool _shouldResetAutocompleteStrategy(UnifiedPromptInput oldWidget) {
+    final oldConfig = oldWidget.config;
+    final newConfig = widget.config;
+    final oldAutocomplete = oldConfig.autocompleteConfig;
+    final newAutocomplete = newConfig.autocompleteConfig;
+
+    return oldConfig.enableAutocomplete != newConfig.enableAutocomplete ||
+        oldAutocomplete.maxSuggestions != newAutocomplete.maxSuggestions ||
+        oldAutocomplete.showTranslation != newAutocomplete.showTranslation ||
+        oldAutocomplete.showCategory != newAutocomplete.showCategory ||
+        oldAutocomplete.showCount != newAutocomplete.showCount ||
+        oldAutocomplete.enableChineseSearch !=
+            newAutocomplete.enableChineseSearch ||
+        oldAutocomplete.debounceDelay != newAutocomplete.debounceDelay ||
+        oldAutocomplete.minQueryLength != newAutocomplete.minQueryLength ||
+        oldAutocomplete.autoInsertComma != newAutocomplete.autoInsertComma ||
+        oldAutocomplete.replaceUnderscoreWithSpace !=
+            newAutocomplete.replaceUnderscoreWithSpace;
+  }
+
   @override
   void initState() {
     super.initState();
-    final providedSessionId = widget.sessionId?.trim();
-    _sessionId = (providedSessionId != null && providedSessionId.isNotEmpty)
-        ? providedSessionId
-        : 'prompt_${identityHashCode(this)}';
+    _sessionId = _resolveSessionId(widget.sessionId);
 
     // 初始化内部控制器（如果需要）
     if (widget.controller == null) {
@@ -186,11 +243,23 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
 
     // 初始化自动补全策略（延迟到第一次 build 后，因为需要 ref）
     // 策略将在 _ensureAutocompleteStrategy 中惰性创建
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyEvent);
   }
 
   @override
   void didUpdateWidget(UnifiedPromptInput oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    final oldEffectiveFocusNode = oldWidget.focusNode ?? _internalFocusNode!;
+    final newEffectiveFocusNode = widget.focusNode ?? _internalFocusNode!;
+    if (oldEffectiveFocusNode != newEffectiveFocusNode) {
+      oldEffectiveFocusNode.removeListener(_onFocusChanged);
+      newEffectiveFocusNode.addListener(_onFocusChanged);
+    }
+
+    if (widget.sessionId != oldWidget.sessionId) {
+      _sessionId = _resolveSessionId(widget.sessionId);
+    }
 
     // 外部控制器变化
     if (widget.controller != oldWidget.controller) {
@@ -223,11 +292,16 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
         _syntaxController = null;
       }
     }
+
+    if (_shouldResetAutocompleteStrategy(oldWidget)) {
+      _autocompleteStrategyFuture = null;
+    }
   }
 
   @override
   void dispose() {
     _assistantStreamSub?.cancel();
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyEvent);
     _effectiveFocusNode.removeListener(_onFocusChanged);
     widget.controller?.removeListener(_syncFromExternalController);
     _internalController?.dispose();
@@ -275,8 +349,9 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
           final nextText = buffer.toString();
           if (nextText.isNotEmpty) {
             _effectiveController.text = nextText;
-            _effectiveController.selection =
-                TextSelection.collapsed(offset: _effectiveController.text.length);
+            _effectiveController.selection = TextSelection.collapsed(
+              offset: _effectiveController.text.length,
+            );
           }
         }
       },
@@ -462,7 +537,6 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
 
   @override
   Widget build(BuildContext context) {
-    final assistantConfig = ref.watch(promptAssistantConfigProvider);
     Widget result = _buildTextField();
 
     // 如果启用 ComfyUI 导入，包装 ComfyuiImportWrapper
@@ -475,39 +549,17 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       );
     }
 
-    return Focus(
-      onKeyEvent: (node, event) {
-        if (!_isDesktop ||
-            event is! KeyDownEvent ||
-            !widget.enableAssistant ||
-            !assistantConfig.enabled ||
-            !assistantConfig.desktopOverlayEnabled) {
-          return KeyEventResult.ignored;
-        }
-        final isCtrl = HardwareKeyboard.instance.isControlPressed;
-        final isShift = HardwareKeyboard.instance.isShiftPressed;
-        if (isCtrl && isShift && event.logicalKey == LogicalKeyboardKey.keyE) {
-          unawaited(_runAssistantAction(AssistantTaskType.llm));
-          return KeyEventResult.handled;
-        }
-        if (isCtrl && isShift && event.logicalKey == LogicalKeyboardKey.keyT) {
-          unawaited(_runAssistantAction(AssistantTaskType.translate));
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          result,
-          if (widget.enableAssistant)
-            PromptAssistantOverlay(
-              sessionId: _sessionId,
-              controller: _effectiveController,
-              onOpenSettings: widget.onOpenAssistantSettings,
-            ),
-        ],
-      ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        result,
+        if (widget.enableAssistant)
+          PromptAssistantOverlay(
+            sessionId: _sessionId,
+            controller: _effectiveController,
+            onOpenSettings: widget.onOpenAssistantSettings,
+          ),
+      ],
     );
   }
 
@@ -559,6 +611,16 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       expands: widget.expands,
       textAlignVertical: widget.expands ? TextAlignVertical.top : null,
       readOnly: widget.config.readOnly,
+      inputFormatters: widget.config.readOnly
+          ? null
+          : [
+              TextInputFormatter.withFunction((oldValue, newValue) {
+                return TextSelectionUtils.wrapSelectionOnBracketReplacement(
+                  oldValue,
+                  newValue,
+                );
+              }),
+            ],
       onChanged: widget.config.enableAutocomplete ? null : _handleTextChanged,
       onSubmitted: widget.onSubmitted,
       showClearButton: widget.config.showClearButton,

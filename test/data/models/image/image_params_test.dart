@@ -189,4 +189,21 @@ void main() {
       expect(params2.hasPreciseReferences, isFalse);
     });
   });
+
+  group('ImageParams inpaint defaults', () {
+    test('inpaintStrength should default to 1.0', () {
+      const params = ImageParams();
+
+      expect(params.inpaintStrength, equals(1.0));
+      expect(params.inpaintMaskClosingIterations, equals(0));
+      expect(params.inpaintMaskExpansionIterations, equals(0));
+    });
+
+    test('copyWith should allow overriding inpaintStrength', () {
+      const params = ImageParams();
+      final updated = params.copyWith(inpaintStrength: 0.35);
+
+      expect(updated.inpaintStrength, equals(0.35));
+    });
+  });
 }

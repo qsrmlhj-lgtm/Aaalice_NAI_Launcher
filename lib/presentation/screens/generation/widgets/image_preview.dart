@@ -16,9 +16,11 @@ import '../../../../data/services/alias_resolver_service.dart';
 import '../../../../data/services/image_metadata_service.dart';
 import '../../../providers/character_panel_dock_provider.dart';
 import '../../../providers/character_prompt_provider.dart';
+import '../../../providers/fixed_tags_provider.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../providers/local_gallery_provider.dart';
 import '../../../providers/tag_library_page_provider.dart';
+import '../../../services/image_workflow_launcher.dart';
 import '../../../widgets/character/character_card_grid.dart';
 import '../../../widgets/character/character_edit_dialog.dart';
 import '../../../widgets/common/app_toast.dart';
@@ -27,6 +29,7 @@ import '../../../widgets/common/image_detail/image_detail_data.dart';
 import '../../../widgets/common/image_detail/image_detail_viewer.dart';
 import '../../../widgets/common/selectable_image_card.dart';
 import '../../../widgets/common/themed_switch.dart';
+import '../../../widgets/image_editor/image_editor_screen.dart';
 import '../../../utils/image_detail_opener.dart';
 import '../../tag_library_page/widgets/entry_add_dialog.dart';
 import '../../../widgets/tag_library/tag_library_picker_dialog.dart';
@@ -197,6 +200,22 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
               showIndex: true,
               enableSelection: false,
               onTap: () => _showFullscreenImage(imageBytes),
+              onEditImage: () => ImageWorkflowLauncher.openEditor(
+                context,
+                ref,
+                imageBytes,
+                mode: ImageEditorMode.edit,
+              ),
+              onGenerateVariations: () =>
+                  ImageWorkflowLauncher.prepareVariations(
+                context,
+                ref,
+                imageBytes,
+              ),
+              onDirectorTools: () =>
+                  ImageWorkflowLauncher.openDirectorTools(ref, imageBytes),
+              onEnhance: () =>
+                  ImageWorkflowLauncher.openEnhance(ref, imageBytes),
               onUpscale: () => UpscaleDialog.show(context, image: imageBytes),
               onSaveToLibrary: (bytes, _) =>
                   _showSaveToLibraryDialog(context, bytes),
@@ -258,6 +277,22 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
               showIndex: true,
               enableSelection: false,
               onTap: () => _showFullscreenImage(imageBytes),
+              onEditImage: () => ImageWorkflowLauncher.openEditor(
+                context,
+                ref,
+                imageBytes,
+                mode: ImageEditorMode.edit,
+              ),
+              onGenerateVariations: () =>
+                  ImageWorkflowLauncher.prepareVariations(
+                context,
+                ref,
+                imageBytes,
+              ),
+              onDirectorTools: () =>
+                  ImageWorkflowLauncher.openDirectorTools(ref, imageBytes),
+              onEnhance: () =>
+                  ImageWorkflowLauncher.openEnhance(ref, imageBytes),
               onUpscale: () => UpscaleDialog.show(context, image: imageBytes),
               onSaveToLibrary: (bytes, _) =>
                   _showSaveToLibraryDialog(context, bytes),
@@ -314,20 +349,20 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
         Icon(
           Icons.image_outlined,
           size: 80,
-          color: theme.colorScheme.onSurface.withOpacity(0.2),
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
         ),
         const SizedBox(height: 16),
         Text(
           context.l10n.generation_emptyPromptHint,
           style: theme.textTheme.bodyLarge?.copyWith(
-            color: theme.colorScheme.onSurface.withOpacity(0.4),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
           ),
         ),
         const SizedBox(height: 8),
         Text(
           context.l10n.generation_imageWillShowHere,
           style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurface.withOpacity(0.3),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
           ),
         ),
       ],
@@ -364,7 +399,7 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             child: Text(
               errorHint,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withOpacity(0.6),
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
               ),
               textAlign: TextAlign.center,
             ),
@@ -463,6 +498,21 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             showIndex: false,
             enableSelection: false,
             onTap: () => _showFullscreenImage(image.bytes),
+            onEditImage: () => ImageWorkflowLauncher.openEditor(
+              context,
+              ref,
+              image.bytes,
+              mode: ImageEditorMode.edit,
+            ),
+            onGenerateVariations: () => ImageWorkflowLauncher.prepareVariations(
+              context,
+              ref,
+              image.bytes,
+            ),
+            onDirectorTools: () =>
+                ImageWorkflowLauncher.openDirectorTools(ref, image.bytes),
+            onEnhance: () =>
+                ImageWorkflowLauncher.openEnhance(ref, image.bytes),
             onUpscale: () => UpscaleDialog.show(context, image: image.bytes),
             onSaveToLibrary: (bytes, _) =>
                 _showSaveToLibraryDialog(context, bytes),
@@ -581,12 +631,16 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
 
       final params = ref.read(generationParamsNotifierProvider);
       final characterConfig = ref.read(characterPromptNotifierProvider);
+      final fixedTagsState = ref.read(fixedTagsNotifierProvider);
+      final qualityToggle = ref.read(qualityTagsSettingsProvider);
+      final ucPreset = ref.read(ucPresetSettingsProvider);
 
       // 解析别名
       final aliasResolver = ref.read(aliasResolverServiceProvider.notifier);
       final resolvedPrompt = aliasResolver.resolveAliases(params.prompt);
       final resolvedNegative =
           aliasResolver.resolveAliases(params.negativePrompt);
+      final promptWithFixedTags = fixedTagsState.applyToPrompt(resolvedPrompt);
 
       // 尝试从图片元数据中提取实际的 seed
       int actualSeed = params.seed;
@@ -623,14 +677,24 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
       }
 
       final paramsForSave = params.copyWith(
-        prompt: resolvedPrompt,
+        prompt: promptWithFixedTags,
         negativePrompt: resolvedNegative,
+        qualityToggle: qualityToggle,
+        ucPreset: ucPreset.index,
       );
       await ImageSaveUtils.saveImageWithMetadata(
         imageBytes: imageBytes,
         filePath: filePath,
         params: paramsForSave,
         actualSeed: actualSeed,
+        fixedPrefixTags: fixedTagsState.enabledPrefixes
+            .map((entry) => entry.weightedContent)
+            .where((content) => content.isNotEmpty)
+            .toList(growable: false),
+        fixedSuffixTags: fixedTagsState.enabledSuffixes
+            .map((entry) => entry.weightedContent)
+            .where((content) => content.isNotEmpty)
+            .toList(growable: false),
         charCaptions: charCaptions,
         charNegCaptions: charNegCaptions,
         useCoords: !characterConfig.globalAiChoice,
@@ -692,7 +756,7 @@ class _DockedCharacterPanel extends ConsumerWidget {
 
     return Container(
       // 使用半透明表面色，让背景微妙透出
-      color: colorScheme.surface.withOpacity(0.95),
+      color: colorScheme.surface.withValues(alpha: 0.95),
       child: Column(
         children: [
           // 标题栏 - 横跨整个宽度
@@ -727,7 +791,7 @@ class _DockedCharacterPanel extends ConsumerWidget {
           Divider(
             height: 1,
             thickness: 0.5,
-            color: colorScheme.outlineVariant.withOpacity(0.15),
+            color: colorScheme.outlineVariant.withValues(alpha: 0.15),
           ),
 
           // 主内容区：左侧竖直按钮栏 + 右侧角色网格
@@ -740,7 +804,8 @@ class _DockedCharacterPanel extends ConsumerWidget {
                   decoration: BoxDecoration(
                     border: Border(
                       right: BorderSide(
-                        color: colorScheme.outlineVariant.withOpacity(0.15),
+                        color:
+                            colorScheme.outlineVariant.withValues(alpha: 0.15),
                       ),
                     ),
                   ),
@@ -775,7 +840,7 @@ class _DockedCharacterPanel extends ConsumerWidget {
           Divider(
             height: 1,
             thickness: 0.5,
-            color: colorScheme.outlineVariant.withOpacity(0.15),
+            color: colorScheme.outlineVariant.withValues(alpha: 0.15),
           ),
 
           // 底部工具栏 - 横跨整个宽度，紧贴边缘
@@ -808,7 +873,8 @@ class _DockedCharacterPanel extends ConsumerWidget {
                       child: Icon(
                         Icons.info_outline,
                         size: 16,
-                        color: colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        color:
+                            colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -993,8 +1059,8 @@ class _VerticalGenderButtonState extends State<_VerticalGenderButton> {
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
           decoration: BoxDecoration(
             color: _isHovered
-                ? widget.color.withOpacity(0.18)
-                : widget.color.withOpacity(0.08),
+                ? widget.color.withValues(alpha: 0.18)
+                : widget.color.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -1054,8 +1120,8 @@ class _VerticalLibraryButtonState extends State<_VerticalLibraryButton> {
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
           decoration: BoxDecoration(
             color: _isHovered
-                ? accentColor.withOpacity(0.18)
-                : accentColor.withOpacity(0.08),
+                ? accentColor.withValues(alpha: 0.18)
+                : accentColor.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -1106,10 +1172,10 @@ class _UndockButton extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: colorScheme.primary.withOpacity(0.6),
+              color: colorScheme.primary.withValues(alpha: 0.6),
               width: 1,
             ),
-            color: colorScheme.primary.withOpacity(0.12),
+            color: colorScheme.primary.withValues(alpha: 0.12),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,

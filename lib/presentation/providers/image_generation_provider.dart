@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/utils/app_logger.dart';
@@ -27,6 +28,7 @@ import 'subscription_provider.dart';
 import 'generation/generation_models.dart';
 import 'generation/generation_params_notifier.dart';
 import 'generation/generation_settings_notifiers.dart';
+import 'generation/image_workflow_controller.dart';
 
 export 'generation/generation_models.dart';
 export 'generation/generation_params_notifier.dart';
@@ -310,10 +312,66 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     ImageParams params,
   ) async {
     final saveSettings = ref.read(imageSaveSettingsNotifierProvider);
-    if (!saveSettings.autoSave) return;
+    await _saveImagesToGallery(
+      images,
+      params,
+      saveImages: saveSettings.autoSave,
+    );
+  }
+
+  /// 将外部结果登记到历史记录，并可选地直接保存到本地图库
+  Future<void> registerExternalImage(
+    Uint8List imageBytes, {
+    required ImageParams params,
+    int? width,
+    int? height,
+    bool saveToLocal = false,
+    String? saveDirectoryPath,
+    bool syncToGalleryIndex = true,
+  }) async {
+    final resolvedSize = _resolveImageSize(
+          imageBytes,
+          width: width,
+          height: height,
+        ) ??
+        (params.width, params.height);
+
+    final generatedImage = GeneratedImage.create(
+      imageBytes,
+      width: resolvedSize.$1,
+      height: resolvedSize.$2,
+    );
+
+    state = state.copyWith(
+      history: [generatedImage, ...state.history].take(50).toList(),
+    );
+
+    if (saveToLocal) {
+      await _saveImagesToGallery(
+        [generatedImage],
+        params,
+        saveImages: true,
+        saveDirectoryPath: saveDirectoryPath,
+        syncToGalleryIndex: syncToGalleryIndex,
+      );
+      return;
+    }
+
+    _preloadMetadataInBackground([generatedImage]);
+  }
+
+  Future<void> _saveImagesToGallery(
+    List<GeneratedImage> images,
+    ImageParams params, {
+    required bool saveImages,
+    String? saveDirectoryPath,
+    bool syncToGalleryIndex = true,
+  }) async {
+    if (!saveImages) return;
 
     try {
-      final saveDirPath = await GalleryFolderRepository.instance.getRootPath();
+      final saveDirPath = saveDirectoryPath ??
+          await GalleryFolderRepository.instance.getRootPath();
       if (saveDirPath == null) return;
       final saveDir = Directory(saveDirPath);
       if (!await saveDir.exists()) {
@@ -362,6 +420,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
 
       int savedCount = 0;
       final savedFilePaths = <String>[];
+      final savedImages = <GeneratedImage>[];
 
       for (final image in images) {
         try {
@@ -404,6 +463,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           // 更新 filePath 到 GeneratedImage
           final updatedImage = image.copyWithFilePath(filePath);
           _updateImageInState(image.id, updatedImage);
+          savedImages.add(updatedImage);
 
           // 避免文件名冲突
           await Future.delayed(const Duration(milliseconds: 2));
@@ -413,23 +473,26 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
       }
 
       if (savedCount > 0) {
-        // 【优化】使用即时添加新图像，避免全量扫描延迟
-        final galleryNotifier = ref.read(localGalleryNotifierProvider.notifier);
-        final addedCount =
-            await galleryNotifier.addNewlySavedImages(savedFilePaths);
+        if (syncToGalleryIndex) {
+          // 【优化】使用即时添加新图像，避免全量扫描延迟
+          final galleryNotifier =
+              ref.read(localGalleryNotifierProvider.notifier);
+          final addedCount =
+              await galleryNotifier.addNewlySavedImages(savedFilePaths);
 
-        // 如果即时添加失败或数量不匹配，回退到传统刷新方式
-        if (addedCount < savedCount) {
-          AppLogger.w(
-            '[AutoSave] Immediate add returned $addedCount, expected $savedCount. Falling back to refresh.',
-            'AutoSave',
-          );
-          await galleryNotifier.refresh();
-        } else {
-          AppLogger.i(
-            '[AutoSave] Added $addedCount new images immediately without full scan',
-            'AutoSave',
-          );
+          // 如果即时添加失败或数量不匹配，回退到传统刷新方式
+          if (addedCount < savedCount) {
+            AppLogger.w(
+              '[AutoSave] Immediate add returned $addedCount, expected $savedCount. Falling back to refresh.',
+              'AutoSave',
+            );
+            await galleryNotifier.refresh();
+          } else {
+            AppLogger.i(
+              '[AutoSave] Added $addedCount new images immediately without full scan',
+              'AutoSave',
+            );
+          }
         }
 
         // 增量更新统计缓存，避免下次启动时完全重新计算
@@ -440,9 +503,6 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           AppLogger.w('统计缓存增量更新失败: $e', 'AutoSave');
         }
 
-        // 获取已保存的图像（有 filePath 的）并预加载元数据
-        final savedImages =
-            images.where((img) => img.filePath != null).toList();
         if (savedImages.isNotEmpty) {
           _preloadMetadataInBackground(savedImages);
         }
@@ -472,10 +532,17 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     ImageParams params,
   ) async {
     final apiService = ref.read(naiImageGenerationApiServiceProvider);
+    final workflow = ref.read(imageWorkflowControllerProvider);
 
     for (int retry = 0; retry <= _maxRetries; retry++) {
       try {
-        return await apiService.generateImage(params, onProgress: (_, __) {});
+        return await apiService.generateImage(
+          params,
+          onProgress: (_, __) {},
+          focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+          minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+          focusedSelectionRect: workflow.focusedSelectionRect,
+        );
       } catch (e) {
         if (_isCancelledError(e)) rethrow;
 
@@ -528,6 +595,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     int total,
   ) async {
     final apiService = ref.read(naiImageGenerationApiServiceProvider);
+    final workflow = ref.read(imageWorkflowControllerProvider);
     final batchSize = params.nSamples;
     final images = <Uint8List>[];
     bool useNonStreamFallback = false; // 记录是否需要回退到非流式
@@ -550,15 +618,20 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
         nSamples: 1,
         seed: params.seed == -1 ? -1 : params.seed + i,
       );
+      final useFocusedNonStream = workflow.focusedInpaintEnabled &&
+          singleParams.action == ImageGenerationAction.infill;
 
       Uint8List? image;
       for (int retry = 0; retry <= _maxRetries; retry++) {
         try {
           // 使用非流式回退
-          if (useNonStreamFallback) {
+          if (useNonStreamFallback || useFocusedNonStream) {
             final fallback = await apiService.generateImageCancellable(
               singleParams,
               onProgress: (_, __) {},
+              focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+              minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+              focusedSelectionRect: workflow.focusedSelectionRect,
             );
             if (fallback.isNotEmpty) {
               images.add(fallback.first);
@@ -569,8 +642,12 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
 
           // 尝试流式生成
           var streamingNotAllowed = false;
-          await for (final chunk
-              in apiService.generateImageStream(singleParams)) {
+          await for (final chunk in apiService.generateImageStream(
+            singleParams,
+            focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+            minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+            focusedSelectionRect: workflow.focusedSelectionRect,
+          )) {
             if (_isCancelled) return images;
 
             if (chunk.hasError) {
@@ -603,6 +680,9 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
             final fallback = await apiService.generateImageCancellable(
               singleParams,
               onProgress: (_, __) {},
+              focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+              minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+              focusedSelectionRect: workflow.focusedSelectionRect,
             );
             if (fallback.isNotEmpty) {
               images.add(fallback.first);
@@ -620,6 +700,9 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           final fallback = await apiService.generateImageCancellable(
             singleParams,
             onProgress: (_, __) {},
+            focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+            minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+            focusedSelectionRect: workflow.focusedSelectionRect,
           );
           if (fallback.isNotEmpty) {
             images.add(fallback.first);
@@ -638,6 +721,9 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
               final fallback = await apiService.generateImageCancellable(
                 singleParams,
                 onProgress: (_, __) {},
+                focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+                minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+                focusedSelectionRect: workflow.focusedSelectionRect,
               );
               if (fallback.isNotEmpty) images.add(fallback.first);
             } catch (fallbackError) {
@@ -678,7 +764,65 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
 
     try {
       final apiService = ref.read(naiImageGenerationApiServiceProvider);
-      final stream = apiService.generateImageStream(params);
+      final workflow = ref.read(imageWorkflowControllerProvider);
+      final useFocusedNonStream = workflow.focusedInpaintEnabled &&
+          params.action == ImageGenerationAction.infill;
+
+      if (useFocusedNonStream) {
+        final (imageBytes, vibeEncodings) = await _generateWithRetry(params);
+
+        if (_isCancelled) {
+          state = state.copyWith(
+            status: GenerationStatus.cancelled,
+            progress: 0.0,
+            currentImage: 0,
+            totalImages: 0,
+            clearStreamPreview: true,
+          );
+          return;
+        }
+
+        if (imageBytes.isEmpty) {
+          throw Exception('No images returned from focused inpaint request');
+        }
+
+        final generatedList = imageBytes
+            .map(
+              (bytes) => GeneratedImage.create(
+                bytes,
+                width: params.width,
+                height: params.height,
+              ),
+            )
+            .toList();
+
+        if (vibeEncodings.isNotEmpty) {
+          _saveVibeEncodings(vibeEncodings);
+        }
+
+        state = state.copyWith(
+          status: GenerationStatus.completed,
+          progress: 1.0,
+          currentImage: 0,
+          totalImages: 0,
+          currentImages: generatedList,
+          displayImages: generatedList,
+          displayWidth: params.width,
+          displayHeight: params.height,
+          history: [...generatedList, ...state.history].take(50).toList(),
+          clearStreamPreview: true,
+        );
+        await _autoSaveIfEnabled(generatedList, params);
+        _preloadMetadataInBackground(generatedList);
+        return;
+      }
+
+      final stream = apiService.generateImageStream(
+        params,
+        focusedInpaintEnabled: workflow.focusedInpaintEnabled,
+        minimumContextMegaPixels: workflow.minimumContextMegaPixels,
+        focusedSelectionRect: workflow.focusedSelectionRect,
+      );
 
       Uint8List? finalImage;
       bool streamingNotAllowed = false;
@@ -1112,5 +1256,22 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           'processing=${status['processingCount']}, isProcessing=${status['isProcessing']}',
       'MetadataPreload',
     );
+  }
+
+  (int, int)? _resolveImageSize(
+    Uint8List imageBytes, {
+    int? width,
+    int? height,
+  }) {
+    if (width != null && height != null) {
+      return (width, height);
+    }
+
+    final decoded = img.decodeImage(imageBytes);
+    if (decoded == null) {
+      return null;
+    }
+
+    return (decoded.width, decoded.height);
   }
 }

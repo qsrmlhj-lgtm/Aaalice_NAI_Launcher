@@ -15,6 +15,7 @@ import '../../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../../data/models/vibe/vibe_reference.dart';
 import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../providers/image_generation_provider.dart';
+import '../../../providers/vibe_library_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../../widgets/common/collapsible_image_panel.dart';
 import 'vibe_transfer_content.dart';
@@ -55,6 +56,22 @@ class _UnifiedReferencePanelState extends ConsumerState<UnifiedReferencePanel> {
     _loadRecentEntries();
     _loadRecentCollapsedState();
     _restoreGenerationState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_warmUpVibeLibraryCache());
+    });
+  }
+
+  Future<void> _warmUpVibeLibraryCache() async {
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+
+    final state = ref.read(vibeLibraryNotifierProvider);
+    if (state.entries.isNotEmpty || state.isInitializing || state.isLoading) {
+      return;
+    }
+
+    await ref.read(vibeLibraryNotifierProvider.notifier).loadFromCache();
   }
 
   /// 加载最近使用区域的折叠状态
@@ -102,9 +119,17 @@ class _UnifiedReferencePanelState extends ConsumerState<UnifiedReferencePanel> {
 
   /// 加载最近使用的条目
   Future<void> _loadRecentEntries() async {
-    final storageService = ref.read(vibeLibraryStorageServiceProvider);
     try {
-      final entries = await storageService.getRecentEntries(limit: 20);
+      final cachedEntries = ref.read(vibeLibraryNotifierProvider).entries;
+      final entries = cachedEntries.isNotEmpty
+          ? ([
+              ...cachedEntries.where((entry) => entry.lastUsedAt != null),
+            ]..sort((a, b) => b.lastUsedAt!.compareTo(a.lastUsedAt!)))
+              .take(20)
+              .toList()
+          : await ref
+              .read(vibeLibraryStorageServiceProvider)
+              .getRecentEntries(limit: 20);
       final uniqueEntries = entries.deduplicateByEncodingAndThumbnail(limit: 5);
 
       if (mounted) {
@@ -166,7 +191,9 @@ class _UnifiedReferencePanelState extends ConsumerState<UnifiedReferencePanel> {
 
     if (mounted) {
       AppToast.success(
-          context, '${entry.displayName} ${context.l10n.common_added}',);
+        context,
+        '${entry.displayName} ${context.l10n.common_added}',
+      );
     }
   }
 
