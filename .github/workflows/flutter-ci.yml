@@ -11,7 +11,8 @@ permissions:
   contents: write
 
 jobs:
-  build-and-deploy:
+  # ========== 原有的 Android + Web 构建 (ubuntu) ==========
+  build-android-web:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,22 +25,21 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17' # 较新的 Flutter (AGP 8.0+) 推荐使用 Java 17
+          java-version: '17'
 
       # 3. 设置 Flutter 环境
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable' # 使用稳定版 Flutter
-          # flutter-version: '3.27.0' # 你也可以在这里指定具体的 Flutter 版本
+          channel: 'stable'
 
       # 4. 下载依赖
       - name: Install dependencies
         run: flutter pub get
-        
+
       - name: Run build_runner
         run: dart run build_runner build --delete-conflicting-outputs
-        
+
       # 5. 打包 Android APK
       - name: Build APK
         run: flutter build apk --release
@@ -63,4 +63,36 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
-          # keep_files: false # 默认 false，每次部署会清空旧文件并上传新文件
+
+  # ========== 新增：Windows 桌面应用编译 (Windows runner) ==========
+  build-windows:
+    runs-on: windows-latest    # 必须用 Windows 环境
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run build_runner (if needed)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Build Windows executable
+        run: flutter build windows --release
+
+      # Windows 编译产物位于 build/windows/runner/Release/
+      # 压缩整个文件夹方便下载（可选）
+      - name: Archive Windows build
+        run: Compress-Archive -Path build/windows/runner/Release/* -DestinationPath windows-release.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: windows-release.zip
