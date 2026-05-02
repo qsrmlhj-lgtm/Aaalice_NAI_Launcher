@@ -9,13 +9,13 @@ permissions:
   contents: write
 
 jobs:
-  # ========== Android APK 构建 ==========
   build-android:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 需要完整历史以便后续操作 tag
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -37,19 +37,20 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
-      - name: Upload APK Artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
 
-  # ========== Windows 桌面应用编译 ==========
   build-windows:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -65,12 +66,57 @@ jobs:
       - name: Build Windows executable
         run: flutter build windows --release
 
-      # 压缩发布文件夹（注意：路径使用反斜杠，并且不要加通配符 /*）
       - name: Archive Windows build
-        run: Compress-Archive -Path build\windows\runner\Release -DestinationPath windows-release.zip
+        run: Compress-Archive -Path build\windows\x64\runner\Release -DestinationPath windows-release.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-release
           path: windows-release.zip
+          retention-days: 7
+
+  create-or-update-release:
+    runs-on: ubuntu-latest
+    needs: [build-android, build-windows]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: artifacts/apk
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: artifacts/windows
+
+      - name: Force update 'latest' tag
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
+      - name: Create or update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "最新开发构建 (自动更新)"
+          body: |
+            这是基于 `main` 分支最新代码的自动构建版本。
+            每次推送到 main 分支都会更新此 Release。
+            下载链接中的文件会覆盖之前的版本。
+          files: |
+            artifacts/apk/app-release.apk
+            artifacts/windows/windows-release.zip
+          prerelease: true        # 标记为预发布，避免与正式版混淆
+          draft: false
+          make_latest: true       # 在 GitHub 界面上将此 Release 标记为“最新”
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
