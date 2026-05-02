@@ -17,6 +17,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          lfs: true                      # 启用 Git LFS
+
+      - name: Pull LFS files (ensure actual content)
+        run: git lfs pull
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -53,6 +57,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          lfs: true                      # 启用 Git LFS
+
+      - name: Pull LFS files (ensure actual content)
+        run: git lfs pull
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -88,6 +96,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+          lfs: true                      # 启用 Git LFS（如果需要从 Release 下载 LFS 对象，但不是必须）
+
+      - name: Pull LFS files (optional for this job, but safe)
+        run: git lfs pull
 
       - name: Download APK artifact
         uses: actions/download-artifact@v4
