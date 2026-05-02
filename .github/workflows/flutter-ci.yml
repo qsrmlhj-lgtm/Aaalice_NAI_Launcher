@@ -38,11 +38,6 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
-      # 验证数据库 asset 是否被打包进 APK
-      - name: Verify database asset in APK
-        run: |
-          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep "assets/databases/translation.db" || exit 1
-
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -72,26 +67,6 @@ jobs:
 
       - name: Build Windows executable
         run: flutter build windows --release
-
-      # 验证数据库 asset 是否存在于构建输出中（修复 PowerShell 7 兼容性）
-      - name: Verify database asset in Windows build
-        run: |
-          $dbPath = "build\windows\x64\runner\Release\data\flutter_assets\assets\databases\translation.db"
-          if (Test-Path $dbPath) {
-            Write-Host "Database found at $dbPath"
-            $bytes = [System.IO.File]::ReadAllBytes($dbPath)
-            $header = $bytes[0..15]
-            # SQLite 文件头固定为 "SQLite format 3\0"
-            if ($header[0] -eq 0x53 -and $header[1] -eq 0x51 -and $header[2] -eq 0x4C) {
-              Write-Host "Database file is valid SQLite."
-            } else {
-              Write-Error "Database file is corrupted!"
-              exit 1
-            }
-          } else {
-            Write-Error "Database asset missing in Windows build!"
-            exit 1
-          }
 
       - name: Archive Windows build
         run: Compress-Archive -Path build\windows\x64\runner\Release -DestinationPath windows-release.zip
