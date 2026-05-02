@@ -9,13 +9,14 @@ permissions:
   contents: write
 
 jobs:
+  # ==================== Android APK 构建 ====================
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # 需要完整历史以便后续操作 tag
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -31,11 +32,16 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run build_runner
+      - name: Run build_runner (optional)
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Build APK
         run: flutter build apk --release
+
+      # 验证数据库 asset 是否被打包进 APK
+      - name: Verify database asset in APK
+        run: |
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep "assets/databases/translation.db" || exit 1
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -44,10 +50,11 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 7
 
+  # ==================== Windows 桌面应用构建 ====================
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -60,11 +67,30 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run build_runner
+      - name: Run build_runner (optional)
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Build Windows executable
         run: flutter build windows --release
+
+      # 验证数据库 asset 是否存在于构建输出中
+      - name: Verify database asset in Windows build
+        run: |
+          $dbPath = "build\windows\x64\runner\Release\data\flutter_assets\assets\databases\translation.db"
+          if (Test-Path $dbPath) {
+            Write-Host "Database found at $dbPath"
+            $header = Get-Content -Path $dbPath -Encoding Byte -TotalCount 16
+            # SQLite 文件头应为 "SQLite format 3\0"
+            if ($header[0] -eq 0x53 -and $header[1] -eq 0x51 -and $header[2] -eq 0x4C) {
+              Write-Host "Database file is valid SQLite."
+            } else {
+              Write-Error "Database file is corrupted!"
+              exit 1
+            }
+          } else {
+            Write-Error "Database asset missing in Windows build!"
+            exit 1
+          }
 
       - name: Archive Windows build
         run: Compress-Archive -Path build\windows\x64\runner\Release -DestinationPath windows-release.zip
@@ -76,11 +102,12 @@ jobs:
           path: windows-release.zip
           retention-days: 7
 
+  # ==================== 创建或更新 GitHub Release ====================
   create-or-update-release:
     runs-on: ubuntu-latest
     needs: [build-android, build-windows]
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -100,6 +127,8 @@ jobs:
 
       - name: Force update 'latest' tag
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -f latest
           git push -f origin latest
 
@@ -107,16 +136,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "最新开发构建 (自动更新)"
+          name: "最新开发版 (自动构建)"
           body: |
-            这是基于 `main` 分支最新代码的自动构建版本。
-            每次推送到 main 分支都会更新此 Release。
-            下载链接中的文件会覆盖之前的版本。
+            这是基于 `main` 分支最新代码自动构建的版本。
+            每次推送至 main 分支都会更新此 Release。
           files: |
             artifacts/apk/app-release.apk
             artifacts/windows/windows-release.zip
-          prerelease: true        # 标记为预发布，避免与正式版混淆
+          prerelease: true
           draft: false
-          make_latest: true       # 在 GitHub 界面上将此 Release 标记为“最新”
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
