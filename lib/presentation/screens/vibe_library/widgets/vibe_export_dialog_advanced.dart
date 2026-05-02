@@ -140,7 +140,8 @@ class _VibeExportDialogAdvancedState
     }
 
     _carrierImageOptions = options;
-    if (_carrierImageOptions.any((option) => option.id == _selectedCarrierImageId)) {
+    if (_carrierImageOptions
+        .any((option) => option.id == _selectedCarrierImageId)) {
       return;
     }
     _selectedCarrierImageId =
@@ -234,8 +235,10 @@ class _VibeExportDialogAdvancedState
                           const SizedBox(height: 16),
                         ],
 
-                        _buildEmbedIntoImageOption(theme),
-                        const SizedBox(height: 16),
+                        if (widget.entries.length == 1) ...[
+                          _buildEmbedIntoImageOption(theme),
+                          const SizedBox(height: 16),
+                        ],
                         _buildExportEncodingOption(theme),
                       ],
                     ),
@@ -603,10 +606,13 @@ class _VibeExportDialogAdvancedState
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     key: ValueKey<String?>(
-                      _selectedImagePath == null ? _selectedCarrierImageId : null,
+                      _selectedImagePath == null
+                          ? _selectedCarrierImageId
+                          : null,
                     ),
-                    initialValue:
-                        _selectedImagePath == null ? _selectedCarrierImageId : null,
+                    initialValue: _selectedImagePath == null
+                        ? _selectedCarrierImageId
+                        : null,
                     items: _carrierImageOptions
                         .map(
                           (option) => DropdownMenuItem<String>(
@@ -865,15 +871,15 @@ class _VibeExportDialogAdvancedState
       );
     }
 
-    // 嵌入图片需要选择图片
     if (_embedIntoImage && widget.entries.length > 1) {
-      if (VibeExportUtils.buildEmbeddedPngExportPlans(widget.entries).isEmpty) {
-        return const _ValidationResult(
-          isValid: false,
-          errorMessage: '当前选中的 Vibe 都没有可用图片，无法导出 PNG',
-        );
-      }
-    } else if (_embedIntoImage && _currentCarrierImageBytes() == null) {
+      return const _ValidationResult(
+        isValid: false,
+        errorMessage: '批量 Vibe 导出不支持嵌入到 PNG，请在单个 Vibe 导出界面使用',
+      );
+    }
+
+    // 嵌入图片需要选择图片
+    if (_embedIntoImage && _currentCarrierImageBytes() == null) {
       return const _ValidationResult(
         isValid: false,
         errorMessage: '请选择一个 PNG 载体图用于导出',
@@ -1055,6 +1061,16 @@ class _VibeExportDialogAdvancedState
 
     if (selectedIndices.isEmpty) return null;
 
+    final outputDirectory = selectedIndices.length > 1
+        ? await FilePicker.platform.getDirectoryPath(
+            dialogTitle: '选择 Vibe 导出目录',
+          )
+        : null;
+    if (selectedIndices.length > 1 &&
+        (outputDirectory == null || outputDirectory.isEmpty)) {
+      return null;
+    }
+
     final exportedPaths = <String>[];
 
     for (var i = 0; i < selectedIndices.length; i++) {
@@ -1073,6 +1089,7 @@ class _VibeExportDialogAdvancedState
       final path = await VibeExportUtils.exportToNaiv4Vibe(
         vibe,
         name: vibe.displayName,
+        outputDirectory: outputDirectory,
       );
 
       if (path != null) {
@@ -1089,13 +1106,7 @@ class _VibeExportDialogAdvancedState
   Future<String?> _embedIntoImageFile() async {
     if (widget.entries.isEmpty) return null;
     if (widget.entries.length > 1) {
-      final exportedPaths = await VibeExportUtils.exportEntriesToEmbeddedPngDirectory(
-        widget.entries,
-      );
-      if (exportedPaths.isEmpty) {
-        return null;
-      }
-      return exportedPaths.join(',');
+      return null;
     }
 
     final carrierImageBytes = _currentCarrierImageBytes();
@@ -1104,7 +1115,8 @@ class _VibeExportDialogAdvancedState
     }
 
     try {
-      final vibes = widget.entries.map((entry) => entry.toVibeReference()).toList();
+      final vibes =
+          widget.entries.map((entry) => entry.toVibeReference()).toList();
       final fileName = widget.entries.length == 1
           ? '${widget.entries.first.displayName}_vibe.png'
           : 'vibe_bundle_${widget.entries.length}.png';
