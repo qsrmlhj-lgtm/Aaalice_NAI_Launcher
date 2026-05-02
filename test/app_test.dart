@@ -21,6 +21,8 @@ import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_entry.dart';
 import 'package:nai_launcher/data/models/gallery/gallery_statistics.dart';
 import 'package:nai_launcher/data/models/gallery/local_image_record.dart';
 import 'package:nai_launcher/data/models/gallery/nai_image_metadata.dart';
+import 'package:nai_launcher/data/models/vibe/vibe_library_entry.dart';
+import 'package:nai_launcher/data/models/vibe/vibe_reference.dart';
 import 'package:nai_launcher/data/services/local_onnx_tagger_service.dart';
 import 'package:nai_launcher/data/services/statistics_service.dart';
 import 'package:nai_launcher/l10n/app_localizations.dart';
@@ -30,11 +32,15 @@ import 'package:nai_launcher/presentation/providers/local_gallery_provider.dart'
 import 'package:nai_launcher/presentation/providers/selection_mode_provider.dart';
 import 'package:nai_launcher/presentation/providers/share_image_settings_provider.dart';
 import 'package:nai_launcher/presentation/providers/shortcuts_provider.dart';
+import 'package:nai_launcher/presentation/providers/tag_library_page_provider.dart';
 import 'package:nai_launcher/presentation/prompt_assistant/models/prompt_assistant_models.dart';
 import 'package:nai_launcher/presentation/prompt_assistant/providers/prompt_assistant_history_provider.dart';
 import 'package:nai_launcher/presentation/prompt_assistant/services/prompt_assistant_api_client.dart';
 import 'package:nai_launcher/presentation/prompt_assistant/services/prompt_assistant_service.dart';
 import 'package:nai_launcher/presentation/screens/statistics/widgets/dashboard/aspect_ratio_card.dart';
+import 'package:nai_launcher/presentation/screens/tag_library_page/widgets/tag_library_toolbar.dart';
+import 'package:nai_launcher/presentation/screens/vibe_library/widgets/vibe_export_dialog.dart';
+import 'package:nai_launcher/presentation/screens/vibe_library/widgets/vibe_export_dialog_advanced.dart';
 import 'package:nai_launcher/presentation/utils/dropped_file_reader.dart';
 import 'package:nai_launcher/presentation/widgets/gallery/local_gallery_toolbar.dart';
 import 'package:nai_launcher/presentation/widgets/shortcuts/shortcut_aware_widget.dart';
@@ -177,6 +183,87 @@ void main() {
         container.read(localGallerySelectionNotifierProvider).isActive,
         isFalse,
       );
+    });
+
+    testWidgets('词库工具栏重建时搜索框应显示当前搜索条件', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            tagLibraryPageNotifierProvider.overrideWith(
+              _FakeTagLibraryPageNotifier.new,
+            ),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: const Scaffold(
+              body: TagLibraryToolbar(),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      final editable = tester.widget<EditableText>(find.byType(EditableText));
+      expect(editable.controller.text, 'rabbit');
+    });
+
+    testWidgets('批量 Vibe 导出不显示嵌入 PNG 入口', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: VibeExportDialogAdvanced(
+                entries: [
+                  _buildVibeEntry(id: 'first', displayName: 'First'),
+                  _buildVibeEntry(id: 'second', displayName: 'Second'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('Export as PNG'), findsNothing);
+    });
+
+    testWidgets('单个 Vibe 导出显示嵌入 PNG 入口', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: VibeExportDialog(
+                entries: [
+                  _buildVibeEntry(id: 'single', displayName: 'Single'),
+                ],
+                categories: const [],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('嵌入到 PNG'), findsOneWidget);
+
+      await tester.tap(find.text('嵌入到 PNG'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('选择外部 PNG 图片...'), findsOneWidget);
     });
   });
 
@@ -1134,4 +1221,27 @@ class _FakeLocalGalleryNotifier extends LocalGalleryNotifier {
 class _FakeShortcutConfigNotifier extends ShortcutConfigNotifier {
   @override
   Future<ShortcutConfig> build() async => ShortcutConfig.createDefault();
+}
+
+class _FakeTagLibraryPageNotifier extends TagLibraryPageNotifier {
+  @override
+  TagLibraryPageState build() => const TagLibraryPageState(
+        searchQuery: 'rabbit',
+      );
+}
+
+VibeLibraryEntry _buildVibeEntry({
+  required String id,
+  required String displayName,
+}) {
+  return VibeLibraryEntry(
+    id: id,
+    name: displayName,
+    vibeDisplayName: displayName,
+    vibeEncoding: 'ZW5jb2RlZA==',
+    strength: 0.6,
+    infoExtracted: 0.7,
+    sourceTypeIndex: VibeSourceType.naiv4vibe.index,
+    createdAt: DateTime(2026, 5, 2),
+  );
 }

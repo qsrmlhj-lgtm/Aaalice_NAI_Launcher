@@ -55,6 +55,14 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
   final FocusNode _searchFocusNode = FocusNode();
 
   @override
+  void initState() {
+    super.initState();
+    _syncSearchController(
+      ref.read(tagLibraryPageNotifierProvider).searchQuery,
+    );
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -63,6 +71,11 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<String>(
+      tagLibraryPageNotifierProvider.select((state) => state.searchQuery),
+      (_, next) => _syncSearchController(next),
+    );
+
     final state = ref.watch(tagLibraryPageNotifierProvider);
     final selectionState = ref.watch(tagLibrarySelectionNotifierProvider);
     final theme = Theme.of(context);
@@ -202,6 +215,15 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
     );
   }
 
+  void _syncSearchController(String query) {
+    if (_searchController.text == query) return;
+
+    _searchController.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
+  }
+
   /// 构建搜索框
   Widget _buildSearchField(ThemeData theme, TagLibraryPageState state) {
     return Container(
@@ -336,7 +358,9 @@ class _TagLibraryToolbarState extends ConsumerState<TagLibraryToolbar> {
           ],
           onChanged: (value) {
             if (value != null) {
-              ref.read(tagLibraryPageNotifierProvider.notifier).setSortBy(value);
+              ref
+                  .read(tagLibraryPageNotifierProvider.notifier)
+                  .setSortBy(value);
             }
           },
         ),

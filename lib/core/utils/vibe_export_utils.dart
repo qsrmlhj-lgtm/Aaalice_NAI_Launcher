@@ -194,6 +194,7 @@ class VibeExportUtils {
     VibeReference vibe, {
     String? name,
     String defaultModel = 'nai-diffusion-4-full',
+    String? outputDirectory,
   }) async {
     try {
       // 检查是否有可导出的数据
@@ -207,13 +208,12 @@ class VibeExportUtils {
         return null;
       }
 
-      // 显示保存文件对话框
       final fileName = _generateFileName(name ?? vibe.displayName);
-      final outputFile = await FilePicker.platform.saveFile(
-        dialogTitle: '导出 Vibe 文件',
+      final outputFile = await _resolveOutputFilePath(
+        outputDirectory: outputDirectory,
         fileName: fileName,
-        type: FileType.custom,
-        allowedExtensions: ['naiv4vibe'],
+        dialogTitle: '导出 Vibe 文件',
+        allowedExtensions: const ['naiv4vibe'],
       );
 
       if (outputFile == null) {
@@ -248,21 +248,21 @@ class VibeExportUtils {
   /// 返回：导出成功返回文件路径，失败返回 null
   static Future<String?> exportToNaiv4VibeBundle(
     List<VibeReference> vibes,
-    String bundleName,
-  ) async {
+    String bundleName, {
+    String? outputDirectory,
+  }) async {
     try {
       if (vibes.isEmpty) {
         AppLogger.e('无法导出：Vibe 列表为空', null, null, 'VibeExport');
         return null;
       }
 
-      // 显示保存文件对话框
       final fileName = _generateBundleFileName(bundleName);
-      final outputFile = await FilePicker.platform.saveFile(
-        dialogTitle: '导出 Vibe Bundle',
+      final outputFile = await _resolveOutputFilePath(
+        outputDirectory: outputDirectory,
         fileName: fileName,
-        type: FileType.custom,
-        allowedExtensions: ['naiv4vibebundle'],
+        dialogTitle: '导出 Vibe Bundle',
+        allowedExtensions: const ['naiv4vibebundle'],
       );
 
       if (outputFile == null) {
@@ -311,7 +311,8 @@ class VibeExportUtils {
     } else if (vibe.vibeEncoding.isNotEmpty) {
       // 预编码模式：导出为 encoding 类型
       type = 'encoding';
-      imageBase64 = vibe.thumbnail != null ? base64Encode(vibe.thumbnail!) : null;
+      imageBase64 =
+          vibe.thumbnail != null ? base64Encode(vibe.thumbnail!) : null;
 
       // 构建 encodings 结构
       encodings = {
@@ -324,7 +325,8 @@ class VibeExportUtils {
     } else {
       // 使用缩略图作为图片
       type = 'image';
-      imageBase64 = vibe.thumbnail != null ? base64Encode(vibe.thumbnail!) : null;
+      imageBase64 =
+          vibe.thumbnail != null ? base64Encode(vibe.thumbnail!) : null;
       encodings = {};
     }
 
@@ -472,9 +474,7 @@ class VibeExportUtils {
   /// 生成文件名
   static String _generateFileName(String name) {
     // 清理文件名中的非法字符
-    final sanitized = name
-        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
-        .trim();
+    final sanitized = name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
 
     // 限制长度
     var finalName = sanitized;
@@ -492,9 +492,7 @@ class VibeExportUtils {
 
   /// 生成 bundle 文件名
   static String _generateBundleFileName(String name) {
-    final sanitized = name
-        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
-        .trim();
+    final sanitized = name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
 
     var finalName = sanitized;
     if (finalName.length > 50) {
@@ -509,9 +507,7 @@ class VibeExportUtils {
   }
 
   static String _generateEmbeddedPngFileName(String name) {
-    final sanitized = name
-        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
-        .trim();
+    final sanitized = name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
 
     var finalName = sanitized;
     if (finalName.length > 50) {
@@ -523,6 +519,44 @@ class VibeExportUtils {
     }
 
     return '${finalName}_vibe.png';
+  }
+
+  static Future<String?> _resolveOutputFilePath({
+    required String? outputDirectory,
+    required String fileName,
+    required String dialogTitle,
+    required List<String> allowedExtensions,
+  }) async {
+    final directory = outputDirectory?.trim();
+    if (directory != null && directory.isNotEmpty) {
+      final outputDir = Directory(directory);
+      await outputDir.create(recursive: true);
+      return _createUniqueFilePath(outputDir.path, fileName);
+    }
+
+    return FilePicker.platform.saveFile(
+      dialogTitle: dialogTitle,
+      fileName: fileName,
+      type: FileType.custom,
+      allowedExtensions: allowedExtensions,
+    );
+  }
+
+  static Future<String> _createUniqueFilePath(
+    String directoryPath,
+    String fileName,
+  ) async {
+    final extension = p.extension(fileName);
+    final baseName = p.basenameWithoutExtension(fileName);
+    var candidatePath = p.join(directoryPath, fileName);
+    var index = 1;
+
+    while (await File(candidatePath).exists()) {
+      candidatePath = p.join(directoryPath, '$baseName ($index)$extension');
+      index++;
+    }
+
+    return candidatePath;
   }
 
   /// 验证 .naiv4vibe JSON 格式是否有效

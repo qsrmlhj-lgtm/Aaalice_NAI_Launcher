@@ -25,11 +25,15 @@ class TranslationMatch {
   final String tag;
   final String translation;
   final int score;
+  final int category;
+  final int count;
 
   const TranslationMatch({
     required this.tag,
     required this.translation,
     required this.score,
+    this.category = 0,
+    this.count = 0,
   });
 }
 
@@ -39,11 +43,15 @@ class TranslationMatch {
 /// 使用 LRU 缓存策略，最大缓存 2000 条翻译记录。
 class TranslationDataSource {
   static const int _maxCacheSize = 2000;
-  
+
   final LRUCache<String, String> _cache = LRUCache(maxSize: _maxCacheSize);
-  
+
   Database? _db;
   bool _initialized = false;
+
+  TranslationDataSource({Database? database})
+      : _db = database,
+        _initialized = database != null;
 
   /// 数据源名称
   String get name => 'translation';
@@ -53,18 +61,26 @@ class TranslationDataSource {
   /// 打开预打包的翻译数据库（只读）
   Future<void> initialize() async {
     if (_initialized) return;
-    
+
     AppLogger.i('Initializing TranslationDataSource...', 'TranslationDS');
-    
+
     try {
       _db = await AssetDatabaseManager.instance.openTranslationDatabase();
       _initialized = true;
-      
+
       // 验证数据
       final count = await getCount();
-      AppLogger.i('Translation data source initialized with $count records', 'TranslationDS');
+      AppLogger.i(
+        'Translation data source initialized with $count records',
+        'TranslationDS',
+      );
     } catch (e, stack) {
-      AppLogger.e('Failed to initialize TranslationDataSource', e, stack, 'TranslationDS');
+      AppLogger.e(
+        'Failed to initialize TranslationDataSource',
+        e,
+        stack,
+        'TranslationDS',
+      );
       rethrow;
     }
   }
@@ -105,7 +121,7 @@ class TranslationDataSource {
     // 空列表直接返回空结果，无需初始化
     if (enTags.isEmpty) return {};
     if (!_initialized) await initialize();
-    
+
     final result = <String, String>{};
     final missingTags = <String>[];
 
@@ -156,7 +172,7 @@ class TranslationDataSource {
     if (matchTag) {
       final tagResults = await _db!.rawQuery(
         '''
-        SELECT t.name as tag, tr.translation 
+        SELECT t.name as tag, t.type as category, t.count as count, tr.translation
         FROM tags t 
         LEFT JOIN translations tr ON t.id = tr.tag_id AND tr.language = 'zh'
         WHERE t.name LIKE ? 
@@ -167,18 +183,26 @@ class TranslationDataSource {
       );
 
       for (final row in tagResults) {
-        results.add(TranslationMatch(
-          tag: row['tag'] as String,
-          translation: (row['translation'] ?? '') as String,
-          score: _calculateMatchScore(row['tag'] as String, lowerQuery, isTagMatch: true),
-        ),);
+        results.add(
+          TranslationMatch(
+            tag: row['tag'] as String,
+            translation: (row['translation'] ?? '') as String,
+            score: _calculateMatchScore(
+              row['tag'] as String,
+              lowerQuery,
+              isTagMatch: true,
+            ),
+            category: (row['category'] as num?)?.toInt() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        );
       }
     }
 
     if (matchTranslation) {
       final transResults = await _db!.rawQuery(
         '''
-        SELECT t.name as tag, tr.translation
+        SELECT t.name as tag, t.type as category, t.count as count, tr.translation
         FROM tags t
         JOIN translations tr ON t.id = tr.tag_id
         WHERE tr.language = 'zh' AND tr.translation LIKE ?
@@ -192,17 +216,29 @@ class TranslationDataSource {
         final tag = row['tag'] as String;
         // 避免重复
         if (!results.any((r) => r.tag == tag)) {
-          results.add(TranslationMatch(
-            tag: tag,
-            translation: row['translation'] as String,
-            score: _calculateMatchScore(row['translation'] as String, query, isTagMatch: false),
-          ),);
+          results.add(
+            TranslationMatch(
+              tag: tag,
+              translation: row['translation'] as String,
+              score: _calculateMatchScore(
+                row['translation'] as String,
+                query,
+                isTagMatch: false,
+              ),
+              category: (row['category'] as num?)?.toInt() ?? 0,
+              count: (row['count'] as num?)?.toInt() ?? 0,
+            ),
+          );
         }
       }
     }
 
     // 按相关度排序
-    results.sort((a, b) => b.score.compareTo(a.score));
+    results.sort((a, b) {
+      final scoreCompare = b.score.compareTo(a.score);
+      if (scoreCompare != 0) return scoreCompare;
+      return b.count.compareTo(a.count);
+    });
 
     return results.take(limit).toList();
   }
@@ -210,7 +246,7 @@ class TranslationDataSource {
   /// 获取翻译总数
   Future<int> getCount() async {
     if (!_initialized) await initialize();
-    
+
     final result = await _db!.rawQuery(
       'SELECT COUNT(*) as count FROM translations WHERE language = ?',
       ['zh'],
@@ -221,7 +257,7 @@ class TranslationDataSource {
   /// 获取标签总数
   Future<int> getTagCount() async {
     if (!_initialized) await initialize();
-    
+
     final result = await _db!.rawQuery('SELECT COUNT(*) as count FROM tags');
     return (result.first['count'] as num?)?.toInt() ?? 0;
   }
@@ -327,7 +363,11 @@ class TranslationDataSource {
     };
   }
 
-  int _calculateMatchScore(String text, String query, {required bool isTagMatch}) {
+  int _calculateMatchScore(
+    String text,
+    String query, {
+    required bool isTagMatch,
+  }) {
     final lowerText = text.toLowerCase();
     int score = 0;
 
@@ -352,5 +392,3 @@ class TranslationDataSource {
     return score;
   }
 }
-
-
