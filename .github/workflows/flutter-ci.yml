@@ -141,8 +141,6 @@ jobs:
           body: |
             这是基于 `main` 分支最新代码自动构建的版本。
             每次推送至 main 分支都会更新此 Release。
-            - Android APK 大小约 109 MB（若显示不一致，请以实际下载为准）
-            - Windows 压缩包包含完整运行环境
           files: |
             artifacts/apk/app-release.apk
             artifacts/windows/windows-release.zip
