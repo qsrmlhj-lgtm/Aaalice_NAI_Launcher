@@ -73,14 +73,15 @@ jobs:
       - name: Build Windows executable
         run: flutter build windows --release
 
-      # 验证数据库 asset 是否存在于构建输出中
+      # 验证数据库 asset 是否存在于构建输出中（修复 PowerShell 7 兼容性）
       - name: Verify database asset in Windows build
         run: |
           $dbPath = "build\windows\x64\runner\Release\data\flutter_assets\assets\databases\translation.db"
           if (Test-Path $dbPath) {
             Write-Host "Database found at $dbPath"
-            $header = Get-Content -Path $dbPath -Encoding Byte -TotalCount 16
-            # SQLite 文件头应为 "SQLite format 3\0"
+            $bytes = [System.IO.File]::ReadAllBytes($dbPath)
+            $header = $bytes[0..15]
+            # SQLite 文件头固定为 "SQLite format 3\0"
             if ($header[0] -eq 0x53 -and $header[1] -eq 0x51 -and $header[2] -eq 0x4C) {
               Write-Host "Database file is valid SQLite."
             } else {
@@ -140,6 +141,8 @@ jobs:
           body: |
             这是基于 `main` 分支最新代码自动构建的版本。
             每次推送至 main 分支都会更新此 Release。
+            - Android APK 大小约 109 MB（若显示不一致，请以实际下载为准）
+            - Windows 压缩包包含完整运行环境
           files: |
             artifacts/apk/app-release.apk
             artifacts/windows/windows-release.zip
