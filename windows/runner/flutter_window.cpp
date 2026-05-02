@@ -30,6 +30,10 @@ std::vector<std::string> GetSystemFonts() {
   g_font_names.clear();
 
   HDC hdc = GetDC(NULL);
+  if (hdc == NULL) {
+    return {};
+  }
+
   LOGFONTW lf = {};
   lf.lfCharSet = DEFAULT_CHARSET;
   lf.lfFaceName[0] = L'\0';
@@ -39,12 +43,18 @@ std::vector<std::string> GetSystemFonts() {
 
   std::vector<std::string> result;
   for (const auto& name : g_font_names) {
-    // Convert wstring to UTF-8 string
-    int size = WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, NULL, 0, NULL, NULL);
+    // Convert without the terminating NUL so the destination buffer is exact.
+    int name_length = static_cast<int>(name.length());
+    int size = WideCharToMultiByte(
+        CP_UTF8, 0, name.c_str(), name_length, NULL, 0, NULL, NULL);
     if (size > 0) {
-      std::string utf8_name(size - 1, '\0');
-      WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, &utf8_name[0], size, NULL, NULL);
-      result.push_back(utf8_name);
+      std::string utf8_name(size, '\0');
+      int written = WideCharToMultiByte(
+          CP_UTF8, 0, name.c_str(), name_length, utf8_name.data(), size,
+          NULL, NULL);
+      if (written > 0) {
+        result.push_back(utf8_name);
+      }
     }
   }
 
@@ -134,15 +144,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
     case kWakeUpMessage: {
       // 收到唤醒消息，通知 Flutter 侧显示窗口
-      auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
-          "com.nailauncher/window_control",
-          &flutter::StandardMethodCodec::GetInstance());
-      channel->InvokeMethod("wakeUp", nullptr);
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+            flutter_controller_->engine()->messenger(),
+            "com.nailauncher/window_control",
+            &flutter::StandardMethodCodec::GetInstance());
+        channel->InvokeMethod("wakeUp", nullptr);
+      }
       break;
     }
   }

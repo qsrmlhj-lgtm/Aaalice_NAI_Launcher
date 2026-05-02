@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/utils/app_logger.dart';
+import '../../../../data/models/vibe/vibe_reference.dart';
+import '../../../widgets/common/editable_double_field.dart';
 import '../../../widgets/common/themed_slider.dart';
 
 /// Vibe 图片编码配置
@@ -11,7 +13,7 @@ class VibeImageEncodeConfig {
   /// Vibe 名称
   final String name;
 
-  /// Strength 参数（0.0-1.0）
+  /// Strength 参数（-1.0-1.0）
   final double strength;
 
   /// Info Extracted 参数（0.0-1.0）
@@ -325,6 +327,8 @@ class _VibeImageEncodeDialogState extends State<VibeImageEncodeDialog> {
 
   /// 构建 Strength 滑块
   Widget _buildStrengthSlider(ThemeData theme) {
+    final sliderValue = _strength.clamp(0.0, 1.0).toDouble();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -344,9 +348,14 @@ class _VibeImageEncodeDialogState extends State<VibeImageEncodeDialog> {
                 ),
               ),
             ),
-            Text(
-              _strength.toStringAsFixed(2),
-              style: theme.textTheme.bodyMedium?.copyWith(
+            EditableDoubleField(
+              value: _strength,
+              min: VibeReference.minStrength,
+              max: 1.0,
+              onChanged: (value) {
+                setState(() => _strength = value);
+              },
+              textStyle: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.w600,
               ),
@@ -355,30 +364,13 @@ class _VibeImageEncodeDialogState extends State<VibeImageEncodeDialog> {
         ),
         const SizedBox(height: 8),
         ThemedSlider(
-          value: _strength,
+          value: sliderValue,
           onChanged: (value) {
             setState(() => _strength = value);
           },
           min: 0.0,
           max: 1.0,
-          divisions: 20,
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              '0.0',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-            Text(
-              '1.0',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ],
+          divisions: 40,
         ),
       ],
     );
@@ -405,9 +397,14 @@ class _VibeImageEncodeDialogState extends State<VibeImageEncodeDialog> {
                 ),
               ),
             ),
-            Text(
-              _infoExtracted.toStringAsFixed(2),
-              style: theme.textTheme.bodyMedium?.copyWith(
+            EditableDoubleField(
+              value: _infoExtracted,
+              min: VibeReference.minInfoExtracted,
+              max: 1.0,
+              onChanged: (value) {
+                setState(() => _infoExtracted = value);
+              },
+              textStyle: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.w600,
               ),
@@ -420,26 +417,9 @@ class _VibeImageEncodeDialogState extends State<VibeImageEncodeDialog> {
           onChanged: (value) {
             setState(() => _infoExtracted = value);
           },
-          min: 0.0,
+          min: VibeReference.minInfoExtracted,
           max: 1.0,
           divisions: 20,
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              '0.0',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-            Text(
-              '1.0',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ],
         ),
       ],
     );

@@ -260,6 +260,19 @@ class Layer {
     _bounds = null; // 清除边界缓存
   }
 
+  /// 同步设置基础图像（包含已解码图像和原始字节）
+  ///
+  /// 用于 [ReplaceLayerImageAction] 等需要同步执行的操作。
+  /// 调用者负责确保 [image] 不在其他地方共享/释放。
+  void setBaseImageSync(ui.Image image, Uint8List? bytes) {
+    _baseImage?.dispose();
+    _baseImage = image;
+    _baseImageBytes = bytes;
+    _needsComposite = true;
+    _needsThumbnailUpdate = true;
+    _bounds = null;
+  }
+
   /// 清除基础图像
   void clearBaseImage() {
     _baseImage?.dispose();
@@ -363,14 +376,18 @@ class Layer {
       layerPaint.blendMode = blendMode.toFlutterBlendMode();
     }
 
-    // 检查未光栅化的笔画中是否有橡皮擦
-    // BlendMode.clear 需要在隔离的 layer 中绘制，否则会擦穿到下层
+    // BlendMode.clear 需要在隔离的 saveLayer 中绘制，否则会擦穿到下层。
+    // 当存在 baseImage 时，已光栅化的 eraser 也需要 saveLayer，
+    // 因为 rasterizedImage 是在透明画布上绘制的，clear 对透明像素无效。
     final hasEraserInPending =
         _strokes.skip(_rasterizedStrokeCount).any((s) => s.isEraser);
+    final hasAnyEraser = _strokes.any((s) => s.isEraser);
+    final eraserNeedsSaveLayer =
+        hasEraserInPending || (hasAnyEraser && _baseImage != null);
 
     final needsLayer = opacity < 1.0 ||
         blendMode != LayerBlendMode.normal ||
-        hasEraserInPending;
+        eraserNeedsSaveLayer;
     if (needsLayer) {
       canvas.saveLayer(
         Rect.fromLTWH(0, 0, canvasSize.width, canvasSize.height),
@@ -381,6 +398,13 @@ class Layer {
     // 优先使用合成缓存
     if (_compositedCache != null && !_needsComposite) {
       canvas.drawImage(_compositedCache!, Offset.zero, Paint());
+    } else if (hasAnyEraser && _baseImage != null) {
+      // eraser + baseImage: 必须在 saveLayer 中先绘制 base 再绘制全部笔画，
+      // 这样 BlendMode.clear 才能正确擦除 base 的像素。
+      canvas.drawImage(_baseImage!, Offset.zero, Paint());
+      for (final stroke in _strokes) {
+        _drawStroke(canvas, stroke);
+      }
     } else {
       // 绘制基础图像
       if (_baseImage != null) {
@@ -493,7 +517,7 @@ class Layer {
     final paint = Paint()
       ..color = stroke.isEraser
           ? const Color(0xFFFFFFFF) // 颜色无所谓，clear 模式会忽略
-          : stroke.color.withOpacity(stroke.opacity)
+          : stroke.color.withValues(alpha: stroke.opacity)
       ..strokeWidth = stroke.size
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
@@ -647,14 +671,28 @@ class Layer {
           ..blendMode = BlendMode.src,
       );
 
-      // 绘制基础图像
-      if (_baseImage != null) {
-        canvas.drawImage(_baseImage!, Offset.zero, Paint());
-      }
+      final hasAnyEraser = _strokes.any((s) => s.isEraser);
 
-      // 绘制光栅化的笔画
-      if (_rasterizedImage != null) {
-        canvas.drawImage(_rasterizedImage!, Offset.zero, Paint());
+      if (hasAnyEraser && _baseImage != null) {
+        // eraser + baseImage: saveLayer 内先绘制 base 再绘制全部笔画
+        canvas.saveLayer(
+          Rect.fromLTWH(
+            0, 0, canvasSize.width.toDouble(), canvasSize.height.toDouble(),
+          ),
+          Paint(),
+        );
+        canvas.drawImage(_baseImage!, Offset.zero, Paint());
+        for (final stroke in _strokes) {
+          _drawStroke(canvas, stroke);
+        }
+        canvas.restore();
+      } else {
+        if (_baseImage != null) {
+          canvas.drawImage(_baseImage!, Offset.zero, Paint());
+        }
+        if (_rasterizedImage != null) {
+          canvas.drawImage(_rasterizedImage!, Offset.zero, Paint());
+        }
       }
 
       final picture = recorder.endRecording();

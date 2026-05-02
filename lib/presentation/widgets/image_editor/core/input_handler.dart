@@ -145,17 +145,18 @@ class InputHandler {
       return KeyEventResult.handled;
     }
 
-    // Alt 键 - 临时切换到拾色器
+    // Alt 键 - 临时切换到拾色器（当前工具自行处理 Alt 时跳过）
     if (event.logicalKey == LogicalKeyboardKey.altLeft ||
         event.logicalKey == LogicalKeyboardKey.altRight) {
-      // 仅处理 DOWN 和 UP 事件，忽略 REPEAT 事件
+      final currentTool = state.currentTool;
+      if (currentTool != null && currentTool.handlesAltKey) {
+        return KeyEventResult.handled;
+      }
       if (isDown) {
         state.enterTemporaryColorPicker();
       } else if (isUp && !keyboard.isAltPressed) {
         state.exitTemporaryColorPicker();
       }
-      // 不调用 onStateChanged() - toolNotifier 已自动更新 UI
-      // 避免 setState 打断事件流（如滚轮）
       return KeyEventResult.handled;
     }
 

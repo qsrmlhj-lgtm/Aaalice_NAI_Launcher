@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -10,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/enums/precise_ref_type.dart';
 import '../../../core/storage/local_storage_service.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../core/utils/vibe_performance_diagnostics.dart';
 import '../../../data/datasources/remote/nai_image_enhancement_api_service.dart';
 import '../../../data/models/image/image_params.dart';
 import '../../../data/models/vibe/vibe_library_entry.dart';
@@ -32,8 +34,11 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   List<VibeLibraryEntry> _recentVibes = [];
 
   Timer? _generationStateSaveDebounceTimer;
+  Future<void>? _generationStateSaveInFlight;
+  bool _hasQueuedGenerationStateSave = false;
   bool _isRestoringGenerationState = false;
   bool _hasRestoredGenerationState = false;
+  bool _isDisposed = false;
 
   /// 获取最近使用的 Vibes (最多 5 个用于显示)
   List<VibeLibraryEntry> get recentVibes => _recentVibes.take(5).toList();
@@ -58,66 +63,48 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     );
   }
 
-  Uint8List? _decodeBase64Safely(String? value) {
-    if (value == null || value.isEmpty) {
-      return null;
-    }
-
-    try {
-      return base64Decode(value);
-    } catch (e) {
-      AppLogger.w(
-        'Failed to decode base64 field in generation state: $e',
-        'GenerationParams',
-      );
-      return null;
-    }
-  }
-
   /// 加载最近使用的 Vibes
   Future<void> loadRecentVibes() async {
+    final span = VibePerformanceDiagnostics.start(
+      'generation.loadRecentVibes',
+    );
+    var entryCount = 0;
     try {
       final storageService = ref.read(vibeLibraryStorageServiceProvider);
-      final entries = await storageService.getRecentEntries(limit: 20);
+      final entries = await storageService.getRecentDisplayEntries(limit: 20);
+      entryCount = entries.length;
       _recentVibes = entries;
       // 通知监听器更新
       state = state.copyWith();
     } catch (e, stackTrace) {
       AppLogger.e('Failed to load recent vibes', e, stackTrace);
+    } finally {
+      span.finish(
+        details: {
+          'entries': entryCount,
+        },
+      );
     }
   }
 
   /// 记录 Vibe 使用并更新最近列表
   Future<void> _recordVibeUsage(VibeReference vibe) async {
+    final span = VibePerformanceDiagnostics.start(
+      'generation.recordVibeUsage',
+      details: {
+        'hasEncoding': vibe.vibeEncoding.isNotEmpty,
+        'hasThumbnail': vibe.thumbnail?.isNotEmpty == true,
+        'hasRawImage': vibe.rawImageData?.isNotEmpty == true,
+      },
+    );
+    var matchedExisting = false;
+    var createdEntry = false;
     try {
       final storageService = ref.read(vibeLibraryStorageServiceProvider);
-
-      // 使用全量条目查重，避免最近列表未刷新导致重复写入
-      final allEntries = await storageService.getAllEntries();
-      VibeLibraryEntry? existingEntry;
-
-      // 优先按 vibeEncoding 精确匹配
-      if (vibe.vibeEncoding.isNotEmpty) {
-        for (final entry in allEntries) {
-          if (entry.vibeEncoding.isNotEmpty &&
-              entry.vibeEncoding == vibe.vibeEncoding) {
-            existingEntry = entry;
-            break;
-          }
-        }
-      }
-
-      // 回退到 displayName 匹配（兼容历史数据）
-      if (existingEntry == null) {
-        for (final entry in allEntries) {
-          if (entry.vibeDisplayName == vibe.displayName) {
-            existingEntry = entry;
-            break;
-          }
-        }
-      }
+      final existingEntry = await storageService.findMatchingEntry(vibe);
 
       if (existingEntry != null) {
+        matchedExisting = true;
         // 更新现有条目的使用时间
         await storageService.incrementUsedCount(existingEntry.id);
       } else if (vibe.vibeEncoding.isNotEmpty) {
@@ -128,18 +115,27 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         );
         await storageService.saveEntry(newEntry);
         await storageService.incrementUsedCount(newEntry.id);
+        createdEntry = true;
       }
 
       // 重新加载最近列表
       await loadRecentVibes();
     } catch (e, stackTrace) {
       AppLogger.e('Failed to record vibe usage', e, stackTrace);
+    } finally {
+      span.finish(
+        details: {
+          'matchedExisting': matchedExisting,
+          'createdEntry': createdEntry,
+        },
+      );
     }
   }
 
   @override
   ImageParams build() {
     ref.onDispose(() {
+      _isDisposed = true;
       _generationStateSaveDebounceTimer?.cancel();
     });
 
@@ -159,6 +155,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       smeaDyn: storage.getLastSmeaDyn(),
       cfgRescale: storage.getLastCfgRescale(),
       noiseSchedule: storage.getLastNoiseSchedule(),
+      varietyPlus: storage.getLastVarietyPlus(),
       // 从存储加载种子锁定状态
       seed: storage.getSeedLocked() && storage.getLockedSeedValue() != null
           ? storage.getLockedSeedValue()!
@@ -212,16 +209,20 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   }
 
   /// 更新模型
-  void updateModel(String model) {
+  void updateModel(String model, {bool persist = true}) {
     state = state.copyWith(model: model);
-    _storage.setDefaultModel(model);
+    if (persist) {
+      _storage.setDefaultModel(model);
+    }
   }
 
   /// 更新尺寸
-  void updateSize(int width, int height) {
+  void updateSize(int width, int height, {bool persist = true}) {
     state = state.copyWith(width: width, height: height);
-    _storage.setDefaultWidth(width);
-    _storage.setDefaultHeight(height);
+    if (persist) {
+      _storage.setDefaultWidth(width);
+      _storage.setDefaultHeight(height);
+    }
   }
 
   /// 更新步数
@@ -320,6 +321,11 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     state = state.copyWith(noise: noise);
   }
 
+  /// 更新局部重绘强度
+  void updateInpaintStrength(double strength) {
+    state = state.copyWith(inpaintStrength: strength);
+  }
+
   /// 清除 img2img 设置
   void clearImg2Img() {
     state = state.copyWith(
@@ -327,6 +333,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       sourceImage: null,
       strength: 0.7,
       noise: 0.0,
+      inpaintStrength: 1.0,
     );
   }
 
@@ -343,6 +350,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       action: ImageGenerationAction.generate,
       sourceImage: null,
       maskImage: null,
+      inpaintStrength: 1.0,
     );
   }
 
@@ -357,16 +365,17 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     var vibeToAdd = vibe;
 
     // 检查是否是原始图片且需要编码
-    if (vibe.sourceType == VibeSourceType.rawImage &&
-        vibe.vibeEncoding.isEmpty &&
-        vibe.rawImageData != null) {
-      // 计算图片哈希
-      final imageHash = _calculateImageHash(vibe.rawImageData!);
+    if (vibe.canReencodeFromRawSource && vibe.vibeEncoding.isEmpty) {
+      final cacheKey = _buildVibeEncodingCacheKey(
+        vibe.rawImageData!,
+        model: state.model,
+        informationExtracted: vibe.infoExtracted,
+      );
 
       // 检查缓存
-      if (_vibeEncodingCache.containsKey(imageHash)) {
+      if (_vibeEncodingCache.containsKey(cacheKey)) {
         // 缓存命中 - 使用缓存的编码
-        final cachedEncoding = _vibeEncodingCache[imageHash]!;
+        final cachedEncoding = _vibeEncodingCache[cacheKey]!;
         AppLogger.i(
           'Vibe 编码缓存命中: ${vibe.displayName}',
           'VibeCache',
@@ -380,6 +389,8 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       }
     }
 
+    _primeVibeEncodingCache(vibeToAdd);
+
     state = state.copyWith(
       vibeReferencesV4: [...state.vibeReferencesV4, vibeToAdd],
     );
@@ -390,6 +401,81 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   String _calculateImageHash(Uint8List imageData) {
     final bytes = sha256.convert(imageData).bytes;
     return base64Encode(bytes);
+  }
+
+  String _buildVibeEncodingCacheKey(
+    Uint8List imageData, {
+    required String model,
+    required double informationExtracted,
+  }) {
+    final imageHash = _calculateImageHash(imageData);
+    final sanitizedInfoExtracted =
+        VibeReference.sanitizeInfoExtracted(informationExtracted);
+    return '$imageHash|$model|$sanitizedInfoExtracted';
+  }
+
+  String? getCachedVibeEncoding(
+    Uint8List imageData, {
+    String? model,
+    required double informationExtracted,
+  }) {
+    final cacheKey = _buildVibeEncodingCacheKey(
+      imageData,
+      model: model ?? state.model,
+      informationExtracted: informationExtracted,
+    );
+    return _vibeEncodingCache[cacheKey];
+  }
+
+  void _primeVibeEncodingCache(
+    VibeReference vibe, {
+    String? model,
+  }) {
+    final rawImageData = vibe.rawImageData;
+    if (rawImageData == null ||
+        rawImageData.isEmpty ||
+        vibe.vibeEncoding.isEmpty) {
+      return;
+    }
+
+    final cacheKey = _buildVibeEncodingCacheKey(
+      rawImageData,
+      model: model ?? state.model,
+      informationExtracted: vibe.infoExtracted,
+    );
+    _vibeEncodingCache.putIfAbsent(cacheKey, () => vibe.vibeEncoding);
+  }
+
+  bool _isSameVibeSource(VibeReference left, VibeReference right) {
+    if (left.vibeEncoding.isNotEmpty && right.vibeEncoding.isNotEmpty) {
+      return left.vibeEncoding == right.vibeEncoding;
+    }
+
+    if (left.rawImageData != null && right.rawImageData != null) {
+      return _calculateImageHash(left.rawImageData!) ==
+          _calculateImageHash(right.rawImageData!);
+    }
+
+    return left.displayName == right.displayName &&
+        left.bundleSource == right.bundleSource;
+  }
+
+  bool _isSameVibeList(
+    List<VibeReference> left,
+    List<VibeReference> right,
+  ) {
+    if (identical(left, right)) {
+      return true;
+    }
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var i = 0; i < left.length; i++) {
+      if (!_isSameVibeSource(left[i], right[i])) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// 显示缓存命中通知
@@ -415,17 +501,20 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     double informationExtracted = 1.0,
     String? vibeName,
   }) async {
-    // 计算图片哈希
-    final imageHash = _calculateImageHash(imageData);
+    final cacheKey = _buildVibeEncodingCacheKey(
+      imageData,
+      model: model,
+      informationExtracted: informationExtracted,
+    );
 
     // 检查缓存
-    if (_vibeEncodingCache.containsKey(imageHash)) {
+    if (_vibeEncodingCache.containsKey(cacheKey)) {
       AppLogger.i(
         'Vibe 编码缓存命中: ${vibeName ?? 'unknown'}',
         'VibeCache',
       );
       _showCacheHitNotification(vibeName ?? 'unknown');
-      return _vibeEncodingCache[imageHash];
+      return _vibeEncodingCache[cacheKey];
     }
 
     // 缓存未命中，调用 API
@@ -438,7 +527,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       );
 
       // 存入缓存
-      _vibeEncodingCache[imageHash] = encoding;
+      _vibeEncodingCache[cacheKey] = encoding;
       AppLogger.i(
         'Vibe 编码已缓存: ${vibeName ?? 'unknown'}',
         'VibeCache',
@@ -460,9 +549,18 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   ///
   /// [imageData] 原始图片数据
   /// [encoding] 编码后的 vibe 字符串
-  void storeVibeEncodingInCache(Uint8List imageData, String encoding) {
-    final imageHash = _calculateImageHash(imageData);
-    _vibeEncodingCache[imageHash] = encoding;
+  void storeVibeEncodingInCache(
+    Uint8List imageData,
+    String encoding, {
+    String? model,
+    double informationExtracted = 0.7,
+  }) {
+    final cacheKey = _buildVibeEncodingCacheKey(
+      imageData,
+      model: model ?? state.model,
+      informationExtracted: informationExtracted,
+    );
+    _vibeEncodingCache[cacheKey] = encoding;
     AppLogger.d(
       'Vibe 编码已手动存入缓存，当前缓存大小: ${_vibeEncodingCache.length}',
       'VibeCache',
@@ -472,6 +570,121 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   /// 获取缓存大小
   int get vibeEncodingCacheSize => _vibeEncodingCache.length;
 
+  Future<List<VibeReference>> ensureVibeReferencesEncoded(
+    List<VibeReference> vibes, {
+    String? model,
+    bool syncCurrentState = true,
+  }) async {
+    if (vibes.isEmpty) {
+      return vibes;
+    }
+
+    final resolvedModel = model ?? state.model;
+    var changed = false;
+    final encodedVibes = <VibeReference>[];
+
+    for (final vibe in vibes) {
+      if (!vibe.canReencodeFromRawSource || vibe.vibeEncoding.isNotEmpty) {
+        encodedVibes.add(vibe);
+        continue;
+      }
+
+      final rawImageData = vibe.rawImageData;
+      if (rawImageData == null) {
+        encodedVibes.add(vibe);
+        continue;
+      }
+
+      final cachedEncoding = getCachedVibeEncoding(
+        rawImageData,
+        model: resolvedModel,
+        informationExtracted: vibe.infoExtracted,
+      );
+      if (cachedEncoding != null && cachedEncoding.isNotEmpty) {
+        encodedVibes.add(vibe.copyWith(vibeEncoding: cachedEncoding));
+        changed = true;
+        continue;
+      }
+
+      final encoding = await encodeVibeWithCache(
+        rawImageData,
+        model: resolvedModel,
+        informationExtracted: vibe.infoExtracted,
+        vibeName: vibe.displayName,
+      );
+      if (encoding != null && encoding.isNotEmpty) {
+        encodedVibes.add(vibe.copyWith(vibeEncoding: encoding));
+        changed = true;
+      } else {
+        encodedVibes.add(vibe);
+      }
+    }
+
+    if (changed &&
+        syncCurrentState &&
+        _isSameVibeList(state.vibeReferencesV4, vibes)) {
+      state = state.copyWith(vibeReferencesV4: encodedVibes);
+      _scheduleGenerationStateSave(immediate: true);
+    }
+
+    return changed ? encodedVibes : vibes;
+  }
+
+  /// 为库内“显式保存参数”准备持久化后的 Vibe 数据。
+  ///
+  /// 只有用户明确点击保存时才应调用这条链。若当前条目可重新编码，且：
+  /// 1. 还没有编码，或
+  /// 2. 信息提取发生变化
+  /// 则会先生成新编码，再返回用于落文件的完整 Vibe 数据。
+  Future<VibeReference?> prepareVibeForLibraryParamSave(
+    VibeReference vibe, {
+    required double strength,
+    required double infoExtracted,
+    String? model,
+  }) async {
+    final resolvedModel = model ?? state.model;
+    final nextStrength = VibeReference.sanitizeStrength(strength);
+    final nextInfoExtracted =
+        VibeReference.sanitizeInfoExtracted(infoExtracted);
+    final nextVibe = vibe.copyWith(
+      strength: nextStrength,
+      infoExtracted: nextInfoExtracted,
+    );
+
+    final shouldEncode = nextVibe.canReencodeFromRawSource &&
+        (nextVibe.vibeEncoding.isEmpty ||
+            nextInfoExtracted != vibe.infoExtracted);
+    if (!shouldEncode) {
+      return nextVibe;
+    }
+
+    final rawImageData = nextVibe.rawImageData;
+    if (rawImageData == null || rawImageData.isEmpty) {
+      return nextVibe;
+    }
+
+    final cachedEncoding = getCachedVibeEncoding(
+      rawImageData,
+      model: resolvedModel,
+      informationExtracted: nextInfoExtracted,
+    );
+    final encoding = cachedEncoding ??
+        await encodeVibeWithCache(
+          rawImageData,
+          model: resolvedModel,
+          informationExtracted: nextInfoExtracted,
+          vibeName: nextVibe.displayName,
+        );
+    if (encoding == null || encoding.isEmpty) {
+      return null;
+    }
+
+    return nextVibe.copyWith(
+      vibeEncoding: encoding,
+      sourceType: VibeSourceType.naiv4vibe,
+    );
+  }
+
   /// 清空编码缓存
   void clearVibeEncodingCache() {
     _vibeEncodingCache.clear();
@@ -480,54 +693,90 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
 
   /// 批量添加 V4 Vibe 参考
   /// 如果 vibe 已存在，会移除旧的并添加新的（调整顺序）
-  void addVibeReferences(List<VibeReference> vibes) {
-    // 分批处理：先找出已存在的和新的
-    final toReorder = <VibeReference>[];
-    final toAdd = <VibeReference>[];
+  void addVibeReferences(
+    List<VibeReference> vibes, {
+    bool recordUsage = true,
+  }) {
+    final span = VibePerformanceDiagnostics.start(
+      'generation.addVibeReferences',
+      details: {
+        'inputVibes': vibes.length,
+        'recordUsage': recordUsage,
+        'existingVibes': state.vibeReferencesV4.length,
+      },
+    );
+    var toAddCount = 0;
+    var toReorderCount = 0;
+    var addedCount = 0;
+    var finalCount = state.vibeReferencesV4.length;
+    try {
+      // 分批处理：先找出已存在的和新的
+      final toReorder = <VibeReference>[];
+      final toAdd = <VibeReference>[];
 
-    for (final vibe in vibes) {
-      final existingIndex = _findVibeIndex(state.vibeReferencesV4, vibe);
-      if (existingIndex >= 0) {
-        toReorder.add(vibe);
-      } else {
-        toAdd.add(vibe);
+      for (final vibe in vibes) {
+        final existingIndex = _findVibeIndex(state.vibeReferencesV4, vibe);
+        if (existingIndex >= 0) {
+          toReorder.add(vibe);
+        } else {
+          toAdd.add(vibe);
+        }
       }
-    }
+      toAddCount = toAdd.length;
+      toReorderCount = toReorder.length;
 
-    // 如果没有需要处理的，直接返回
-    if (toReorder.isEmpty && toAdd.isEmpty) return;
+      // 如果没有需要处理的，直接返回
+      if (toReorder.isEmpty && toAdd.isEmpty) return;
 
-    // 构建新列表：移除已存在的，添加所有新的（调整顺序）
-    var newVibes = [...state.vibeReferencesV4];
+      // 构建新列表：移除已存在的，添加所有新的（调整顺序）
+      var newVibes = [...state.vibeReferencesV4];
 
-    // 先移除需要调整顺序的
-    for (final vibe in toReorder) {
-      final index = _findVibeIndex(newVibes, vibe);
-      if (index >= 0) {
-        newVibes = [
-          ...newVibes.sublist(0, index),
-          ...newVibes.sublist(index + 1),
-        ];
+      // 先移除需要调整顺序的
+      for (final vibe in toReorder) {
+        final index = _findVibeIndex(newVibes, vibe);
+        if (index >= 0) {
+          newVibes = [
+            ...newVibes.sublist(0, index),
+            ...newVibes.sublist(index + 1),
+          ];
+        }
       }
-    }
 
-    // 添加所有新的（先添加 toAdd，再添加 toReorder 到末尾）
-    final availableSlots = 16 - newVibes.length;
-    final canAdd = toAdd.take(availableSlots).toList();
-    newVibes = [...newVibes, ...canAdd, ...toReorder];
+      // 添加所有新的（先添加 toAdd，再添加 toReorder 到末尾）
+      final availableSlots = 16 - newVibes.length;
+      final canAdd = toAdd.take(availableSlots).toList();
+      addedCount = canAdd.length + toReorder.length;
+      newVibes = [...newVibes, ...canAdd, ...toReorder];
 
-    // 限制最多 16 个（如果超过，保留后 16 个）
-    if (newVibes.length > 16) {
-      newVibes = newVibes.sublist(newVibes.length - 16);
-    }
+      // 限制最多 16 个（如果超过，保留后 16 个）
+      if (newVibes.length > 16) {
+        newVibes = newVibes.sublist(newVibes.length - 16);
+      }
 
-    // 更新状态
-    state = state.copyWith(vibeReferencesV4: newVibes);
-    _scheduleGenerationStateSave(immediate: true);
+      for (final vibe in newVibes) {
+        _primeVibeEncodingCache(vibe);
+      }
 
-    // 记录使用
-    for (final vibe in [...canAdd, ...toReorder]) {
-      _recordVibeUsage(vibe);
+      // 更新状态
+      state = state.copyWith(vibeReferencesV4: newVibes);
+      finalCount = newVibes.length;
+      _scheduleGenerationStateSave(immediate: true);
+
+      if (recordUsage) {
+        // 记录使用
+        for (final vibe in [...canAdd, ...toReorder]) {
+          _recordVibeUsage(vibe);
+        }
+      }
+    } finally {
+      span.finish(
+        details: {
+          'toAdd': toAddCount,
+          'toReorder': toReorderCount,
+          'added': addedCount,
+          'finalVibes': finalCount,
+        },
+      );
     }
   }
 
@@ -576,10 +825,32 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     if (index < 0 || index >= state.vibeReferencesV4.length) return;
     final newList = [...state.vibeReferencesV4];
     final current = newList[index];
+    final nextStrength = strength != null
+        ? VibeReference.sanitizeStrength(strength)
+        : current.strength;
+    final nextInfoExtracted = infoExtracted != null
+        ? VibeReference.sanitizeInfoExtracted(infoExtracted)
+        : current.infoExtracted;
+    final infoChanged = nextInfoExtracted != current.infoExtracted;
+    String nextEncoding;
+    if (vibeEncoding != null) {
+      nextEncoding = vibeEncoding;
+    } else if (infoChanged && current.canReencodeFromRawSource) {
+      final rawImageData = current.rawImageData;
+      final cachedEncoding = rawImageData == null
+          ? null
+          : getCachedVibeEncoding(
+              rawImageData,
+              informationExtracted: nextInfoExtracted,
+            );
+      nextEncoding = cachedEncoding ?? '';
+    } else {
+      nextEncoding = current.vibeEncoding;
+    }
     newList[index] = current.copyWith(
-      strength: strength ?? current.strength,
-      infoExtracted: infoExtracted ?? current.infoExtracted,
-      vibeEncoding: vibeEncoding ?? current.vibeEncoding,
+      strength: nextStrength,
+      infoExtracted: nextInfoExtracted,
+      vibeEncoding: nextEncoding,
     );
     state = state.copyWith(vibeReferencesV4: newList);
     _scheduleGenerationStateSave();
@@ -593,10 +864,22 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
 
   /// 设置 vibe references（替换现有）
   void setVibeReferences(List<VibeReference> vibes) {
-    // 限制最多 16 个
-    final limitedVibes = vibes.take(16).toList();
-    state = state.copyWith(vibeReferencesV4: limitedVibes);
-    _scheduleGenerationStateSave(immediate: true);
+    VibePerformanceDiagnostics.measureSync(
+      'generation.setVibeReferences',
+      () {
+        // 限制最多 16 个
+        final limitedVibes = vibes.take(16).toList();
+        for (final vibe in limitedVibes) {
+          _primeVibeEncodingCache(vibe);
+        }
+        state = state.copyWith(vibeReferencesV4: limitedVibes);
+        _scheduleGenerationStateSave(immediate: true);
+      },
+      details: {
+        'inputVibes': vibes.length,
+        'existingVibes': state.vibeReferencesV4.length,
+      },
+    );
   }
 
   /// 设置 Vibe 强度标准化开关
@@ -807,46 +1090,97 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   // ==================== 状态持久化 ====================
 
   /// 保存当前 Vibe 和精准参考状态
-  Future<void> saveGenerationState() async {
+  Future<void> saveGenerationState() {
+    if (_isRestoringGenerationState || _isDisposed) {
+      return Future<void>.value();
+    }
+
+    final activeSave = _generationStateSaveInFlight;
+    if (activeSave != null) {
+      _hasQueuedGenerationStateSave = true;
+      return VibePerformanceDiagnostics.measure(
+        'generation.awaitActiveStateSave',
+        () async => activeSave,
+        details: {
+          'vibes': state.vibeReferencesV4.length,
+          'preciseRefs': state.preciseReferences.length,
+        },
+      );
+    }
+
+    final saveOperation = _runGenerationStateSaveLoop().whenComplete(() {
+      _generationStateSaveInFlight = null;
+    });
+    _generationStateSaveInFlight = saveOperation;
+    return saveOperation;
+  }
+
+  Future<void> _runGenerationStateSaveLoop() async {
+    final span = VibePerformanceDiagnostics.start(
+      'generation.runStateSaveLoop',
+      details: {
+        'vibes': state.vibeReferencesV4.length,
+        'preciseRefs': state.preciseReferences.length,
+      },
+    );
+    var iterations = 0;
+    try {
+      do {
+        iterations++;
+        await Future<void>.delayed(Duration.zero);
+        _hasQueuedGenerationStateSave = false;
+        if (_isRestoringGenerationState || _isDisposed) {
+          return;
+        }
+
+        await _saveGenerationStateSnapshot();
+      } while (_hasQueuedGenerationStateSave);
+    } finally {
+      span.finish(
+        details: {
+          'iterations': iterations,
+          'queuedAgain': _hasQueuedGenerationStateSave,
+        },
+      );
+    }
+  }
+
+  Future<void> _saveGenerationStateSnapshot() async {
+    if (_isDisposed) {
+      return;
+    }
+
+    final span = VibePerformanceDiagnostics.start(
+      'generation.saveStateSnapshot',
+      details: {
+        'vibes': state.vibeReferencesV4.length,
+        'preciseRefs': state.preciseReferences.length,
+      },
+    );
+    var jsonChars = 0;
     try {
       final storageService = ref.read(vibeLibraryStorageServiceProvider);
-
-      final vibeReferences = state.vibeReferencesV4.map((vibe) {
-        final previewBytes = vibe.thumbnail ?? vibe.rawImageData;
-        return {
-          'displayName': vibe.displayName,
-          'vibeEncoding': vibe.vibeEncoding,
-          'strength': vibe.strength,
-          'infoExtracted': vibe.infoExtracted,
-          'sourceType': vibe.sourceType.name,
-          'bundleSource': vibe.bundleSource,
-          'thumbnailBase64':
-              previewBytes != null ? base64Encode(previewBytes) : null,
-          'rawImageDataBase64': vibe.rawImageData != null
-              ? base64Encode(vibe.rawImageData!)
-              : null,
-        };
-      }).toList(growable: false);
-
-      // 保存精准参考数据
-      final preciseRefs = state.preciseReferences.map((ref) {
-        return {
-          'type': ref.type.toApiString(),
-          'strength': ref.strength,
-          'fidelity': ref.fidelity,
-          'imageBase64': base64Encode(ref.image),
-        };
-      }).toList();
-
-      await storageService.saveGenerationState(
-        vibeReferences: vibeReferences,
-        preciseReferences: preciseRefs,
+      final saveInput = _buildGenerationStateSaveInput(
+        vibeReferences: state.vibeReferencesV4,
+        preciseReferences: state.preciseReferences,
         normalizeVibeStrength: state.normalizeVibeStrength,
       );
+      final stateJson = await Isolate.run(
+        () => _encodeGenerationStateJson(saveInput),
+      );
+      jsonChars = stateJson.length;
+
+      await storageService.saveGenerationStateJson(stateJson);
 
       AppLogger.d('Generation state saved', 'GenerationParams');
     } catch (e, stackTrace) {
       AppLogger.e('Failed to save generation state', e, stackTrace);
+    } finally {
+      span.finish(
+        details: {
+          'jsonChars': jsonChars,
+        },
+      );
     }
   }
 
@@ -856,106 +1190,95 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       return;
     }
 
+    final span = VibePerformanceDiagnostics.start(
+      'generation.restoreState',
+    );
     _isRestoringGenerationState = true;
+    var shouldRewriteGenerationState = false;
+    var jsonChars = 0;
+    var restoredVibeCount = 0;
+    var restoredPreciseRefCount = 0;
 
     try {
       final storageService = ref.read(vibeLibraryStorageServiceProvider);
-      final stateData = await storageService.loadGenerationState();
+      final stateJson = await storageService.loadGenerationStateJson();
 
-      if (stateData == null) {
+      if (stateJson == null || stateJson.isEmpty) {
         _hasRestoredGenerationState = true;
         AppLogger.d('No saved generation state found', 'GenerationParams');
         return;
       }
+      jsonChars = stateJson.length;
+
+      final stateData = await Isolate.run(
+        () => _decodeGenerationStateJson(stateJson),
+      );
 
       final restoredVibes = <VibeReference>[];
-      final vibeRefsData = stateData['vibeReferences'] as List?;
-      if (vibeRefsData != null) {
-        for (var i = 0; i < vibeRefsData.length; i++) {
-          final raw = vibeRefsData[i];
-          if (raw is! Map) {
-            continue;
-          }
-
-          final refData = Map<String, dynamic>.from(raw);
-          final sourceTypeName = refData['sourceType'] as String?;
-          final sourceType = VibeSourceType.values.firstWhere(
-            (item) => item.name == sourceTypeName,
-            orElse: () => VibeSourceType.rawImage,
-          );
-          final thumbnailBytes =
-              _decodeBase64Safely(refData['thumbnailBase64'] as String?);
-          final rawImageBytes = _decodeBase64Safely(
-            refData['rawImageDataBase64'] as String?,
-          );
-
-          restoredVibes.add(
-            VibeReference(
-              displayName: refData['displayName'] as String? ?? 'Vibe ${i + 1}',
-              vibeEncoding: refData['vibeEncoding'] as String? ?? '',
-              thumbnail: thumbnailBytes ?? rawImageBytes,
-              rawImageData: rawImageBytes,
-              strength: (refData['strength'] as num?)?.toDouble() ?? 0.6,
-              infoExtracted:
-                  (refData['infoExtracted'] as num?)?.toDouble() ?? 0.7,
-              sourceType: sourceType,
-              bundleSource: refData['bundleSource'] as String?,
-            ),
-          );
+      final vibeRefsData = stateData['vibeReferences'] as List? ?? const [];
+      for (var i = 0; i < vibeRefsData.length; i++) {
+        final raw = vibeRefsData[i];
+        if (raw is! Map) {
+          continue;
         }
-      } else {
-        final legacyVibeEncodings = (stateData['vibeEntryIds'] as List?)
-                ?.whereType<String>()
-                .toList() ??
-            const <String>[];
 
-        for (var i = 0; i < legacyVibeEncodings.length; i++) {
-          final encoding = legacyVibeEncodings[i];
-          if (encoding.isEmpty) {
-            continue;
-          }
+        final refData = Map<String, dynamic>.from(raw);
+        final sourceTypeName = refData['sourceType'] as String?;
+        final sourceType = VibeSourceType.values.firstWhere(
+          (item) => item.name == sourceTypeName,
+          orElse: () => VibeSourceType.rawImage,
+        );
+        final thumbnailBytes = refData['thumbnail'] as Uint8List?;
+        final rawImageBytes = refData['rawImageData'] as Uint8List?;
 
-          restoredVibes.add(
-            VibeReference(
-              displayName: 'Vibe ${i + 1}',
-              vibeEncoding: encoding,
-              sourceType: VibeSourceType.naiv4vibe,
-            ),
-          );
-        }
+        restoredVibes.add(
+          VibeReference(
+            displayName: refData['displayName'] as String? ?? 'Vibe ${i + 1}',
+            vibeEncoding: refData['vibeEncoding'] as String? ?? '',
+            thumbnail: thumbnailBytes ?? rawImageBytes,
+            rawImageData: rawImageBytes,
+            strength: (refData['strength'] as num?)?.toDouble() ?? 0.6,
+            infoExtracted:
+                (refData['infoExtracted'] as num?)?.toDouble() ?? 0.7,
+            sourceType: sourceType,
+            bundleSource: refData['bundleSource'] as String?,
+          ),
+        );
       }
 
       final preciseRefs = <PreciseReference>[];
-      final preciseRefsData = stateData['preciseReferences'] as List?;
-      if (preciseRefsData != null) {
-        for (final raw in preciseRefsData) {
-          if (raw is! Map) {
-            continue;
-          }
-
-          final refData = Map<String, dynamic>.from(raw);
-          final imageBytes =
-              _decodeBase64Safely(refData['imageBase64'] as String?);
-          if (imageBytes == null || imageBytes.isEmpty) {
-            continue;
-          }
-
-          final typeStr = refData['type'] as String? ??
-              PreciseRefType.character.toApiString();
-          final type = PreciseRefType.values.firstWhere(
-            (item) => item.toApiString() == typeStr,
-            orElse: () => PreciseRefType.character,
-          );
-
-          preciseRefs.add(
-            PreciseReference(
-              image: imageBytes,
-              type: type,
-              strength: (refData['strength'] as num?)?.toDouble() ?? 1.0,
-              fidelity: (refData['fidelity'] as num?)?.toDouble() ?? 1.0,
-            ),
-          );
+      final preciseRefsData =
+          stateData['preciseReferences'] as List? ?? const [];
+      for (final raw in preciseRefsData) {
+        if (raw is! Map) {
+          continue;
         }
+
+        final refData = Map<String, dynamic>.from(raw);
+        final imageBytes = refData['image'] as Uint8List?;
+        if (imageBytes == null || imageBytes.isEmpty) {
+          continue;
+        }
+
+        final typeStr = refData['type'] as String? ??
+            PreciseRefType.character.toApiString();
+        final type = PreciseRefType.values.firstWhere(
+          (item) => item.toApiString() == typeStr,
+          orElse: () => PreciseRefType.character,
+        );
+
+        preciseRefs.add(
+          PreciseReference(
+            image: imageBytes,
+            type: type,
+            strength: (refData['strength'] as num?)?.toDouble() ?? 1.0,
+            fidelity: (refData['fidelity'] as num?)?.toDouble() ?? 1.0,
+          ),
+        );
+      }
+
+      for (final vibe in restoredVibes) {
+        _primeVibeEncodingCache(vibe);
       }
 
       // 更新状态
@@ -965,8 +1288,11 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         normalizeVibeStrength:
             stateData['normalizeVibeStrength'] as bool? ?? true,
       );
+      restoredVibeCount = restoredVibes.length;
+      restoredPreciseRefCount = preciseRefs.length;
 
       _hasRestoredGenerationState = true;
+      shouldRewriteGenerationState = true;
 
       AppLogger.d(
         'Generation state restored: ${restoredVibes.length} vibes, ${preciseRefs.length} precise refs',
@@ -976,6 +1302,17 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       AppLogger.e('Failed to restore generation state', e, stackTrace);
     } finally {
       _isRestoringGenerationState = false;
+      if (shouldRewriteGenerationState && !_isDisposed) {
+        unawaited(saveGenerationState());
+      }
+      span.finish(
+        details: {
+          'jsonChars': jsonChars,
+          'restoredVibes': restoredVibeCount,
+          'restoredPreciseRefs': restoredPreciseRefCount,
+          'rewriteQueued': shouldRewriteGenerationState,
+        },
+      );
     }
   }
 
@@ -1030,6 +1367,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   /// 更新多样性增强 (V4+)
   void updateVarietyPlus(bool varietyPlus) {
     state = state.copyWith(varietyPlus: varietyPlus);
+    _storage.setLastVarietyPlus(varietyPlus);
   }
 
   /// 更新 Decrisp (V3 模型)
@@ -1053,7 +1391,8 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
   Future<void> loadPanelStates() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final advancedExpanded = prefs.getBool('generation_advanced_options_expanded');
+      final advancedExpanded =
+          prefs.getBool('generation_advanced_options_expanded');
       if (advancedExpanded != null) {
         state = state.copyWith(advancedOptionsExpanded: advancedExpanded);
       }
@@ -1087,4 +1426,190 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     state = state.copyWith(advancedOptionsExpanded: expanded);
     await savePanelStates();
   }
+}
+
+Map<String, Object?> _buildGenerationStateSaveInput({
+  required List<VibeReference> vibeReferences,
+  required List<PreciseReference> preciseReferences,
+  required bool normalizeVibeStrength,
+}) {
+  return {
+    'vibeReferences': vibeReferences.map((vibe) {
+      return <String, Object?>{
+        'displayName': vibe.displayName,
+        'vibeEncoding': vibe.vibeEncoding,
+        'strength': vibe.strength,
+        'infoExtracted': vibe.infoExtracted,
+        'sourceType': vibe.sourceType.name,
+        'bundleSource': vibe.bundleSource,
+        'thumbnail': vibe.thumbnail,
+        'rawImageData': vibe.rawImageData,
+      };
+    }).toList(growable: false),
+    'preciseReferences': preciseReferences.map((reference) {
+      return <String, Object?>{
+        'type': reference.type.toApiString(),
+        'strength': reference.strength,
+        'fidelity': reference.fidelity,
+        'image': reference.image,
+      };
+    }).toList(growable: false),
+    'normalizeVibeStrength': normalizeVibeStrength,
+    'savedAt': DateTime.now().toIso8601String(),
+  };
+}
+
+String _encodeGenerationStateJson(Map<String, Object?> input) {
+  final rawVibes = input['vibeReferences'] as List? ?? const [];
+  final vibeReferences = rawVibes.whereType<Map>().map((raw) {
+    final thumbnail = raw['thumbnail'] as Uint8List?;
+    final rawImageData = raw['rawImageData'] as Uint8List?;
+    final previewBytes = thumbnail ?? rawImageData;
+    final previewDuplicatesRaw = previewBytes != null &&
+        rawImageData != null &&
+        _bytesEqualForGenerationState(previewBytes, rawImageData);
+
+    return <String, Object?>{
+      'displayName': raw['displayName'],
+      'vibeEncoding': raw['vibeEncoding'],
+      'strength': raw['strength'],
+      'infoExtracted': raw['infoExtracted'],
+      'sourceType': raw['sourceType'],
+      'bundleSource': raw['bundleSource'],
+      'thumbnailBase64': previewBytes != null && !previewDuplicatesRaw
+          ? base64Encode(previewBytes)
+          : null,
+      'rawImageDataBase64':
+          rawImageData != null ? base64Encode(rawImageData) : null,
+    };
+  }).toList(growable: false);
+
+  final rawPreciseRefs = input['preciseReferences'] as List? ?? const [];
+  final preciseReferences = rawPreciseRefs.whereType<Map>().map((raw) {
+    final image = raw['image'] as Uint8List?;
+    return <String, Object?>{
+      'type': raw['type'],
+      'strength': raw['strength'],
+      'fidelity': raw['fidelity'],
+      'imageBase64': image != null ? base64Encode(image) : null,
+    };
+  }).toList(growable: false);
+
+  return jsonEncode({
+    'vibeReferences': vibeReferences,
+    'preciseReferences': preciseReferences,
+    'normalizeVibeStrength': input['normalizeVibeStrength'] as bool? ?? true,
+    'savedAt': input['savedAt'],
+  });
+}
+
+Map<String, Object?> _decodeGenerationStateJson(String jsonString) {
+  final rawStateData = jsonDecode(jsonString) as Map<String, dynamic>;
+
+  final restoredVibes = <Map<String, Object?>>[];
+  final vibeRefsData = rawStateData['vibeReferences'] as List?;
+  if (vibeRefsData != null) {
+    for (var i = 0; i < vibeRefsData.length; i++) {
+      final raw = vibeRefsData[i];
+      if (raw is! Map) {
+        continue;
+      }
+
+      final refData = Map<String, dynamic>.from(raw);
+      final thumbnailBytes =
+          _decodeGenerationStateBase64(refData['thumbnailBase64'] as String?);
+      final rawImageBytes = _decodeGenerationStateBase64(
+        refData['rawImageDataBase64'] as String?,
+      );
+
+      restoredVibes.add(
+        <String, Object?>{
+          'displayName': refData['displayName'] as String? ?? 'Vibe ${i + 1}',
+          'vibeEncoding': refData['vibeEncoding'] as String? ?? '',
+          'thumbnail': thumbnailBytes ?? rawImageBytes,
+          'rawImageData': rawImageBytes,
+          'strength': (refData['strength'] as num?)?.toDouble() ?? 0.6,
+          'infoExtracted':
+              (refData['infoExtracted'] as num?)?.toDouble() ?? 0.7,
+          'sourceType': refData['sourceType'] as String?,
+          'bundleSource': refData['bundleSource'] as String?,
+        },
+      );
+    }
+  } else {
+    final legacyVibeEncodings =
+        (rawStateData['vibeEntryIds'] as List?)?.whereType<String>().toList() ??
+            const <String>[];
+
+    for (var i = 0; i < legacyVibeEncodings.length; i++) {
+      final encoding = legacyVibeEncodings[i];
+      if (encoding.isEmpty) {
+        continue;
+      }
+
+      restoredVibes.add(
+        <String, Object?>{
+          'displayName': 'Vibe ${i + 1}',
+          'vibeEncoding': encoding,
+          'sourceType': VibeSourceType.naiv4vibe.name,
+        },
+      );
+    }
+  }
+
+  final restoredPreciseRefs = <Map<String, Object?>>[];
+  final preciseRefsData = rawStateData['preciseReferences'] as List?;
+  if (preciseRefsData != null) {
+    for (final raw in preciseRefsData) {
+      if (raw is! Map) {
+        continue;
+      }
+
+      final refData = Map<String, dynamic>.from(raw);
+      final imageBytes =
+          _decodeGenerationStateBase64(refData['imageBase64'] as String?);
+      if (imageBytes == null || imageBytes.isEmpty) {
+        continue;
+      }
+
+      restoredPreciseRefs.add(
+        <String, Object?>{
+          'type': refData['type'] as String? ??
+              PreciseRefType.character.toApiString(),
+          'strength': (refData['strength'] as num?)?.toDouble() ?? 1.0,
+          'fidelity': (refData['fidelity'] as num?)?.toDouble() ?? 1.0,
+          'image': imageBytes,
+        },
+      );
+    }
+  }
+
+  return {
+    'vibeReferences': restoredVibes,
+    'preciseReferences': restoredPreciseRefs,
+    'normalizeVibeStrength':
+        rawStateData['normalizeVibeStrength'] as bool? ?? true,
+  };
+}
+
+Uint8List? _decodeGenerationStateBase64(String? value) {
+  if (value == null || value.isEmpty) {
+    return null;
+  }
+
+  try {
+    return base64Decode(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+bool _bytesEqualForGenerationState(Uint8List left, Uint8List right) {
+  if (identical(left, right)) return true;
+  if (left.length != right.length) return false;
+
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
 }

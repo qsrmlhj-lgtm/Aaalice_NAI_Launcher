@@ -10,7 +10,9 @@ import '../../../../core/utils/app_logger.dart';
 import '../../../../core/utils/hive_storage_helper.dart';
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/vibe_library_path_helper.dart';
+import '../../../../data/services/local_onnx_model_service.dart';
 import '../../../providers/image_save_settings_provider.dart';
+import '../../../providers/share_image_settings_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../widgets/cache_statistics_tile.dart';
 import '../widgets/gallery_cache_actions.dart';
@@ -49,9 +51,77 @@ class _StorageSettingsSectionState
     }
   }
 
+  Future<void> _selectLocalOnnxTaggerDirectory() async {
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择 ONNX tagger 模型文件夹',
+      );
+      if (result == null) {
+        return;
+      }
+      final service = ref.read(localOnnxModelServiceProvider);
+      await service.setTaggerDirectory(result);
+      if (mounted) {
+        setState(() {});
+        AppToast.success(context, 'ONNX tagger 模型文件夹已保存');
+      }
+    } catch (e) {
+      if (mounted) AppToast.error(context, '选择文件夹失败: $e');
+    }
+  }
+
+  Future<void> _editHighAnlasThreshold() async {
+    final settings = ref.read(shareImageSettingsProvider);
+    final controller = TextEditingController(
+      text: settings.highAnlasCostThreshold.toString(),
+    );
+    final result = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('设置 Anlas 警告阈值'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '阈值',
+            suffixText: 'Anlas',
+            helperText: '当单次生成预计消耗达到或超过该值时弹出确认。',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = int.tryParse(controller.text.trim());
+              if (value != null && value > 0) {
+                Navigator.of(dialogContext).pop(value);
+              }
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+
+    controller.dispose();
+    if (result == null) {
+      return;
+    }
+    await ref
+        .read(shareImageSettingsProvider.notifier)
+        .setHighAnlasCostThreshold(result);
+  }
+
   @override
   Widget build(BuildContext context) {
     final saveSettings = ref.watch(imageSaveSettingsNotifierProvider);
+    final shareSettings = ref.watch(shareImageSettingsProvider);
+    final localOnnxService = ref.watch(localOnnxModelServiceProvider);
 
     return SettingsCard(
       title: context.l10n.settings_storage,
@@ -125,6 +195,124 @@ class _StorageSettingsSectionState
                   .read(imageSaveSettingsNotifierProvider.notifier)
                   .setAutoSave(value);
             },
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.shield_outlined),
+            title: const Text('保护模式'),
+            subtitle: const Text(
+              '开启后按下方子项保护本地资产、分享副本和高消耗操作；关闭时保留子项配置但不生效。',
+            ),
+            value: shareSettings.protectionMode,
+            onChanged: (value) async {
+              await ref
+                  .read(shareImageSettingsProvider.notifier)
+                  .setProtectionMode(value);
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text(
+              '保护功能',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.cleaning_services_outlined),
+            title: const Text('复制/拖拽时移除全部元数据'),
+            subtitle: const Text(
+              '生成净化副本，清除 PNG 文本块、EXIF 与 NAI 隐写水印，并避免拖拽暴露原始路径。',
+            ),
+            value: shareSettings.stripMetadataForCopyAndDrag,
+            onChanged: shareSettings.protectionMode
+                ? (value) async {
+                    await ref
+                        .read(shareImageSettingsProvider.notifier)
+                        .setStripMetadataForCopyAndDrag(value);
+                  }
+                : null,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.warning_amber_rounded),
+            title: const Text('危险资产操作二次确认'),
+            subtitle: const Text('删除、移动、批量移动等本地资产操作会额外弹出保护确认。'),
+            value: shareSettings.confirmDangerousActions,
+            onChanged: shareSettings.protectionMode
+                ? (value) async {
+                    await ref
+                        .read(shareImageSettingsProvider.notifier)
+                        .setConfirmDangerousActions(value);
+                  }
+                : null,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.cloud_upload_outlined),
+            title: const Text('发送到外部服务前提示'),
+            subtitle: const Text('把本地图片发送到 LLM、NovelAI、ComfyUI 等外部边界前进行确认。'),
+            value: shareSettings.warnExternalImageSend,
+            onChanged: shareSettings.protectionMode
+                ? (value) async {
+                    await ref
+                        .read(shareImageSettingsProvider.notifier)
+                        .setWarnExternalImageSend(value);
+                  }
+                : null,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.file_copy_outlined),
+            title: const Text('导出时避免覆盖已有文件'),
+            subtitle: const Text('导出/打包路径重名时自动编号，避免误覆盖原有资产。'),
+            value: shareSettings.preventOverwrite,
+            onChanged: shareSettings.protectionMode
+                ? (value) async {
+                    await ref
+                        .read(shareImageSettingsProvider.notifier)
+                        .setPreventOverwrite(value);
+                  }
+                : null,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.toll_outlined),
+            title: const Text('Anlas 高消耗警告'),
+            subtitle: Text(
+              '单次生成预计消耗达到 ${shareSettings.highAnlasCostThreshold} Anlas 时，生成前弹出确认。',
+            ),
+            value: shareSettings.warnHighAnlasCost,
+            onChanged: shareSettings.protectionMode
+                ? (value) async {
+                    await ref
+                        .read(shareImageSettingsProvider.notifier)
+                        .setWarnHighAnlasCost(value);
+                  }
+                : null,
+          ),
+          ListTile(
+            enabled:
+                shareSettings.protectionMode && shareSettings.warnHighAnlasCost,
+            leading: const Icon(Icons.speed_outlined),
+            title: const Text('Anlas 警告阈值'),
+            subtitle: Text('${shareSettings.highAnlasCostThreshold} Anlas'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap:
+                shareSettings.protectionMode && shareSettings.warnHighAnlasCost
+                    ? _editHighAnlasThreshold
+                    : null,
+          ),
+          const Divider(height: 24),
+          ListTile(
+            leading: const Icon(Icons.sell_outlined),
+            title: const Text('本地 ONNX tagger 模型文件夹'),
+            subtitle: Text(
+              localOnnxService.taggerDirectory.isEmpty
+                  ? '未配置'
+                  : localOnnxService.taggerDirectory,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _selectLocalOnnxTaggerDirectory,
           ),
           // Vibe库保存路径设置
           const VibeLibraryPathTile(),

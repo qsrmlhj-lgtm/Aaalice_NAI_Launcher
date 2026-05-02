@@ -7,6 +7,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/utils/app_logger.dart';
+import '../../core/utils/vibe_performance_diagnostics.dart';
 import '../../data/models/vibe/vibe_library_category.dart';
 import '../../data/models/vibe/vibe_library_entry.dart';
 import '../../data/models/vibe/vibe_reference.dart';
@@ -123,6 +124,7 @@ enum VibeLibraryBulkOperationType {
 @Riverpod(keepAlive: true)
 class VibeLibraryNotifier extends _$VibeLibraryNotifier {
   late final VibeLibraryStorageService _storage;
+  Future<void>? _activeLoadFuture;
 
   @override
   VibeLibraryState build() {
@@ -137,41 +139,76 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
   /// 初始化 Vibe 库
   Future<void> initialize() async {
     if (state.entries.isNotEmpty || state.isInitializing) return;
-    await _loadData(isInitializing: true);
+    await VibePerformanceDiagnostics.measure('provider.initialize', () async {
+      await _loadData(isInitializing: true, showLoading: true);
+    });
   }
 
   /// 重新加载数据
-  Future<void> reload() async {
-    // 先同步文件系统，确保文件增删反映在 Hive 中
-    await syncWithFileSystem();
-    await _loadData(isInitializing: false);
+  Future<void> reload({
+    bool syncFileSystem = false,
+    bool showLoading = false,
+  }) async {
+    await VibePerformanceDiagnostics.measure(
+      'provider.reload',
+      () async {
+        // 先同步文件系统，确保文件增删反映在 Hive 中
+        if (syncFileSystem) {
+          await syncWithFileSystem();
+        }
+        await _loadData(isInitializing: false, showLoading: showLoading);
+      },
+      details: {
+        'syncFileSystem': syncFileSystem,
+        'showLoading': showLoading,
+      },
+    );
   }
 
   /// 仅从缓存加载数据（不扫描文件系统）- 用于快速显示
-  Future<void> loadFromCache() async {
-    await _loadData(isInitializing: false);
+  Future<void> loadFromCache({bool showLoading = false}) async {
+    await VibePerformanceDiagnostics.measure(
+      'provider.loadFromCache',
+      () async {
+        await _loadData(isInitializing: false, showLoading: showLoading);
+      },
+      details: {
+        'showLoading': showLoading,
+      },
+    );
   }
 
   /// 与文件系统同步
   /// 扫描 vibes 文件夹，添加新文件到库，删除已不存在的文件条目
   /// 同步完成后自动刷新 UI
   Future<VibeFolderSyncResult> syncWithFileSystem() async {
+    final span = VibePerformanceDiagnostics.start(
+      'provider.syncWithFileSystem',
+    );
+    VibeFolderSyncResult? syncResult;
     try {
-      final result = await _storage.syncWithFileSystem(removeMissingEntries: true);
+      final result =
+          await _storage.syncWithFileSystem(removeMissingEntries: true);
+      syncResult = result;
       AppLogger.i(
         'Vibe library synced: scanned=${result.scannedCount}, '
-        'upserted=${result.upsertedCount}, deleted=${result.deletedCount}',
+            'upserted=${result.upsertedCount}, deleted=${result.deletedCount}',
         'VibeLibrary',
       );
-      
+
       // 同步完成后刷新数据
       if (result.upsertedCount > 0 || result.deletedCount > 0) {
-        await _loadData(isInitializing: false);
+        await _loadData(isInitializing: false, showLoading: false);
       }
-      
+
       return result;
     } catch (e, stackTrace) {
-      AppLogger.e('Failed to sync with file system', e, stackTrace, 'VibeLibrary');
+      AppLogger.e(
+        'Failed to sync with file system',
+        e,
+        stackTrace,
+        'VibeLibrary',
+      );
       return VibeFolderSyncResult(
         scannedCount: 0,
         upsertedCount: 0,
@@ -179,23 +216,101 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
         failedCount: 1,
         errors: [e.toString()],
       );
+    } finally {
+      span.finish(
+        details: {
+          'scanned': syncResult?.scannedCount,
+          'upserted': syncResult?.upsertedCount,
+          'deleted': syncResult?.deletedCount,
+          'failed': syncResult?.failedCount,
+        },
+      );
     }
   }
 
-  Future<void> _loadData({required bool isInitializing}) async {
-    state = state.copyWith(isLoading: true, isInitializing: isInitializing);
+  Future<void> _loadData({
+    required bool isInitializing,
+    required bool showLoading,
+  }) async {
+    final activeLoad = _activeLoadFuture;
+    if (activeLoad != null) {
+      await VibePerformanceDiagnostics.measure(
+        'provider.awaitActiveLoad',
+        () async => activeLoad,
+        details: {
+          'isInitializing': isInitializing,
+          'showLoading': showLoading,
+        },
+      );
+      return;
+    }
+
+    final future = _performLoadData(
+      isInitializing: isInitializing,
+      showLoading: showLoading,
+    );
+    _activeLoadFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_activeLoadFuture, future)) {
+        _activeLoadFuture = null;
+      }
+    }
+  }
+
+  Future<void> _performLoadData({
+    required bool isInitializing,
+    required bool showLoading,
+  }) async {
+    final span = VibePerformanceDiagnostics.start(
+      'provider.performLoadData',
+      details: {
+        'isInitializing': isInitializing,
+        'showLoading': showLoading,
+        'searchActive': state.searchQuery.isNotEmpty,
+        'hasCategoryFilter': state.selectedCategoryId != null,
+        'favoritesOnly': state.favoritesOnly,
+      },
+    );
+    var entryCount = 0;
+    var filteredCount = 0;
+    var currentPageCount = 0;
+    var categoryCount = 0;
+    state = state.copyWith(
+      isLoading: showLoading,
+      isInitializing: isInitializing,
+    );
 
     try {
-      final entries = await _storage.getAllEntries();
-      final categories = await _storage.getAllCategories();
+      final results = await Future.wait([
+        _storage.getDisplayEntries(),
+        _storage.getAllCategories(),
+      ]);
+      final entries = results[0] as List<VibeLibraryEntry>;
+      final categories = results[1] as List<VibeLibraryCategory>;
+      entryCount = entries.length;
+      categoryCount = categories.length;
+      final filteredEntries = _filterEntries(
+        entries: entries,
+        searchQuery: state.searchQuery,
+        selectedCategoryId: state.selectedCategoryId,
+        favoritesOnly: state.favoritesOnly,
+      );
+      filteredCount = filteredEntries.length;
+      final currentEntries =
+          _buildPageEntries(filteredEntries, page: 0, pageSize: state.pageSize);
+      currentPageCount = currentEntries.length;
 
       state = state.copyWith(
         entries: entries,
+        filteredEntries: filteredEntries,
         categories: categories,
+        currentEntries: currentEntries,
+        currentPage: 0,
         isLoading: false,
         isInitializing: false,
       );
-      await _applyFilters();
     } catch (e, stackTrace) {
       AppLogger.e('Failed to load vibe library', e, stackTrace, 'VibeLibrary');
       state = state.copyWith(
@@ -204,6 +319,14 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
         isInitializing: false,
       );
     }
+    span.finish(
+      details: {
+        'entries': entryCount,
+        'filtered': filteredCount,
+        'currentPageEntries': currentPageCount,
+        'categories': categoryCount,
+      },
+    );
   }
 
   /// 加载指定页面
@@ -261,7 +384,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     bool? favoritesOnly,
   }) async {
     final newSearchQuery = searchQuery ?? state.searchQuery;
-    final newCategoryId = selectedCategoryId ?? state.selectedCategoryId;
+    final hasSelectedCategoryUpdate =
+        selectedCategoryId != state.selectedCategoryId;
+    final newCategoryId = hasSelectedCategoryUpdate
+        ? selectedCategoryId
+        : state.selectedCategoryId;
     final newFavoritesOnly = favoritesOnly ?? state.favoritesOnly;
 
     if (state.searchQuery == newSearchQuery &&
@@ -272,9 +399,7 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
 
     state = state.copyWith(
       searchQuery: newSearchQuery,
-      selectedCategoryId: selectedCategoryId != null || searchQuery == null
-          ? newCategoryId
-          : state.selectedCategoryId,
+      selectedCategoryId: newCategoryId,
       favoritesOnly: newFavoritesOnly,
     );
     await _applyFilters();
@@ -320,22 +445,58 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
 
   /// 应用过滤和排序
   Future<void> _applyFilters() async {
-    var result = List<VibeLibraryEntry>.from(state.entries);
+    final filteredEntries = _filterEntries(
+      entries: state.entries,
+      searchQuery: state.searchQuery,
+      selectedCategoryId: state.selectedCategoryId,
+      favoritesOnly: state.favoritesOnly,
+    );
+    final currentEntries =
+        _buildPageEntries(filteredEntries, page: 0, pageSize: state.pageSize);
 
-    if (state.searchQuery.isNotEmpty) {
-      result = result.search(state.searchQuery);
+    state = state.copyWith(
+      filteredEntries: filteredEntries,
+      currentEntries: currentEntries,
+      currentPage: 0,
+    );
+  }
+
+  List<VibeLibraryEntry> _filterEntries({
+    required List<VibeLibraryEntry> entries,
+    required String searchQuery,
+    required String? selectedCategoryId,
+    required bool favoritesOnly,
+  }) {
+    var result = List<VibeLibraryEntry>.from(entries);
+
+    if (searchQuery.isNotEmpty) {
+      result = result.search(searchQuery);
     }
-    if (state.selectedCategoryId != null) {
-      result = result.getByCategory(state.selectedCategoryId);
+    if (selectedCategoryId != null) {
+      result = result.getByCategory(selectedCategoryId);
     }
-    if (state.favoritesOnly) {
+    if (favoritesOnly) {
       result = result.favorites;
     }
 
-    result = _sortEntries(result);
+    return _sortEntries(result);
+  }
 
-    state = state.copyWith(filteredEntries: result, currentPage: 0);
-    await loadPage(0);
+  List<VibeLibraryEntry> _buildPageEntries(
+    List<VibeLibraryEntry> entries, {
+    required int page,
+    required int pageSize,
+  }) {
+    if (entries.isEmpty) {
+      return const [];
+    }
+
+    final start = page * pageSize;
+    final end = min(start + pageSize, entries.length);
+    if (start >= entries.length) {
+      return const [];
+    }
+    return entries.sublist(start, end);
   }
 
   List<VibeLibraryEntry> _sortEntries(List<VibeLibraryEntry> entries) {
@@ -358,10 +519,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
       final saved = await _storage.saveEntry(entry);
       final entries = [...state.entries];
       final index = entries.indexWhere((e) => e.id == entry.id);
+      final displayEntry = saved.toDisplayEntry();
       if (index >= 0) {
-        entries[index] = saved;
+        entries[index] = displayEntry;
       } else {
-        entries.add(saved);
+        entries.add(displayEntry);
       }
       state = state.copyWith(entries: entries);
       await _applyFilters();
@@ -369,6 +531,43 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
       return saved;
     } catch (e, stackTrace) {
       AppLogger.e('Failed to save entry', e, stackTrace, 'VibeLibrary');
+      state = state.copyWith(error: e.toString());
+      return null;
+    }
+  }
+
+  /// 显式保存参数，并同步更新对应文件中的 importInfo。
+  Future<VibeLibraryEntry?> saveEntryParams(
+    String id, {
+    required double strength,
+    required double infoExtracted,
+    VibeReference? persistedVibeData,
+  }) async {
+    try {
+      final saved = await _storage.saveEntryParams(
+        id,
+        strength: strength,
+        infoExtracted: infoExtracted,
+        persistedVibeData: persistedVibeData,
+      );
+      if (saved == null) {
+        return null;
+      }
+
+      final entries = [...state.entries];
+      final index = entries.indexWhere((e) => e.id == id);
+      final displayEntry = saved.toDisplayEntry();
+      if (index >= 0) {
+        entries[index] = displayEntry;
+      } else {
+        entries.add(displayEntry);
+      }
+      state = state.copyWith(entries: entries);
+      await _applyFilters();
+      AppLogger.d('Entry params saved: ${saved.displayName}', 'VibeLibrary');
+      return saved;
+    } catch (e, stackTrace) {
+      AppLogger.e('Failed to save entry params', e, stackTrace, 'VibeLibrary');
       state = state.copyWith(error: e.toString());
       return null;
     }
@@ -388,7 +587,7 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
         categoryId: categoryId,
         tags: tags,
       );
-      final entries = [...state.entries, saved];
+      final entries = [...state.entries, saved.toDisplayEntry()];
       state = state.copyWith(entries: entries);
       await _applyFilters();
       AppLogger.d('Bundle entry saved: ${saved.displayName}', 'VibeLibrary');
@@ -445,10 +644,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     try {
       final updated = await _storage.toggleFavorite(id);
       if (updated == null) return null;
+      final displayEntry = updated.toDisplayEntry();
 
       // 更新本地状态
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -474,10 +674,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     try {
       final updated = await _storage.updateEntryCategory(id, categoryId);
       if (updated == null) return null;
+      final displayEntry = updated.toDisplayEntry();
 
       // 更新本地状态
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -508,10 +709,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     try {
       final updated = await _storage.updateEntryTags(id, tags);
       if (updated == null) return null;
+      final displayEntry = updated.toDisplayEntry();
 
       // 更新本地状态
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -533,10 +735,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     try {
       final updated = await _storage.updateEntryThumbnail(id, thumbnail);
       if (updated == null) return null;
+      final displayEntry = updated.toDisplayEntry();
 
       // 更新本地状态
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -568,8 +771,9 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
       }
 
       final updated = result.entry!;
+      final displayEntry = updated.toDisplayEntry();
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -591,10 +795,11 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
     try {
       final updated = await _storage.incrementUsedCount(id);
       if (updated == null) return null;
+      final displayEntry = updated.toDisplayEntry();
 
       // 更新本地状态
       final updatedEntries = state.entries.map((e) {
-        return e.id == id ? updated : e;
+        return e.id == id ? displayEntry : e;
       }).toList();
 
       state = state.copyWith(entries: updatedEntries);
@@ -872,7 +1077,8 @@ class VibeLibraryNotifier extends _$VibeLibraryNotifier {
           if (exportDirectory != null && exportDirectory.isNotEmpty) {
             final filePath = entry.filePath!;
             final fileName = filePath.split('/').last.split('\\').last;
-            final targetPath = '$exportDirectory${Platform.pathSeparator}$fileName';
+            final targetPath =
+                '$exportDirectory${Platform.pathSeparator}$fileName';
 
             try {
               final sourceFile = File(filePath);

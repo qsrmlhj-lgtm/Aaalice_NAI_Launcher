@@ -7,7 +7,7 @@ part of 'reference_panel_notifier.dart';
 // **************************************************************************
 
 String _$referencePanelNotifierHash() =>
-    r'ec90c9de926e73bcee92d1d69620d3cee32f854a';
+    r'e2985c21e5f3ac73159af351c67ed957b89fd3e0';
 
 /// 引用面板 UI 状态
 ///
@@ -26,4 +26,4 @@ final referencePanelNotifierProvider =
 
 typedef _$ReferencePanelNotifier = Notifier<ReferencePanelState>;
 // ignore_for_file: type=lint
-// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
+// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member

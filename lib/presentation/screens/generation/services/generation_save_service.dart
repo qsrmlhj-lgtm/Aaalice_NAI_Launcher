@@ -93,18 +93,23 @@ class GenerationSaveService {
       final existingMetadata = image.metadata;
 
       if (existingMetadata != null) {
+        if (ImageSaveUtils.hasEmbeddedNovelAiMetadata(imageBytes)) {
+          final file = File(filePath);
+          await file.writeAsBytes(imageBytes);
+        } else {
         // 使用已有元数据重新嵌入（保持完整性）
-        await ImageSaveUtils.saveWithPrebuiltMetadata(
-          imageBytes: imageBytes,
-          filePath: filePath,
-          metadata: {
-            'Description': existingMetadata.prompt,
-            'Software': 'NovelAI',
-            'Source': existingMetadata.source ?? 'NovelAI Diffusion',
-            'Comment':
-                jsonEncode(buildCommentJsonFromMetadata(existingMetadata)),
-          },
-        );
+          await ImageSaveUtils.saveWithPrebuiltMetadata(
+            imageBytes: imageBytes,
+            filePath: filePath,
+            metadata: {
+              'Description': existingMetadata.prompt,
+              'Software': 'NovelAI',
+              'Source': existingMetadata.source ?? 'NovelAI Diffusion',
+              'Comment':
+                  jsonEncode(buildCommentJsonFromMetadata(existingMetadata)),
+            },
+          );
+        }
       } else {
         // 没有元数据，直接保存原始字节
         final file = File(filePath);

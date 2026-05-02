@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../tools/tool_base.dart';
+import '../tools/blur_tool.dart';
 import '../tools/brush_tool.dart';
+import '../tools/clone_stamp_tool.dart';
+import '../tools/color_picker_tool.dart';
 import '../tools/eraser_tool.dart';
-import '../tools/selection/rect_selection_tool.dart';
+import '../tools/fill_tool.dart';
 import '../tools/selection/ellipse_selection_tool.dart';
 import '../tools/selection/lasso_selection_tool.dart';
-import '../tools/color_picker_tool.dart';
+import '../tools/selection/rect_selection_tool.dart';
+import '../tools/tool_base.dart';
 import 'tool_settings_manager.dart';
 
 /// 工具管理器
@@ -185,6 +188,9 @@ class ToolManager extends ChangeNotifier {
     return [
       BrushTool(),
       EraserTool(),
+      FillTool(),
+      BlurTool(),
+      CloneStampTool(),
       RectSelectionTool(),
       EllipseSelectionTool(),
       LassoSelectionTool(),

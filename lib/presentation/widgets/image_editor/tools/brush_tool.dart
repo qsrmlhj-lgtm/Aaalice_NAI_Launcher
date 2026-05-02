@@ -345,8 +345,10 @@ class _BrushSettingsPanelState extends State<_BrushSettingsPanel> {
           max: 500,
           controller: _sizeController,
           onChanged: (value) {
-            widget.tool.setSize(value);
-            _sizeController.text = value.round().toString();
+            setState(() {
+              widget.tool.setSize(value);
+              _sizeController.text = value.round().toString();
+            });
             widget.onSettingsChanged();
           },
         ),
@@ -359,7 +361,9 @@ class _BrushSettingsPanelState extends State<_BrushSettingsPanel> {
           max: 100,
           suffix: '%',
           onChanged: (value) {
-            widget.tool.setOpacity(value / 100);
+            setState(() {
+              widget.tool.setOpacity(value / 100);
+            });
             widget.onSettingsChanged();
           },
         ),
@@ -372,7 +376,9 @@ class _BrushSettingsPanelState extends State<_BrushSettingsPanel> {
           max: 100,
           suffix: '%',
           onChanged: (value) {
-            widget.tool.setHardness(value / 100);
+            setState(() {
+              widget.tool.setHardness(value / 100);
+            });
             widget.onSettingsChanged();
           },
         ),

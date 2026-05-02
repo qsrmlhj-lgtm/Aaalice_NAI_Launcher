@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint_service.dart';
 import '../../../core/utils/app_logger.dart';
 import '../../models/tag/tag_suggestion.dart';
 
@@ -14,8 +15,9 @@ class NAITagSuggestionApiService {
   static const Duration _timeout = Duration(seconds: 5);
 
   final Dio _dio;
+  final NaiApiEndpointService _endpointService;
 
-  NAITagSuggestionApiService(this._dio);
+  NAITagSuggestionApiService(this._dio, this._endpointService);
 
   /// 获取标签建议
   Future<List<TagSuggestion>> suggestTags(
@@ -31,7 +33,7 @@ class NAITagSuggestionApiService {
       };
 
       final response = await _dio.get(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.suggestTagsEndpoint}',
+        _endpointService.imageUrl(ApiConstants.suggestTagsEndpoint),
         queryParameters: queryParams,
         options: Options(
           receiveTimeout: _timeout,
@@ -78,5 +80,6 @@ class NAITagSuggestionApiService {
 @Riverpod(keepAlive: true)
 NAITagSuggestionApiService naiTagSuggestionApiService(Ref ref) {
   final dio = ref.watch(dioClientProvider);
-  return NAITagSuggestionApiService(dio);
+  final endpointService = ref.watch(naiApiEndpointServiceProvider);
+  return NAITagSuggestionApiService(dio, endpointService);
 }

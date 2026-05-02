@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,7 +16,8 @@ import '../../providers/replication_queue_provider.dart';
 import '../../router/app_router.dart';
 import '../../widgets/common/app_toast.dart';
 import '../../widgets/shortcuts/shortcut_aware_widget.dart';
-import 'widgets/upscale_dialog.dart';
+import '../../services/image_workflow_launcher.dart';
+import '../../utils/asset_protection_guard.dart';
 import 'widgets/resize_handle.dart';
 import 'widgets/left_panel.dart';
 import 'widgets/main_workspace.dart';
@@ -52,7 +55,9 @@ class _DesktopGenerationLayoutState
       if (isDocked) {
         ref.read(characterPanelDockProvider.notifier).undock();
         AppLogger.d(
-            'Auto-undocked character panel on maximize', 'DesktopLayout',);
+          'Auto-undocked character panel on maximize',
+          'DesktopLayout',
+        );
       }
     }
 
@@ -64,17 +69,16 @@ class _DesktopGenerationLayoutState
   Widget build(BuildContext context) {
     // 从 Provider 读取布局状态
     final layoutState = ref.watch(layoutStateNotifierProvider);
-    // 从 Provider 读取生成状态和参数（用于快捷键回调）
+    // 从 Provider 读取生成状态（用于快捷键回调）
     final generationState = ref.watch(imageGenerationNotifierProvider);
-    final params = ref.watch(generationParamsNotifierProvider);
     final isGenerating = generationState.isGenerating;
 
     // 定义快捷键动作映射（使用 ShortcutIds 常量）
     final shortcuts = <String, VoidCallback>{
       // 生成图像
       ShortcutIds.generateImage: () {
-        if (!isGenerating && params.prompt.isNotEmpty) {
-          ref.read(imageGenerationNotifierProvider.notifier).generate(params);
+        if (!isGenerating) {
+          unawaited(_generateWithProtection());
         }
       },
       // 取消生成
@@ -85,8 +89,9 @@ class _DesktopGenerationLayoutState
       },
       // 加入队列
       ShortcutIds.addToQueue: () {
-        if (params.prompt.isNotEmpty) {
-          final task = ReplicationTask.create(prompt: params.prompt);
+        final currentParams = ref.read(generationParamsNotifierProvider);
+        if (currentParams.prompt.isNotEmpty) {
+          final task = ReplicationTask.create(prompt: currentParams.prompt);
           ref.read(replicationQueueNotifierProvider.notifier).add(task);
           AppToast.success(context, context.l10n.queue_taskAdded);
         }
@@ -114,10 +119,11 @@ class _DesktopGenerationLayoutState
       // 放大图像
       ShortcutIds.upscaleImage: () {
         if (generationState.displayImages.isNotEmpty) {
-          UpscaleDialog.show(
-            context,
-            image: generationState.displayImages.first.bytes,
+          ImageWorkflowLauncher.openUpscale(
+            ref,
+            generationState.displayImages.first.bytes,
           );
+          AppToast.info(context, '已打开图生图超分面板');
         }
       },
       // 已移除 Space 全屏预览快捷键，避免在提示词输入时误触发预览
@@ -178,5 +184,20 @@ class _DesktopGenerationLayoutState
         RightPanel(isResizing: _isResizingRight),
       ],
     );
+  }
+
+  Future<void> _generateWithProtection() async {
+    final currentParams = ref.read(generationParamsNotifierProvider);
+    if (currentParams.prompt.isEmpty) {
+      return;
+    }
+    final confirmed = await AssetProtectionGuard.confirmHighAnlasCost(
+      context: context,
+      ref: ref,
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    ref.read(imageGenerationNotifierProvider.notifier).generate(currentParams);
   }
 }

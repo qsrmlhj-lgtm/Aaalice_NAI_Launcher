@@ -1,11 +1,31 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 
+import '../../data/models/vibe/vibe_library_entry.dart';
 import '../../data/models/vibe/vibe_reference.dart';
 import 'app_logger.dart';
+import 'vibe_image_embedder.dart';
+
+class VibeEmbeddedPngExportPlan {
+  const VibeEmbeddedPngExportPlan({
+    required this.entryId,
+    required this.displayName,
+    required this.vibes,
+    required this.carrierImageBytes,
+    required this.fileName,
+  });
+
+  final String entryId;
+  final String displayName;
+  final List<VibeReference> vibes;
+  final Uint8List carrierImageBytes;
+  final String fileName;
+}
 
 /// Vibe 导出工具类
 ///
@@ -13,6 +33,155 @@ import 'app_logger.dart';
 class VibeExportUtils {
   static const String _identifier = 'novelai-vibe-transfer';
   static const int _version = 1;
+  static const String _rawImageCandidateId = 'raw_image';
+  static const String _vibeThumbnailCandidateId = 'vibe_thumbnail';
+  static const String _thumbnailCandidateId = 'thumbnail';
+
+  /// 收集条目可用的 PNG 导出载体图
+  static List<VibeExportImageCandidate> collectImageCandidates(
+    VibeLibraryEntry entry,
+  ) {
+    final candidates = <VibeExportImageCandidate>[];
+    final seenHashes = <String>{};
+
+    void addCandidate(String id, String label, Uint8List? bytes) {
+      if (bytes == null || bytes.isEmpty) {
+        return;
+      }
+      final hash = sha256.convert(bytes).toString();
+      if (!seenHashes.add(hash)) {
+        return;
+      }
+      candidates.add(
+        VibeExportImageCandidate(
+          id: id,
+          label: label,
+          bytes: bytes,
+        ),
+      );
+    }
+
+    addCandidate(_rawImageCandidateId, '原始图片', entry.rawImageData);
+    addCandidate(_vibeThumbnailCandidateId, 'Vibe 预览图', entry.vibeThumbnail);
+    addCandidate(_thumbnailCandidateId, '库缩略图', entry.thumbnail);
+
+    return candidates;
+  }
+
+  /// 为单个条目选择默认 PNG 导出载体图
+  static VibeExportImageCandidate? selectDefaultImageCandidate(
+    VibeLibraryEntry entry,
+  ) {
+    final candidates = collectImageCandidates(entry);
+    if (candidates.isEmpty) {
+      return null;
+    }
+    return candidates.first;
+  }
+
+  /// 生成批量 PNG 导出计划
+  static List<VibeEmbeddedPngExportPlan> buildEmbeddedPngExportPlans(
+    List<VibeLibraryEntry> entries,
+  ) {
+    final plans = <VibeEmbeddedPngExportPlan>[];
+
+    for (final entry in entries) {
+      final candidate = selectDefaultImageCandidate(entry);
+      if (candidate == null) {
+        continue;
+      }
+      plans.add(
+        VibeEmbeddedPngExportPlan(
+          entryId: entry.id,
+          displayName: entry.displayName,
+          vibes: [entry.toVibeReference()],
+          carrierImageBytes: candidate.bytes,
+          fileName: _generateEmbeddedPngFileName(entry.displayName),
+        ),
+      );
+    }
+
+    return plans;
+  }
+
+  /// 使用给定载体图构建带 Vibe 元数据的 PNG
+  static Future<Uint8List> buildEmbeddedPngBytes({
+    required List<VibeReference> vibes,
+    required Uint8List carrierImageBytes,
+  }) async {
+    return VibeImageEmbedder.embedVibesToImage(carrierImageBytes, vibes);
+  }
+
+  /// 导出带 Vibe 元数据的 PNG
+  static Future<String?> exportToEmbeddedPng(
+    List<VibeReference> vibes, {
+    required Uint8List carrierImageBytes,
+    required String fileName,
+  }) async {
+    try {
+      if (vibes.isEmpty) {
+        AppLogger.e('无法导出 PNG：Vibe 列表为空', null, null, 'VibeExport');
+        return null;
+      }
+
+      final outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: '导出 PNG Vibe 图片',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: ['png'],
+      );
+
+      if (outputFile == null) {
+        AppLogger.i('用户取消了 PNG 保存', 'VibeExport');
+        return null;
+      }
+
+      final embeddedBytes = await buildEmbeddedPngBytes(
+        vibes: vibes,
+        carrierImageBytes: carrierImageBytes,
+      );
+      await File(outputFile).writeAsBytes(embeddedBytes);
+
+      AppLogger.i('PNG Vibe 导出成功: $outputFile', 'VibeExport');
+      return outputFile;
+    } catch (e, stack) {
+      AppLogger.e('导出 PNG Vibe 文件失败', e, stack, 'VibeExport');
+      return null;
+    }
+  }
+
+  /// 批量导出多个条目为各自独立的 PNG
+  static Future<List<String>> exportEntriesToEmbeddedPngDirectory(
+    List<VibeLibraryEntry> entries,
+  ) async {
+    final plans = buildEmbeddedPngExportPlans(entries);
+    if (plans.isEmpty) {
+      AppLogger.e('无法导出 PNG：没有任何 Vibe 拥有可用图片', null, null, 'VibeExport');
+      return const [];
+    }
+
+    final outputDirectory = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: '选择 PNG 导出目录',
+    );
+    if (outputDirectory == null || outputDirectory.isEmpty) {
+      AppLogger.i('用户取消了 PNG 批量导出目录选择', 'VibeExport');
+      return const [];
+    }
+
+    final exportedPaths = <String>[];
+    for (final plan in plans) {
+      final embeddedBytes = await buildEmbeddedPngBytes(
+        vibes: plan.vibes,
+        carrierImageBytes: plan.carrierImageBytes,
+      );
+      final outputPath = p.join(outputDirectory, plan.fileName);
+      await File(outputPath).writeAsBytes(embeddedBytes);
+      exportedPaths.add(outputPath);
+    }
+
+    AppLogger.i('批量 PNG Vibe 导出成功: ${exportedPaths.length} 个文件', 'VibeExport');
+    return exportedPaths;
+  }
 
   /// 导出 VibeReference 为 .naiv4vibe 文件
   ///
@@ -339,6 +508,23 @@ class VibeExportUtils {
     return '$finalName.naiv4vibebundle';
   }
 
+  static String _generateEmbeddedPngFileName(String name) {
+    final sanitized = name
+        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+        .trim();
+
+    var finalName = sanitized;
+    if (finalName.length > 50) {
+      finalName = finalName.substring(0, 50);
+    }
+
+    if (finalName.isEmpty) {
+      finalName = 'vibe';
+    }
+
+    return '${finalName}_vibe.png';
+  }
+
   /// 验证 .naiv4vibe JSON 格式是否有效
   static bool validateNaiv4VibeJson(String jsonString) {
     try {
@@ -371,4 +557,16 @@ class VibeExportUtils {
       return false;
     }
   }
+}
+
+class VibeExportImageCandidate {
+  const VibeExportImageCandidate({
+    required this.id,
+    required this.label,
+    required this.bytes,
+  });
+
+  final String id;
+  final String label;
+  final Uint8List bytes;
 }

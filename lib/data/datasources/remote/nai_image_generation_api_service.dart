@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,8 +10,10 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint_service.dart';
 import '../../../core/network/request_builders/nai_image_request_builder.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../core/utils/focused_inpaint_utils.dart';
 import '../../../core/utils/nai_api_utils.dart';
 import '../../../core/utils/zip_utils.dart';
 import '../../models/image/image_params.dart';
@@ -24,8 +27,13 @@ part 'nai_image_generation_api_service.g.dart';
 class NAIImageGenerationApiService {
   final Dio _dio;
   final NAIImageEnhancementApiService _enhancementService;
+  final NaiApiEndpointService _endpointService;
 
-  NAIImageGenerationApiService(this._dio, this._enhancementService);
+  NAIImageGenerationApiService(
+    this._dio,
+    this._enhancementService,
+    this._endpointService,
+  );
 
   // ==================== 采样器映射 ====================
 
@@ -76,31 +84,42 @@ class NAIImageGenerationApiService {
   Future<(List<Uint8List>, Map<int, String>)> generateImage(
     ImageParams params, {
     void Function(int, int)? onProgress,
+    bool focusedInpaintEnabled = false,
+    double minimumContextMegaPixels = 88.0,
+    Rect? focusedSelectionRect,
   }) async {
-    // 互斥校验：Vibe Transfer 和角色参考不能同时存在（防御性编程）
-    // Precise Reference 与 Vibe Transfer 不再互斥，可以同时使用
-    // 但为了向后兼容，保留校验逻辑（虽然不再抛出错误）
-    final hasVibes = params.vibeReferencesV4.isNotEmpty;
-    if (hasVibes && params.preciseReferences.isNotEmpty) {
+    final focusedRequest = _prepareFocusedInpaint(
+      params,
+      enabled: focusedInpaintEnabled,
+      minimumContextMegaPixels: minimumContextMegaPixels,
+      focusedSelectionRect: focusedSelectionRect,
+    );
+    final effectiveParams = _applyFocusedRequest(params, focusedRequest);
+
+    // NovelAI 官方说明 Precise Reference 与 Vibe Transfer 不兼容。
+    // 当前策略是保留 Precise Reference，并在请求构建阶段跳过 Vibe Transfer。
+    final hasVibes = effectiveParams.vibeReferencesV4.isNotEmpty;
+    if (hasVibes && effectiveParams.preciseReferences.isNotEmpty) {
       AppLogger.d(
-        'Both Vibe Transfer and Precise Reference are enabled',
+        'Both Vibe Transfer and Precise Reference are enabled; skipping vibe payload in favor of Precise Reference',
         'ImgGen',
       );
     }
 
-    // Precise Reference 仅V4+模型支持，非V4模型时忽略数据
-    final effectivePreciseRefs =
-        params.isV4Model ? params.preciseReferences : <PreciseReference>[];
+    // Precise Reference 仅 V4.5 模型支持，其他模型时忽略数据。
+    final effectivePreciseRefs = effectiveParams.isV45Model
+        ? effectiveParams.preciseReferences
+        : <PreciseReference>[];
 
     _currentCancelToken = CancelToken();
 
     try {
       // 0. 采样器版本映射
       final effectiveSampler =
-          _mapSamplerForModel(params.sampler, params.model);
+          _mapSamplerForModel(effectiveParams.sampler, effectiveParams.model);
 
       final requestBuildResult = await NAIImageRequestBuilder(
-        params: params,
+        params: effectiveParams,
         encodeVibe: _enhancementService.encodeVibe,
         preciseReferences: effectivePreciseRefs,
       ).build(
@@ -108,12 +127,13 @@ class NAIImageGenerationApiService {
       );
 
       final vibeEncodingMap = requestBuildResult.vibeEncodingMap;
-      final effectiveNegativePrompt = requestBuildResult.effectiveNegativePrompt;
+      final effectiveNegativePrompt =
+          requestBuildResult.effectiveNegativePrompt;
       final requestParameters = requestBuildResult.requestParameters;
 
       // 打印请求参数以便调试
       AppLogger.d(
-        'Request parameters: model=${params.model}, isV4=${params.isV4Model}, ucPreset=${params.ucPreset}',
+        'Request parameters: model=${effectiveParams.model}, isV4=${effectiveParams.isV4Model}, ucPreset=${effectiveParams.ucPreset}',
         'ImgGen',
       );
       AppLogger.d(
@@ -122,7 +142,7 @@ class NAIImageGenerationApiService {
       );
 
       // 打印完整请求体（调试用）
-      if (params.isV4Model) {
+      if (effectiveParams.isV4Model) {
         AppLogger.d(
           'V4 use_coords: ${requestParameters['use_coords']}',
           'ImgGen',
@@ -155,13 +175,13 @@ class NAIImageGenerationApiService {
       }
 
       // 3. 根据模式添加额外参数
-      final String action = params.action.value;
+      final String action = effectiveParams.action.value;
 
       // 4. 构造请求数据（对齐官网格式）
       final requestData = requestBuildResult.requestData;
 
       AppLogger.d(
-        'Generating image with action: $action, model: ${params.model}',
+        'Generating image with action: $action, model: ${effectiveParams.model}',
         'ImgGen',
       );
 
@@ -172,7 +192,7 @@ class NAIImageGenerationApiService {
           'characterReferences count: ${effectivePreciseRefs.length}',
           'ImgGen',
         );
-        AppLogger.d('isV4Model: ${params.isV4Model}', 'ImgGen');
+        AppLogger.d('isV4Model: ${effectiveParams.isV4Model}', 'ImgGen');
 
         // 调试：验证 base64 编码和 PNG 转换
         for (int i = 0; i < effectivePreciseRefs.length; i++) {
@@ -237,7 +257,7 @@ class NAIImageGenerationApiService {
 
       // 5. 发送请求
       final response = await _dio.post(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.generateImageEndpoint}',
+        _endpointService.imageUrl(ApiConstants.generateImageEndpoint),
         data: requestData,
         cancelToken: _currentCancelToken,
         onReceiveProgress: onProgress,
@@ -251,7 +271,10 @@ class NAIImageGenerationApiService {
 
       // 6. 解压 ZIP 响应
       final zipBytes = response.data as Uint8List;
-      final images = ZipUtils.extractAllImages(zipBytes);
+      final images = _compositeFocusedImages(
+        ZipUtils.extractAllImages(zipBytes),
+        focusedRequest,
+      );
 
       if (images.isEmpty) {
         throw Exception('No images found in response');
@@ -271,8 +294,17 @@ class NAIImageGenerationApiService {
   Future<List<Uint8List>> generateImageCancellable(
     ImageParams params, {
     void Function(int, int)? onProgress,
+    bool focusedInpaintEnabled = false,
+    double minimumContextMegaPixels = 88.0,
+    Rect? focusedSelectionRect,
   }) async {
-    final result = await generateImage(params, onProgress: onProgress);
+    final result = await generateImage(
+      params,
+      onProgress: onProgress,
+      focusedInpaintEnabled: focusedInpaintEnabled,
+      minimumContextMegaPixels: minimumContextMegaPixels,
+      focusedSelectionRect: focusedSelectionRect,
+    );
     return result.$1; // 返回图像列表部分
   }
 
@@ -289,36 +321,51 @@ class NAIImageGenerationApiService {
   /// [params] 图像生成参数
   ///
   /// 返回 ImageStreamChunk 流，包含渐进式预览和最终图像
-  Stream<ImageStreamChunk> generateImageStream(ImageParams params) async* {
-    // Precise Reference 与 Vibe Transfer 不再互斥，可以同时使用
-    // 但为了向后兼容，保留校验逻辑（虽然不再抛出错误）
-    final hasVibes = params.vibeReferencesV4.isNotEmpty;
-    if (hasVibes && params.preciseReferences.isNotEmpty) {
+  Stream<ImageStreamChunk> generateImageStream(
+    ImageParams params, {
+    bool focusedInpaintEnabled = false,
+    double minimumContextMegaPixels = 88.0,
+    Rect? focusedSelectionRect,
+  }) async* {
+    final focusedRequest = _prepareFocusedInpaint(
+      params,
+      enabled: focusedInpaintEnabled,
+      minimumContextMegaPixels: minimumContextMegaPixels,
+      focusedSelectionRect: focusedSelectionRect,
+    );
+    final effectiveParams = _applyFocusedRequest(params, focusedRequest);
+
+    // NovelAI 官方说明 Precise Reference 与 Vibe Transfer 不兼容。
+    // 当前策略是保留 Precise Reference，并在请求构建阶段跳过 Vibe Transfer。
+    final hasVibes = effectiveParams.vibeReferencesV4.isNotEmpty;
+    if (hasVibes && effectiveParams.preciseReferences.isNotEmpty) {
       AppLogger.d(
-        'Both Vibe Transfer and Precise Reference are enabled (stream)',
+        'Both Vibe Transfer and Precise Reference are enabled (stream); skipping vibe payload in favor of Precise Reference',
         'ImgGen',
       );
     }
 
-    // Precise Reference 仅V4+模型支持，非V4模型时忽略数据
-    final effectivePreciseRefs =
-        params.isV4Model ? params.preciseReferences : <PreciseReference>[];
+    // Precise Reference 仅 V4.5 模型支持，其他模型时忽略数据。
+    final effectivePreciseRefs = effectiveParams.isV45Model
+        ? effectiveParams.preciseReferences
+        : <PreciseReference>[];
 
     _currentCancelToken = CancelToken();
 
     try {
       final requestBuildResult = await NAIImageRequestBuilder(
-        params: params,
+        params: effectiveParams,
         encodeVibe: _enhancementService.encodeVibe,
         preciseReferences: effectivePreciseRefs,
       ).build(
-        sampler: params.sampler,
+        sampler: effectiveParams.sampler,
         isStream: true,
       );
 
       final seed = requestBuildResult.seed;
       final effectivePrompt = requestBuildResult.effectivePrompt;
-      final effectiveNegativePrompt = requestBuildResult.effectiveNegativePrompt;
+      final effectiveNegativePrompt =
+          requestBuildResult.effectiveNegativePrompt;
       final requestParameters = requestBuildResult.requestParameters;
 
       // 角色参考 (Precise Reference, V4+ 专属)
@@ -328,7 +375,7 @@ class NAIImageGenerationApiService {
           'characterReferences count: ${effectivePreciseRefs.length}',
           'ImgGen',
         );
-        AppLogger.d('isV4Model: ${params.isV4Model}', 'ImgGen');
+        AppLogger.d('isV4Model: ${effectiveParams.isV4Model}', 'ImgGen');
 
         // 调试：验证 base64 编码和 PNG 转换
         for (int i = 0; i < effectivePreciseRefs.length; i++) {
@@ -339,7 +386,6 @@ class NAIImageGenerationApiService {
             'ImgGen',
           );
         }
-
       }
 
       // 构造请求数据（对齐官网格式）
@@ -348,11 +394,11 @@ class NAIImageGenerationApiService {
       // ========== 详细调试日志 ==========
       AppLogger.d('========== STREAM REQUEST DEBUG ==========', 'ImgGen');
       AppLogger.d('input (正面提示词+质量标签): $effectivePrompt', 'ImgGen');
-      AppLogger.d('model: ${params.model}', 'ImgGen');
-      AppLogger.d('action: ${params.action.value}', 'ImgGen');
+      AppLogger.d('model: ${effectiveParams.model}', 'ImgGen');
+      AppLogger.d('action: ${effectiveParams.action.value}', 'ImgGen');
       AppLogger.d('seed: $seed', 'ImgGen');
-      AppLogger.d('steps: ${params.steps}', 'ImgGen');
-      AppLogger.d('ucPreset: ${params.ucPreset}', 'ImgGen');
+      AppLogger.d('steps: ${effectiveParams.steps}', 'ImgGen');
+      AppLogger.d('ucPreset: ${effectiveParams.ucPreset}', 'ImgGen');
       AppLogger.d('negative_prompt: $effectiveNegativePrompt', 'ImgGen');
       // 角色参考调试
       if (effectivePreciseRefs.isNotEmpty) {
@@ -382,7 +428,7 @@ class NAIImageGenerationApiService {
           'ImgGen',
         );
       }
-      if (params.isV4Model) {
+      if (effectiveParams.isV4Model) {
         AppLogger.d(
           'v4_prompt: ${jsonEncode(requestParameters['v4_prompt'])}',
           'ImgGen',
@@ -423,7 +469,7 @@ class NAIImageGenerationApiService {
 
       // 3. 发送流式请求
       final response = await _dio.post<ResponseBody>(
-        '${ApiConstants.imageBaseUrl}${ApiConstants.generateImageStreamEndpoint}',
+        _endpointService.imageUrl(ApiConstants.generateImageStreamEndpoint),
         data: requestData,
         cancelToken: _currentCancelToken,
         options: Options(
@@ -440,7 +486,7 @@ class NAIImageGenerationApiService {
       final buffer = <int>[];
       int messageCount = 0;
       Uint8List? latestPreview;
-      final int totalSteps = params.steps;
+      final int totalSteps = effectiveParams.steps;
 
       await for (final chunk in responseStream) {
         if (_currentCancelToken?.isCancelled ?? false) {
@@ -503,7 +549,8 @@ class NAIImageGenerationApiService {
               }
 
               if (imageBytes != null && imageBytes.isNotEmpty) {
-                latestPreview = imageBytes;
+                latestPreview =
+                    _compositeFocusedImage(imageBytes, focusedRequest);
                 final currentStep = (stepIx ?? messageCount) + 1;
                 final progress = currentStep / totalSteps;
                 AppLogger.d(
@@ -514,7 +561,7 @@ class NAIImageGenerationApiService {
                   progress: progress.clamp(0.0, 0.99),
                   currentStep: currentStep,
                   totalSteps: totalSteps,
-                  previewImage: imageBytes,
+                  previewImage: latestPreview,
                 );
               }
 
@@ -548,7 +595,9 @@ class NAIImageGenerationApiService {
             AppLogger.d('Stream fallback: parsing as ZIP', 'Stream');
             final images = ZipUtils.extractAllImages(bytes);
             if (images.isNotEmpty) {
-              yield ImageStreamChunk.complete(images.first);
+              yield ImageStreamChunk.complete(
+                _compositeFocusedImage(images.first, focusedRequest),
+              );
               return;
             }
           }
@@ -570,14 +619,24 @@ class NAIImageGenerationApiService {
                 if (msg.containsKey('data')) {
                   final data = msg['data'];
                   if (data is Uint8List) {
-                    yield ImageStreamChunk.complete(data);
+                    yield ImageStreamChunk.complete(
+                      _compositeFocusedImage(data, focusedRequest),
+                    );
                     return;
                   } else if (data is List<int>) {
-                    yield ImageStreamChunk.complete(Uint8List.fromList(data));
+                    yield ImageStreamChunk.complete(
+                      _compositeFocusedImage(
+                        Uint8List.fromList(data),
+                        focusedRequest,
+                      ),
+                    );
                     return;
                   } else if (data is String) {
                     yield ImageStreamChunk.complete(
-                      Uint8List.fromList(base64Decode(data)),
+                      _compositeFocusedImage(
+                        Uint8List.fromList(base64Decode(data)),
+                        focusedRequest,
+                      ),
                     );
                     return;
                   }
@@ -653,6 +712,77 @@ class NAIImageGenerationApiService {
       _currentCancelToken = null;
     }
   }
+
+  FocusedInpaintRequest? _prepareFocusedInpaint(
+    ImageParams params, {
+    required bool enabled,
+    required double minimumContextMegaPixels,
+    Rect? focusedSelectionRect,
+  }) {
+    if (!enabled ||
+        params.action != ImageGenerationAction.infill ||
+        params.sourceImage == null ||
+        params.maskImage == null) {
+      return null;
+    }
+
+    final request = FocusedInpaintUtils.prepareRequest(
+      sourceImage: params.sourceImage!,
+      maskImage: params.maskImage!,
+      focusedSelectionRect: focusedSelectionRect,
+      minContextMegaPixels: minimumContextMegaPixels,
+    );
+
+    if (request != null) {
+      AppLogger.d(
+        'Focused inpaint prepared: crop=${request.crop.x},${request.crop.y},${request.crop.width}x${request.crop.height}, target=${request.targetWidth}x${request.targetHeight}, minContextArea=${minimumContextMegaPixels.round()}, focusRect=$focusedSelectionRect',
+        'ImgGen',
+      );
+    }
+
+    return request;
+  }
+
+  ImageParams _applyFocusedRequest(
+    ImageParams params,
+    FocusedInpaintRequest? focusedRequest,
+  ) {
+    if (focusedRequest == null) {
+      return params;
+    }
+
+    return params.copyWith(
+      sourceImage: focusedRequest.requestSourceImage,
+      maskImage: focusedRequest.requestMaskImage,
+      width: focusedRequest.targetWidth,
+      height: focusedRequest.targetHeight,
+      inpaintMaskClosingIterations: 0,
+      inpaintMaskExpansionIterations: 0,
+    );
+  }
+
+  List<Uint8List> _compositeFocusedImages(
+    List<Uint8List> images,
+    FocusedInpaintRequest? focusedRequest,
+  ) {
+    if (focusedRequest == null) {
+      return images;
+    }
+
+    return images
+        .map((imageBytes) => focusedRequest.compositeGeneratedImage(imageBytes))
+        .toList(growable: false);
+  }
+
+  Uint8List _compositeFocusedImage(
+    Uint8List imageBytes,
+    FocusedInpaintRequest? focusedRequest,
+  ) {
+    if (focusedRequest == null) {
+      return imageBytes;
+    }
+    return focusedRequest.compositeGeneratedImage(imageBytes);
+  }
 }
 
 /// NAIImageGenerationApiService Provider
@@ -660,5 +790,10 @@ class NAIImageGenerationApiService {
 NAIImageGenerationApiService naiImageGenerationApiService(Ref ref) {
   final dio = ref.watch(dioClientProvider);
   final enhancementService = ref.watch(naiImageEnhancementApiServiceProvider);
-  return NAIImageGenerationApiService(dio, enhancementService);
+  final endpointService = ref.watch(naiApiEndpointServiceProvider);
+  return NAIImageGenerationApiService(
+    dio,
+    enhancementService,
+    endpointService,
+  );
 }

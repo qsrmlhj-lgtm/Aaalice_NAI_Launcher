@@ -74,9 +74,11 @@ class CooccurrenceDataSource {
 
       // 验证数据
       final count = await getCount();
-      AppLogger.i('Cooccurrence data source initialized with $count records', 'CooccurrenceDS');
+      AppLogger.i('Cooccurrence data source initialized with $count records',
+          'CooccurrenceDS');
     } catch (e, stack) {
-      AppLogger.e('Failed to initialize CooccurrenceDataSource', e, stack, 'CooccurrenceDS');
+      AppLogger.e('Failed to initialize CooccurrenceDataSource', e, stack,
+          'CooccurrenceDS');
       rethrow;
     }
   }
@@ -95,15 +97,17 @@ class CooccurrenceDataSource {
     if (!_initialized) await initialize();
 
     final normalizedTag = tag.toLowerCase().trim();
+    final cacheKey = _buildCacheKey(
+      tag: normalizedTag,
+      minCount: minCount,
+      limit: limit,
+    );
 
     // 检查缓存
-    final cached = _relatedCache[normalizedTag];
+    final cached = _relatedCache[cacheKey];
     if (cached != null) {
-      AppLogger.d('Cooccurrence cache hit: $normalizedTag', 'CooccurrenceDS');
-      return cached
-          .where((r) => r.count >= minCount)
-          .take(limit)
-          .toList();
+      AppLogger.d('Cooccurrence cache hit: $cacheKey', 'CooccurrenceDS');
+      return cached;
     }
 
     final results = await _db!.query(
@@ -119,12 +123,13 @@ class CooccurrenceDataSource {
       return RelatedTag(
         tag: row['tag2'] as String,
         count: (row['count'] as num?)?.toInt() ?? 0,
-        cooccurrenceScore: (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
+        cooccurrenceScore:
+            (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
       );
     }).toList();
 
     // 添加到缓存
-    _addToCache(normalizedTag, relatedTags);
+    _addToCache(cacheKey, relatedTags);
 
     return relatedTags;
   }
@@ -158,22 +163,27 @@ class CooccurrenceDataSource {
     for (final row in rows) {
       final tag1 = row['tag1'] as String;
       groups.putIfAbsent(tag1, () => []).add(
-        RelatedTag(
-          tag: row['tag2'] as String,
-          count: (row['count'] as num?)?.toInt() ?? 0,
-          cooccurrenceScore: (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
-        ),
-      );
+            RelatedTag(
+              tag: row['tag2'] as String,
+              count: (row['count'] as num?)?.toInt() ?? 0,
+              cooccurrenceScore:
+                  (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
+            ),
+          );
     }
 
     // 限制每个标签的结果数量并填充结果
     for (final tag in normalizedTags) {
       final related = groups[tag] ?? [];
-      result[tag] = related.take(limit).toList();
+      final limited = related.take(limit).toList();
+      result[tag] = limited;
 
       // 更新缓存
-      if (related.isNotEmpty) {
-        _addToCache(tag, related);
+      if (limited.isNotEmpty) {
+        _addToCache(
+          _buildCacheKey(tag: tag, minCount: 1, limit: limit),
+          limited,
+        );
       }
     }
 
@@ -198,7 +208,8 @@ class CooccurrenceDataSource {
       return RelatedTag(
         tag: '${row['tag1']} → ${row['tag2']}',
         count: (row['count'] as num?)?.toInt() ?? 0,
-        cooccurrenceScore: (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
+        cooccurrenceScore:
+            (row['cooccurrence_score'] as num?)?.toDouble() ?? 0.0,
       );
     }).toList();
   }
@@ -252,7 +263,8 @@ class CooccurrenceDataSource {
   Future<int> getCount() async {
     if (!_initialized) await initialize();
 
-    final result = await _db!.rawQuery('SELECT COUNT(*) as count FROM cooccurrences');
+    final result =
+        await _db!.rawQuery('SELECT COUNT(*) as count FROM cooccurrences');
     return (result.first['count'] as num?)?.toInt() ?? 0;
   }
 
@@ -334,6 +346,12 @@ class CooccurrenceDataSource {
     }
     _relatedCache[key] = value;
   }
+
+  String _buildCacheKey({
+    required String tag,
+    required int minCount,
+    required int limit,
+  }) {
+    return '$tag|$minCount|$limit';
+  }
 }
-
-

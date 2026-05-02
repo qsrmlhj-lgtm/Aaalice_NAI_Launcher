@@ -197,6 +197,48 @@ class SecureStorageService {
     await _storage.delete(key: key);
   }
 
+  // ==================== Prompt Assistant API Key ====================
+
+  String _promptAssistantKey(String providerId) =>
+      '${StorageKeys.promptAssistantApiKeyPrefix}$providerId';
+
+  Future<void> savePromptAssistantApiKey(String providerId, String apiKey) async {
+    final key = _promptAssistantKey(providerId);
+    final value = apiKey.trim();
+    _memoryCache[key] = value;
+    try {
+      await _storage.write(key: key, value: value);
+    } catch (e) {
+      AppLogger.w('Failed to save prompt assistant key: $e', 'SecureStorage');
+    }
+  }
+
+  Future<String?> getPromptAssistantApiKey(String providerId) async {
+    final key = _promptAssistantKey(providerId);
+    final cached = _memoryCache[key];
+    if (cached != null) return cached;
+    try {
+      final value = await _storage.read(key: key);
+      if (value != null) {
+        _memoryCache[key] = value;
+      }
+      return value;
+    } catch (e) {
+      AppLogger.w('Failed to read prompt assistant key: $e', 'SecureStorage');
+      return null;
+    }
+  }
+
+  Future<void> deletePromptAssistantApiKey(String providerId) async {
+    final key = _promptAssistantKey(providerId);
+    _memoryCache.remove(key);
+    try {
+      await _storage.delete(key: key);
+    } catch (e) {
+      AppLogger.w('Failed to delete prompt assistant key: $e', 'SecureStorage');
+    }
+  }
+
   // ==================== Account Access Key 存储 ====================
   // 用于 JWT token 刷新，accessKey 可用于重新获取 token
 

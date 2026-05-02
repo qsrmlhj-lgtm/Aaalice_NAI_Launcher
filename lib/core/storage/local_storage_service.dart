@@ -92,6 +92,22 @@ class LocalStorageService {
     await setSetting(StorageKeys.locale, code);
   }
 
+  // ==================== Diagnostics ====================
+
+  /// 获取是否记录文件日志 (默认关闭)
+  bool getFileLoggingEnabled() {
+    return getSetting<bool>(
+          StorageKeys.fileLoggingEnabled,
+          defaultValue: false,
+        ) ??
+        false;
+  }
+
+  /// 保存是否记录文件日志
+  Future<void> setFileLoggingEnabled(bool value) async {
+    await setSetting(StorageKeys.fileLoggingEnabled, value);
+  }
+
   // ==================== Default Generation Params ====================
 
   /// 获取默认模型
@@ -463,6 +479,17 @@ class LocalStorageService {
   /// 保存噪声计划
   Future<void> setLastNoiseSchedule(String noiseSchedule) async {
     await setSetting(StorageKeys.lastNoiseSchedule, noiseSchedule);
+  }
+
+  /// 获取上次的 Variety+ 设置
+  bool getLastVarietyPlus() {
+    return getSetting<bool>(StorageKeys.lastVarietyPlus, defaultValue: false) ??
+        false;
+  }
+
+  /// 保存 Variety+ 设置
+  Future<void> setLastVarietyPlus(bool value) async {
+    await setSetting(StorageKeys.lastVarietyPlus, value);
   }
 
   // ==================== Seed Lock ====================

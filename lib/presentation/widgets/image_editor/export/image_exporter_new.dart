@@ -3,6 +3,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/utils/inpaint_mask_utils.dart';
+import '../core/history_manager.dart';
+import '../layers/layer.dart';
 import '../layers/layer_manager.dart';
 
 /// 图像导出器
@@ -23,25 +26,56 @@ class ImageExporterNew {
     return byteData.buffer.asUint8List();
   }
 
-  /// 导出蒙版图像（黑白，用于Inpainting）
+  /// 导出蒙版图像（黑白，用于 Inpainting）
   static Future<Uint8List> exportMask(
     Path selectionPath,
-    Size canvasSize,
-  ) async {
+    Size canvasSize, {
+    bool forceHardEdges = false,
+  }) async {
+    return exportMaskFromLayers(
+      null,
+      canvasSize,
+      selectionPath: selectionPath,
+      forceHardEdges: forceHardEdges,
+    );
+  }
+
+  /// 从图层与选区共同导出蒙版图像（黑白，用于 Inpainting）
+  static Future<Uint8List> exportMaskFromLayers(
+    LayerManager? layerManager,
+    Size canvasSize, {
+    Path? selectionPath,
+    Set<String> excludedBaseImageLayerIds = const {},
+    bool forceHardEdges = false,
+  }) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    final bounds = Rect.fromLTWH(0, 0, canvasSize.width, canvasSize.height);
 
-    // 黑色背景
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, canvasSize.width, canvasSize.height),
-      Paint()..color = Colors.black,
-    );
+    canvas.saveLayer(bounds, Paint());
 
-    // 白色选区
-    canvas.drawPath(
-      selectionPath,
-      Paint()..color = Colors.white,
-    );
+    if (layerManager != null) {
+      for (final layer in layerManager.layers) {
+        if (!layer.visible) {
+          continue;
+        }
+        _drawMaskLayer(
+          canvas,
+          layer,
+          includeBaseImage: !excludedBaseImageLayerIds.contains(layer.id),
+          forceHardEdges: forceHardEdges,
+        );
+      }
+    }
+
+    if (selectionPath != null) {
+      canvas.drawPath(
+        selectionPath,
+        Paint()..color = Colors.white,
+      );
+    }
+
+    canvas.restore();
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(
@@ -57,13 +91,11 @@ class ImageExporterNew {
       throw Exception('Failed to convert mask to bytes');
     }
 
-    return byteData.buffer.asUint8List();
+    return InpaintMaskUtils.normalizeMaskBytes(byteData.buffer.asUint8List());
   }
 
   /// 导出单个图层
-  static Future<Uint8List> exportLayer(
-    ui.Image layerImage,
-  ) async {
+  static Future<Uint8List> exportLayer(ui.Image layerImage) async {
     final byteData =
         await layerImage.toByteData(format: ui.ImageByteFormat.png);
 
@@ -72,5 +104,85 @@ class ImageExporterNew {
     }
 
     return byteData.buffer.asUint8List();
+  }
+
+  static void _drawMaskLayer(
+    Canvas canvas,
+    Layer layer, {
+    bool includeBaseImage = true,
+    bool forceHardEdges = false,
+  }) {
+    if (includeBaseImage && layer.baseImage != null) {
+      canvas.drawImage(
+        layer.baseImage!,
+        Offset.zero,
+        Paint(),
+      );
+    }
+
+    for (final stroke in layer.strokes) {
+      _drawMaskStroke(canvas, stroke, forceHardEdges: forceHardEdges);
+    }
+  }
+
+  static void _drawMaskStroke(
+    Canvas canvas,
+    StrokeData stroke, {
+    bool forceHardEdges = false,
+  }) {
+    if (stroke.points.isEmpty) {
+      return;
+    }
+
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = stroke.size
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    if (stroke.isEraser) {
+      paint.blendMode = BlendMode.clear;
+    }
+
+    if (!forceHardEdges && stroke.hardness < 1.0) {
+      final sigma = stroke.size * (1.0 - stroke.hardness) * 0.5;
+      paint.maskFilter = MaskFilter.blur(BlurStyle.normal, sigma);
+    }
+
+    if (stroke.points.length == 1) {
+      canvas.drawCircle(
+        stroke.points.first,
+        stroke.size / 2,
+        paint..style = PaintingStyle.fill,
+      );
+      return;
+    }
+
+    canvas.drawPath(_createSmoothPath(stroke.points), paint);
+  }
+
+  static Path _createSmoothPath(List<Offset> points) {
+    final path = Path();
+    if (points.isEmpty) {
+      return path;
+    }
+
+    path.moveTo(points.first.dx, points.first.dy);
+
+    if (points.length == 2) {
+      path.lineTo(points.last.dx, points.last.dy);
+      return path;
+    }
+
+    for (int i = 1; i < points.length - 1; i++) {
+      final p0 = points[i];
+      final p1 = points[i + 1];
+      final midX = (p0.dx + p1.dx) / 2;
+      final midY = (p0.dy + p1.dy) / 2;
+      path.quadraticBezierTo(p0.dx, p0.dy, midX, midY);
+    }
+    path.lineTo(points.last.dx, points.last.dy);
+    return path;
   }
 }

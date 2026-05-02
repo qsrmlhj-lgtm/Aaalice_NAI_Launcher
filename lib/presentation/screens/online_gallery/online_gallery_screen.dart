@@ -854,7 +854,9 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
   /// 构建空状态
   Widget _buildEmptyState(ThemeData theme, OnlineGalleryState state) {
     final isFavorites = state.viewMode == GalleryViewMode.favorites;
-    final icon = isFavorites ? Icons.favorite_border : Icons.image_not_supported_outlined;
+    final icon = isFavorites
+        ? Icons.favorite_border
+        : Icons.image_not_supported_outlined;
     final message = isFavorites
         ? context.l10n.onlineGallery_favoritesEmpty
         : context.l10n.onlineGallery_noResults;
@@ -1109,7 +1111,8 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
       _selectionNotifier.exit();
     }
 
-    final (successCount, failCount) = await _downloadPosts(selectedPosts, result);
+    final (successCount, failCount) =
+        await _downloadPosts(selectedPosts, result);
 
     if (mounted) {
       AppToast.success(context, '下载完成: 成功 $successCount, 失败 $failCount');
@@ -1133,8 +1136,10 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
             final url = post.largeFileUrl ?? post.sampleUrl ?? post.previewUrl;
             if (url.isEmpty) return;
 
-            final file = await DanbooruImageCacheManager.instance.getSingleFile(url);
-            final destination = path.join(destinationDir, path.basename(Uri.parse(url).path));
+            final file =
+                await DanbooruImageCacheManager.instance.getSingleFile(url);
+            final destination =
+                path.join(destinationDir, path.basename(Uri.parse(url).path));
             await file.copy(destination);
             successCount++;
           } catch (e) {
@@ -1384,18 +1389,18 @@ class _RatingDropdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final ratings = _getRatings(context);
-    final isAllSelected =
-        selectedRatings.length == kAllRatings.length &&
+    final isAllSelected = selectedRatings.length == kAllRatings.length &&
         selectedRatings.containsAll(kAllRatings);
-    final selectedCodesInOrder = ['g', 's', 'q', 'e']
-        .where(selectedRatings.contains)
-        .toList();
+    final selectedCodesInOrder =
+        ['g', 's', 'q', 'e'].where(selectedRatings.contains).toList();
     final selectedSpecific = ratings
         .where((r) => r.$1 != 'all' && selectedRatings.contains(r.$1))
         .toList();
     final current = isAllSelected
         ? ratings.first
-        : (selectedSpecific.isNotEmpty ? selectedSpecific.first : ratings.first);
+        : (selectedSpecific.isNotEmpty
+            ? selectedSpecific.first
+            : ratings.first);
 
     String buttonText() {
       if (isAllSelected) return current.$2;
@@ -1411,9 +1416,8 @@ class _RatingDropdown extends StatelessWidget {
       offset: const Offset(0, 36),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       itemBuilder: (menuContext) => ratings.map((r) {
-        final isSelected = r.$1 == 'all'
-            ? isAllSelected
-            : selectedRatings.contains(r.$1);
+        final isSelected =
+            r.$1 == 'all' ? isAllSelected : selectedRatings.contains(r.$1);
         return PopupMenuItem<String>(
           value: r.$1,
           child: Row(

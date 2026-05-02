@@ -1,16 +1,23 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/utils/app_logger.dart';
+import '../../../core/utils/focused_inpaint_utils.dart';
+import '../../../core/utils/inpaint_mask_utils.dart';
 import '../../../core/utils/localization_extension.dart';
 import '../../widgets/common/app_toast.dart';
+import 'core/canvas_controller.dart';
 import 'core/editor_state.dart';
+import 'effects/editor_effects.dart';
+import 'core/focused_selection_state.dart';
+import 'core/history_manager.dart';
 import 'layers/layer.dart';
+import 'painters/focused_overlay_painter.dart';
 import 'tools/tool_base.dart';
 import 'canvas/editor_canvas.dart';
 import 'widgets/toolbar/desktop_toolbar.dart';
@@ -20,6 +27,11 @@ import 'widgets/panels/color_panel.dart';
 import 'widgets/panels/canvas_size_dialog.dart';
 import 'export/image_exporter_new.dart';
 import '../../widgets/common/themed_divider.dart';
+
+enum ImageEditorMode {
+  edit,
+  inpaint,
+}
 
 /// 图像编辑器返回结果
 class ImageEditorResult {
@@ -35,11 +47,23 @@ class ImageEditorResult {
   /// 是否有蒙版修改
   final bool hasMaskChanges;
 
+  /// Focused Inpaint 选区范围
+  final Rect? focusAreaRect;
+
+  /// Focused Inpaint 上下文带宽
+  final double minimumContextMegaPixels;
+
+  /// 是否启用 Focused Inpaint
+  final bool focusedInpaintEnabled;
+
   const ImageEditorResult({
     this.modifiedImage,
     this.maskImage,
     this.hasImageChanges = false,
     this.hasMaskChanges = false,
+    this.focusAreaRect,
+    this.minimumContextMegaPixels = 88.0,
+    this.focusedInpaintEnabled = false,
   });
 }
 
@@ -54,8 +78,20 @@ class ImageEditorScreen extends StatefulWidget {
   /// 已有的蒙版图像
   final Uint8List? existingMask;
 
+  /// 已有的 Focused Inpaint 选区范围
+  final Rect? existingFocusRect;
+
+  /// Focused Inpaint 上下文带宽
+  final double initialMinimumContextMegaPixels;
+
+  /// 是否启用 Focused Inpaint
+  final bool initialFocusedInpaintEnabled;
+
   /// 是否显示蒙版导出选项
   final bool showMaskExport;
+
+  /// 编辑器模式
+  final ImageEditorMode mode;
 
   /// 标题
   final String title;
@@ -65,7 +101,11 @@ class ImageEditorScreen extends StatefulWidget {
     this.initialImage,
     this.initialSize,
     this.existingMask,
+    this.existingFocusRect,
+    this.initialMinimumContextMegaPixels = 88.0,
+    this.initialFocusedInpaintEnabled = false,
     this.showMaskExport = true,
+    this.mode = ImageEditorMode.edit,
     this.title = '画板',
   });
 
@@ -75,7 +115,11 @@ class ImageEditorScreen extends StatefulWidget {
     Uint8List? initialImage,
     Size? initialSize,
     Uint8List? existingMask,
+    Rect? existingFocusRect,
+    double initialMinimumContextMegaPixels = 88.0,
+    bool initialFocusedInpaintEnabled = false,
     bool showMaskExport = true,
+    ImageEditorMode mode = ImageEditorMode.edit,
     String title = '画板',
   }) {
     return Navigator.push<ImageEditorResult>(
@@ -85,7 +129,11 @@ class ImageEditorScreen extends StatefulWidget {
           initialImage: initialImage,
           initialSize: initialSize,
           existingMask: existingMask,
+          existingFocusRect: existingFocusRect,
+          initialMinimumContextMegaPixels: initialMinimumContextMegaPixels,
+          initialFocusedInpaintEnabled: initialFocusedInpaintEnabled,
           showMaskExport: showMaskExport,
+          mode: mode,
           title: title,
         ),
       ),
@@ -97,14 +145,41 @@ class ImageEditorScreen extends StatefulWidget {
 }
 
 class _ImageEditorScreenState extends State<ImageEditorScreen> {
+  static const Set<String> _inpaintToolIds = {
+    'brush',
+    'eraser',
+    'fill',
+    'rect_selection',
+    'ellipse_selection',
+    'lasso_selection',
+  };
+
   late EditorState _state;
+  late FocusedSelectionState _focusedSelectionState;
+  late double _minimumContextMegaPixels;
+  late bool _focusedInpaintEnabled;
+  bool _isMaskFillMode = false;
   bool _isInitialized = false;
   bool _showLayerPanel = true;
+  String? _sourceLayerId;
+
+  bool get _isInpaintMode => widget.mode == ImageEditorMode.inpaint;
 
   @override
   void initState() {
     super.initState();
     _state = EditorState();
+    _state.selectionManager.selectionNotifier.addListener(
+      _consumeFocusedSelection,
+    );
+    _focusedSelectionState = FocusedSelectionState(
+      canvasSize: const Size(1024, 1024),
+      initialRect: widget.existingFocusRect,
+    );
+    _minimumContextMegaPixels =
+        widget.initialMinimumContextMegaPixels.clamp(0.0, 192.0);
+    _focusedInpaintEnabled =
+        widget.initialFocusedInpaintEnabled || widget.existingFocusRect != null;
     _initializeCanvas();
   }
 
@@ -116,14 +191,27 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
       // 显示尺寸选择对话框或使用默认尺寸
       final size = widget.initialSize ?? const Size(1024, 1024);
       _state.initNewCanvas(size);
+      _focusedSelectionState.canvasSize = size;
 
       // 加载已有蒙版（如果有）
       await _loadExistingMask();
+      _loadExistingFocusSelection();
     }
 
     setState(() {
       _isInitialized = true;
     });
+
+    if (_isInpaintMode) {
+      _state.setForegroundColor(const Color(0xFF60AAFF));
+      _state.setBrushOpacity(0.55);
+      _state.setBrushHardness(1.0);
+      _state.setToolById(
+        _focusedInpaintEnabled && widget.existingFocusRect == null
+            ? 'rect_selection'
+            : 'brush',
+      );
+    }
 
     // 适应视口
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -144,12 +232,17 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           image.height.toDouble(),
         ),
       );
+      _focusedSelectionState.canvasSize = _state.canvasSize;
 
       // 将图像添加为底图图层
-      await _state.layerManager.addLayerFromImage(
+      final sourceLayer = await _state.layerManager.addLayerFromImage(
         widget.initialImage!,
         name: '底图',
       );
+      _sourceLayerId = sourceLayer?.id;
+      if (_isInpaintMode && sourceLayer != null) {
+        sourceLayer.locked = true;
+      }
 
       // 选中"图层 1"作为默认绘制图层（而非底图）
       final layer1 = _state.layerManager.layers.firstWhere(
@@ -160,11 +253,13 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
 
       // 加载已有蒙版
       await _loadExistingMask();
+      _loadExistingFocusSelection();
 
       image.dispose();
     } catch (e) {
       AppLogger.w('Failed to load initial image: $e', 'ImageEditor');
       _state.initNewCanvas(widget.initialSize ?? const Size(1024, 1024));
+      _focusedSelectionState.canvasSize = _state.canvasSize;
     } finally {
       codec?.dispose();
     }
@@ -174,9 +269,13 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
     if (widget.existingMask == null) return;
 
     try {
-      // 将已有蒙版添加为图层
-      final layer = await _state.layerManager.addLayerFromImage(
+      final overlayBytes = InpaintMaskUtils.maskToEditorOverlay(
         widget.existingMask!,
+      );
+
+      // 将已有蒙版添加为图层
+      final layer = await _addMaskLayerAboveSource(
+        overlayBytes,
         name: '已有蒙版',
       );
 
@@ -193,8 +292,18 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
     }
   }
 
+  void _loadExistingFocusSelection() {
+    if (!_isInpaintMode || widget.existingFocusRect == null) {
+      return;
+    }
+    _focusedSelectionState.load(widget.existingFocusRect);
+  }
+
   @override
   void dispose() {
+    _state.selectionManager.selectionNotifier.removeListener(
+      _consumeFocusedSelection,
+    );
     _state.dispose();
     super.dispose();
   }
@@ -229,14 +338,21 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
             child: Row(
               children: [
                 // 左侧工具栏
-                DesktopToolbar(state: _state),
+                DesktopToolbar(
+                  state: _state,
+                  onClear: _isInpaintMode ? _resetInpaintMask : null,
+                  onFillMask:
+                      _isInpaintMode ? _handleFillClosedMaskRegions : null,
+                  canFillMask: _isInpaintMode ? _hasMaskContent : null,
+                  allowedToolIds: _isInpaintMode ? _inpaintToolIds : null,
+                ),
 
                 // 中间画布区域
                 Expanded(
                   child: Column(
                     children: [
                       Expanded(
-                        child: EditorCanvas(state: _state),
+                        child: _buildCanvasArea(),
                       ),
                       // 底部状态栏
                       _buildStatusBar(),
@@ -263,7 +379,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
                         ),
                         const ThemedDivider(height: 1),
                         // 颜色面板
-                        ColorPanel(state: _state),
+                        if (!_isInpaintMode) ColorPanel(state: _state),
                       ],
                     ),
                   ),
@@ -288,11 +404,18 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
             tooltip: '图层',
           ),
           // 加载蒙版按钮
-          IconButton(
-            icon: const Icon(Icons.upload_file),
-            onPressed: _loadMask,
-            tooltip: '加载蒙版',
-          ),
+          if (_isInpaintMode)
+            IconButton(
+              icon: const Icon(Icons.upload_file),
+              onPressed: _loadMask,
+              tooltip: '加载蒙版',
+            ),
+          if (!_isInpaintMode)
+            IconButton(
+              icon: const Icon(Icons.tune_rounded),
+              onPressed: _showEffectsDialog,
+              tooltip: 'Effects',
+            ),
           // 导出按钮
           IconButton(
             icon: const Icon(Icons.check),
@@ -305,7 +428,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         children: [
           // 画布区域
           Expanded(
-            child: EditorCanvas(state: _state),
+            child: _buildCanvasArea(),
           ),
 
           // 工具设置（可折叠）
@@ -314,7 +437,11 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           // 底部工具栏
           MobileToolbar(
             state: _state,
+            onClear: _isInpaintMode ? _resetInpaintMask : null,
+            onFillMask: _isInpaintMode ? _handleFillClosedMaskRegions : null,
+            canFillMask: _isInpaintMode ? _hasMaskContent : null,
             onLayersPressed: _showMobileLayerSheet,
+            allowedToolIds: _isInpaintMode ? _inpaintToolIds : null,
           ),
         ],
       ),
@@ -330,7 +457,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border(
-          bottom: BorderSide(color: theme.dividerColor.withOpacity(0.3)),
+          bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.3)),
         ),
       ),
       child: Row(
@@ -346,6 +473,13 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
 
           const Spacer(),
 
+          if (!_isInpaintMode)
+            TextButton.icon(
+              icon: const Icon(Icons.tune_rounded, size: 18),
+              label: const Text('Effects'),
+              onPressed: _showEffectsDialog,
+            ),
+
           // 画布尺寸按钮（使用细粒度监听）
           TextButton.icon(
             icon: const Icon(Icons.aspect_ratio, size: 18),
@@ -359,11 +493,12 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           ),
 
           // 加载蒙版按钮
-          IconButton(
-            icon: const Icon(Icons.upload_file, size: 20),
-            onPressed: _loadMask,
-            tooltip: '加载蒙版',
-          ),
+          if (_isInpaintMode)
+            IconButton(
+              icon: const Icon(Icons.upload_file, size: 20),
+              onPressed: _loadMask,
+              tooltip: '加载蒙版',
+            ),
 
           const ThemedDivider(
             height: 1,
@@ -438,7 +573,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
             border: Border(
-              top: BorderSide(color: theme.dividerColor.withOpacity(0.3)),
+              top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.3)),
             ),
           ),
           child: Row(
@@ -638,6 +773,703 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
     );
   }
 
+  Future<void> _showEffectsDialog() async {
+    final layer = _state.layerManager.activeLayer;
+    if (layer == null || layer.locked || !layer.hasContent) {
+      AppToast.warning(context, '请选择一个非锁定且有内容的图层');
+      return;
+    }
+
+    final sourceBytes = await _readLayerPng(layer);
+    if (!mounted) return;
+    if (sourceBytes == null) {
+      AppToast.error(context, '无法读取当前图层');
+      return;
+    }
+
+    var effectType = EditorEffectType.brightness;
+    var intensity = 0.25;
+    var previewBytes = sourceBytes;
+    var previewLoading = false;
+    var previewError = '';
+    var previewVersion = 0;
+    var previewInitialized = false;
+    var dialogOpen = true;
+    Timer? previewDebounce;
+
+    Future<void> refreshPreview(StateSetter setDialogState) async {
+      previewDebounce?.cancel();
+      final version = ++previewVersion;
+      setDialogState(() {
+        previewLoading = true;
+        previewError = '';
+      });
+
+      previewDebounce = Timer(const Duration(milliseconds: 180), () async {
+        try {
+          final cropRect = _selectionCropRect();
+          final job = EditorEffectJob(
+            imageBytes: sourceBytes,
+            effectType: effectType,
+            intensity: intensity,
+            maxPreviewDimension: 768,
+            cropRect: cropRect,
+          );
+          final resultMessage = await compute(
+            runEditorEffectJobMessage,
+            job.toMessage(),
+            debugLabel: 'image_editor_effect_preview',
+          );
+          final result = EditorEffectResult.fromMessage(
+            resultMessage,
+          );
+          if (!dialogOpen || !mounted || version != previewVersion) {
+            return;
+          }
+          setDialogState(() {
+            previewBytes = result.bytes;
+            previewLoading = false;
+          });
+        } catch (e) {
+          if (!dialogOpen || !mounted || version != previewVersion) {
+            return;
+          }
+          setDialogState(() {
+            previewLoading = false;
+            previewError = e.toString();
+          });
+        }
+      });
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            if (!previewInitialized) {
+              previewInitialized = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (dialogOpen && mounted) {
+                  unawaited(refreshPreview(setState));
+                }
+              });
+            }
+            final media = MediaQuery.of(context);
+            final horizontalInset = media.size.width < 820 ? 12.0 : 32.0;
+            final dialogWidth = (media.size.width - horizontalInset * 2)
+                .clamp(360.0, 1120.0)
+                .toDouble();
+            final previewHeight =
+                (media.size.height * 0.48).clamp(320.0, 520.0).toDouble();
+
+            void selectEffect(EditorEffectType value) {
+              setState(() {
+                effectType = value;
+                intensity = _defaultEffectIntensity(value);
+              });
+              unawaited(refreshPreview(setState));
+            }
+
+            return Dialog(
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: horizontalInset,
+                vertical: 20,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: media.size.height * 0.9,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '本地后处理 / Effects',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '关闭',
+                            onPressed: () => Navigator.pop(context, false),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildEffectSection(
+                                title: '基础调整',
+                                effects: const [
+                                  EditorEffectType.brightness,
+                                  EditorEffectType.contrast,
+                                  EditorEffectType.saturation,
+                                  EditorEffectType.temperature,
+                                  EditorEffectType.gamma,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                              ),
+                              const SizedBox(height: 14),
+                              _buildEffectSection(
+                                title: '风格与修复',
+                                effects: const [
+                                  EditorEffectType.grayscale,
+                                  EditorEffectType.invert,
+                                  EditorEffectType.sepia,
+                                  EditorEffectType.denoise,
+                                  EditorEffectType.blur,
+                                  EditorEffectType.sharpen,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                              ),
+                              const SizedBox(height: 14),
+                              _buildEffectSection(
+                                title: '旋转 / 翻转 / 裁剪',
+                                description: '几何操作已经独立出来，点击后会先生成预览，确认应用后才写回图层。',
+                                effects: const [
+                                  EditorEffectType.rotateLeft,
+                                  EditorEffectType.rotateRight,
+                                  EditorEffectType.flipHorizontal,
+                                  EditorEffectType.flipVertical,
+                                  EditorEffectType.cropToSelection,
+                                ],
+                                selectedEffect: effectType,
+                                onSelected: selectEffect,
+                                prominent: true,
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEffectControl(
+                                effectType: effectType,
+                                intensity: intensity,
+                                onChanged: (value) {
+                                  setState(() => intensity = value);
+                                  unawaited(refreshPreview(setState));
+                                },
+                                onReset: () {
+                                  setState(
+                                    () => intensity =
+                                        _defaultEffectIntensity(effectType),
+                                  );
+                                  unawaited(refreshPreview(setState));
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              _buildEffectPreviewComparison(
+                                previewHeight: previewHeight,
+                                sourceBytes: sourceBytes,
+                                previewBytes: previewBytes,
+                                previewLoading: previewLoading,
+                                previewError: previewError,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                '预览不会修改原图；点击应用后才会把结果写入当前活动图层和撤销历史。',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('取消'),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: previewLoading || previewError.isNotEmpty
+                                ? null
+                                : () => Navigator.pop(context, true),
+                            icon: const Icon(Icons.check),
+                            label: const Text('应用到当前图层'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    dialogOpen = false;
+    previewDebounce?.cancel();
+
+    if (confirmed == true) {
+      await _applyEffect(effectType, intensity);
+    }
+  }
+
+  Widget _buildEffectSection({
+    required String title,
+    required List<EditorEffectType> effects,
+    required EditorEffectType selectedEffect,
+    required ValueChanged<EditorEffectType> onSelected,
+    String? description,
+    bool prominent = false,
+  }) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (description != null) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      description,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final effect in effects)
+                  _buildEffectChip(
+                    effect: effect,
+                    selected: effect == selectedEffect,
+                    onSelected: onSelected,
+                    prominent: prominent,
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEffectChip({
+    required EditorEffectType effect,
+    required bool selected,
+    required ValueChanged<EditorEffectType> onSelected,
+    required bool prominent,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final foreground =
+        selected ? colorScheme.onSecondaryContainer : colorScheme.onSurface;
+    return ChoiceChip(
+      selected: selected,
+      showCheckmark: false,
+      selectedColor: colorScheme.secondaryContainer,
+      backgroundColor:
+          colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      side: BorderSide(
+        color: selected ? colorScheme.secondary : colorScheme.outlineVariant,
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: prominent ? 14 : 10,
+        vertical: prominent ? 10 : 7,
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_effectIcon(effect), size: prominent ? 20 : 18),
+          const SizedBox(width: 6),
+          Text(
+            _effectLabel(effect),
+            style: theme.textTheme.labelLarge?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+      onSelected: (_) => onSelected(effect),
+    );
+  }
+
+  Widget _buildEffectControl({
+    required EditorEffectType effectType,
+    required double intensity,
+    required ValueChanged<double> onChanged,
+    required VoidCallback onReset,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    if (!_effectHasIntensity(effectType)) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Icon(_effectIcon(effectType), color: colorScheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '${_effectLabel(effectType)} 是一次性操作，没有强度滑条。',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(_effectIcon(effectType), color: colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${_effectLabel(effectType)} 强度',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Text(
+                  intensity.toStringAsFixed(2),
+                  style: theme.textTheme.titleSmall,
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: onReset,
+                  child: const Text('重置'),
+                ),
+              ],
+            ),
+            Slider(
+              value: intensity,
+              min: _effectMin(effectType),
+              max: _effectMax(effectType),
+              divisions: 40,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEffectPreviewComparison({
+    required double previewHeight,
+    required Uint8List sourceBytes,
+    required Uint8List previewBytes,
+    required bool previewLoading,
+    required String previewError,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stacked = constraints.maxWidth < 720;
+        if (stacked) {
+          return SizedBox(
+            height: previewHeight * 1.7,
+            child: Column(
+              children: [
+                Expanded(
+                  child: _buildEffectPreviewPane(
+                    title: '原图',
+                    bytes: sourceBytes,
+                    loading: false,
+                    error: '',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: _buildEffectPreviewPane(
+                    title: '效果预览',
+                    bytes: previewBytes,
+                    loading: previewLoading,
+                    error: previewError,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return SizedBox(
+          height: previewHeight,
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildEffectPreviewPane(
+                  title: '原图',
+                  bytes: sourceBytes,
+                  loading: false,
+                  error: '',
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _buildEffectPreviewPane(
+                  title: '效果预览',
+                  bytes: previewBytes,
+                  loading: previewLoading,
+                  error: previewError,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEffectPreviewPane({
+    required String title,
+    required Uint8List bytes,
+    required bool loading,
+    required String error,
+  }) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
+              child: error.isNotEmpty
+                  ? Center(
+                      child: Text(
+                        error,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
+                      ),
+                    )
+                  : Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.medium,
+                      gaplessPlayback: true,
+                    ),
+            ),
+          ),
+          Positioned(
+            left: 8,
+            top: 6,
+            child: Text(title, style: theme.textTheme.labelMedium),
+          ),
+          if (loading)
+            const Positioned(
+              right: 8,
+              top: 8,
+              child: SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  IconData _effectIcon(EditorEffectType type) {
+    return switch (type) {
+      EditorEffectType.brightness => Icons.wb_sunny_outlined,
+      EditorEffectType.contrast => Icons.contrast,
+      EditorEffectType.saturation => Icons.palette_outlined,
+      EditorEffectType.temperature => Icons.thermostat,
+      EditorEffectType.gamma => Icons.tune,
+      EditorEffectType.grayscale => Icons.tonality,
+      EditorEffectType.invert => Icons.invert_colors,
+      EditorEffectType.sepia => Icons.filter_vintage,
+      EditorEffectType.denoise => Icons.grain,
+      EditorEffectType.blur => Icons.blur_on,
+      EditorEffectType.sharpen => Icons.auto_fix_high,
+      EditorEffectType.cropToSelection => Icons.crop,
+      EditorEffectType.rotateLeft => Icons.rotate_left,
+      EditorEffectType.rotateRight => Icons.rotate_right,
+      EditorEffectType.flipHorizontal => Icons.swap_horiz,
+      EditorEffectType.flipVertical => Icons.swap_vert,
+    };
+  }
+
+  Future<void> _applyEffect(
+    EditorEffectType effectType,
+    double intensity,
+  ) async {
+    final layer = _state.layerManager.activeLayer;
+    if (layer == null || layer.locked || !layer.hasContent) {
+      AppToast.warning(context, '请选择一个非锁定且有内容的图层');
+      return;
+    }
+
+    try {
+      final sourceBytes = await _readLayerPng(layer);
+      if (!mounted) return;
+      if (sourceBytes == null) {
+        AppToast.error(context, '无法读取当前图层');
+        return;
+      }
+
+      final cropRect = _selectionCropRect();
+      final job = EditorEffectJob(
+        imageBytes: sourceBytes,
+        effectType: effectType,
+        intensity: intensity,
+        cropRect: cropRect,
+      );
+      final resultMessage = await compute(
+        runEditorEffectJobMessage,
+        job.toMessage(),
+        debugLabel: 'image_editor_effect_apply',
+      );
+      final result = EditorEffectResult.fromMessage(resultMessage);
+      final bytes = result.bytes;
+      final newImage = await _decodeUiImage(bytes);
+      if (!mounted) return;
+      _state.historyManager.execute(
+        ReplaceLayerImageAction(
+          layerId: layer.id,
+          newImageBytes: bytes,
+          newImage: newImage,
+          actionDescription: _effectLabel(effectType),
+        ),
+        _state,
+      );
+      _state.layerManager.invalidateSnapshot();
+      setState(() {});
+      AppToast.success(context, '已应用 ${_effectLabel(effectType)}');
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, '应用效果失败: $e');
+    }
+  }
+
+  Future<Uint8List?> _readLayerPng(dynamic layer) async {
+    final rendered = await _renderLayerToImage(layer);
+    try {
+      final raw = await rendered.toByteData(format: ui.ImageByteFormat.png);
+      return raw?.buffer.asUint8List();
+    } finally {
+      rendered.dispose();
+    }
+  }
+
+  Future<ui.Image> _renderLayerToImage(dynamic layer) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    layer.render(canvas, _state.canvasSize);
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(
+      _state.canvasSize.width.toInt(),
+      _state.canvasSize.height.toInt(),
+    );
+    picture.dispose();
+    return image;
+  }
+
+  Future<ui.Image> _decodeUiImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    try {
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  String _effectLabel(EditorEffectType type) {
+    return editorEffectLabel(type);
+  }
+
+  double _defaultEffectIntensity(EditorEffectType type) {
+    return editorEffectDefaultIntensity(type);
+  }
+
+  double _effectMin(EditorEffectType type) {
+    return editorEffectMin(type);
+  }
+
+  double _effectMax(EditorEffectType type) {
+    return editorEffectMax(type);
+  }
+
+  bool _effectHasIntensity(EditorEffectType type) {
+    return editorEffectHasIntensity(type);
+  }
+
+  EditorEffectCropRect? _selectionCropRect() {
+    final selection = _state.selectionPath;
+    if (selection == null) {
+      return null;
+    }
+    final bounds = selection.getBounds().intersect(
+          Offset.zero & _state.canvasSize,
+        );
+    if (bounds.isEmpty) {
+      return null;
+    }
+    final x = bounds.left.floor().clamp(0, _state.canvasSize.width - 1).toInt();
+    final y = bounds.top.floor().clamp(0, _state.canvasSize.height - 1).toInt();
+    final right =
+        bounds.right.ceil().clamp(x + 1, _state.canvasSize.width).toInt();
+    final bottom =
+        bounds.bottom.ceil().clamp(y + 1, _state.canvasSize.height).toInt();
+    return EditorEffectCropRect(
+      x: x,
+      y: y,
+      width: right - x,
+      height: bottom - y,
+    );
+  }
+
   Widget _buildShortcutSection(String title, List<(String, String)> shortcuts) {
     final theme = Theme.of(context);
     return Padding(
@@ -816,11 +1648,26 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           _state.layerManager.layerCount > 1;
 
       // 检查是否有蒙版修改
-      final hasMaskChanges = _state.selectionPath != null;
+      final hasMaskChanges = _hasMaskContent();
+      final focusAreaRect =
+          _focusedInpaintEnabled ? _focusedSelectionState.committedRect : null;
+      final focusedInpaintEnabled =
+          _focusedInpaintEnabled && focusAreaRect != null;
+      final useFocusedSelectionAsMask =
+          focusedInpaintEnabled && !hasMaskChanges;
+      AppLogger.d(
+        'Export editor result: inpaint=$_isInpaintMode, '
+            'hasImageChanges=$hasImageChanges, hasMaskChanges=$hasMaskChanges, '
+            'selection=${_state.selectionPath != null}, focusRect=$focusAreaRect, '
+            'focusedEnabled=$focusedInpaintEnabled, '
+            'useFocusedSelectionAsMask=$useFocusedSelectionAsMask, '
+            'layers=${_state.layerManager.layerCount}',
+        'ImageEditor',
+      );
 
       // 导出合并图像
       Uint8List? modifiedImage;
-      if (hasImageChanges) {
+      if (!_isInpaintMode && hasImageChanges) {
         modifiedImage = await ImageExporterNew.exportMergedImage(
           _state.layerManager,
           _state.canvasSize,
@@ -829,10 +1676,30 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
 
       // 导出蒙版图像
       Uint8List? maskImage;
-      if (widget.showMaskExport && _state.selectionPath != null) {
-        maskImage = await ImageExporterNew.exportMask(
-          _state.selectionPath!,
+      if (_isInpaintMode && widget.showMaskExport && hasMaskChanges) {
+        maskImage = await ImageExporterNew.exportMaskFromLayers(
+          _state.layerManager,
           _state.canvasSize,
+          excludedBaseImageLayerIds: {
+            if (_sourceLayerId != null) _sourceLayerId!,
+          },
+          forceHardEdges: true,
+        );
+        AppLogger.d(
+          'Exported inpaint mask bytes: ${maskImage.length}',
+          'ImageEditor',
+        );
+      } else if (_isInpaintMode &&
+          widget.showMaskExport &&
+          useFocusedSelectionAsMask) {
+        maskImage = await ImageExporterNew.exportMask(
+          Path()..addRect(focusAreaRect),
+          _state.canvasSize,
+          forceHardEdges: true,
+        );
+        AppLogger.d(
+          'Exported focused selection mask bytes: ${maskImage.length}',
+          'ImageEditor',
         );
       }
 
@@ -848,8 +1715,12 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
           ImageEditorResult(
             modifiedImage: modifiedImage,
             maskImage: maskImage,
-            hasImageChanges: hasImageChanges,
-            hasMaskChanges: hasMaskChanges,
+            hasImageChanges: !_isInpaintMode && hasImageChanges,
+            hasMaskChanges:
+                _isInpaintMode && (hasMaskChanges || useFocusedSelectionAsMask),
+            focusAreaRect: focusAreaRect,
+            minimumContextMegaPixels: _minimumContextMegaPixels,
+            focusedInpaintEnabled: focusedInpaintEnabled,
           ),
         );
       }
@@ -864,6 +1735,423 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         AppToast.error(context, '导出失败: $e');
       }
     }
+  }
+
+  bool _hasMaskContent() {
+    for (final layer in _state.layerManager.layers) {
+      if (!layer.visible || layer.id == _sourceLayerId) {
+        continue;
+      }
+      if (layer.hasBaseImage || layer.strokes.isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _handleFillClosedMaskRegions() {
+    if (!_isInpaintMode) {
+      return;
+    }
+
+    setState(() {
+      _isMaskFillMode = !_isMaskFillMode;
+    });
+
+    if (_isMaskFillMode) {
+      AppToast.info(context, '请点击封闭区域内部进行填充。');
+    }
+  }
+
+  Future<void> _fillClosedMaskRegionsAt(Offset localPosition) async {
+    if (!_isInpaintMode || !mounted) {
+      return;
+    }
+
+    try {
+      final canvasPoint = _state.canvasController.screenToCanvas(
+        localPosition,
+        canvasSize: _state.canvasSize,
+      );
+      final originalMask = await ImageExporterNew.exportMaskFromLayers(
+        _state.layerManager,
+        _state.canvasSize,
+        excludedBaseImageLayerIds: {
+          if (_sourceLayerId != null) _sourceLayerId!,
+        },
+        forceHardEdges: true,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (!InpaintMaskUtils.hasMaskedPixels(originalMask)) {
+        AppToast.warning(context, '请先绘制封闭的蒙版轮廓。');
+        return;
+      }
+
+      final filledMask = InpaintMaskUtils.fillMaskRegionAtPoint(
+        originalMask,
+        x: canvasPoint.dx.floor(),
+        y: canvasPoint.dy.floor(),
+      );
+      final deltaMask = InpaintMaskUtils.extractFilledMaskDelta(
+        originalMask,
+        filledMask,
+      );
+      if (!InpaintMaskUtils.hasMaskedPixels(deltaMask)) {
+        AppToast.info(context, '该位置没有可填充的封闭区域。');
+        return;
+      }
+
+      final overlayBytes = InpaintMaskUtils.maskToEditorOverlay(filledMask);
+      final removableLayerIds = _state.layerManager.layers
+          .where((layer) => layer.id != _sourceLayerId)
+          .map((layer) => layer.id)
+          .toList(growable: false);
+
+      for (final layerId in removableLayerIds) {
+        _state.layerManager.removeLayer(layerId);
+      }
+
+      final layer = await _addMaskLayerAboveSource(
+        overlayBytes,
+        name: '蒙版',
+      );
+      if (layer == null) {
+        throw Exception('无法更新蒙版图层');
+      }
+
+      _state.requestUiUpdate();
+      if (mounted) {
+        _isMaskFillMode = false;
+        setState(() {});
+        AppToast.success(context, '封闭区域已填充为蒙版。');
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, '填充蒙版失败: $e');
+      }
+    }
+  }
+
+  int? _resolveMaskLayerInsertIndex() {
+    if (_sourceLayerId == null) {
+      return null;
+    }
+
+    final sourceIndex = _state.layerManager.layers.indexWhere(
+      (layer) => layer.id == _sourceLayerId,
+    );
+    if (sourceIndex == -1) {
+      return null;
+    }
+
+    // 蒙版图层应插入到底图上方，否则会被底图完全覆盖。
+    return sourceIndex;
+  }
+
+  Future<Layer?> _addMaskLayerAboveSource(
+    Uint8List imageBytes, {
+    required String name,
+  }) {
+    return _state.layerManager.addLayerFromImage(
+      imageBytes,
+      name: name,
+      index: _resolveMaskLayerInsertIndex(),
+    );
+  }
+
+  Layer _addEmptyMaskLayerAboveSource({required String name}) {
+    return _state.layerManager.addLayer(
+      name: name,
+      index: _resolveMaskLayerInsertIndex(),
+    );
+  }
+
+  void _resetInpaintMask() {
+    if (!_isInpaintMode) {
+      _state.clearActiveLayerWithHistory();
+      return;
+    }
+
+    final removableLayerIds = _state.layerManager.layers
+        .where((layer) => layer.id != _sourceLayerId)
+        .map((layer) => layer.id)
+        .toList(growable: false);
+
+    for (final layerId in removableLayerIds) {
+      _state.layerManager.removeLayer(layerId);
+    }
+
+    _state.clearSelection(saveHistory: false);
+    _state.clearPreview();
+    _focusedSelectionState.clear();
+    _isMaskFillMode = false;
+    _addEmptyMaskLayerAboveSource(name: '蒙版');
+    _state.setToolById(_focusedInpaintEnabled ? 'rect_selection' : 'brush');
+    _state.requestUiUpdate();
+    setState(() {});
+  }
+
+  Widget _buildCanvasArea() {
+    final focusAreaRect = _focusedInpaintEnabled
+        ? _focusedSelectionState.resolveActiveRect(
+            previewPath: _state.previewPath,
+          )
+        : null;
+    final contextCrop = focusAreaRect == null
+        ? null
+        : FocusedInpaintUtils.resolveContextCropForSelection(
+            sourceWidth: _state.canvasSize.width.round(),
+            sourceHeight: _state.canvasSize.height.round(),
+            selectionRect: focusAreaRect,
+            minContextMegaPixels: _minimumContextMegaPixels,
+          );
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: EditorCanvas(
+            state: _state,
+            suppressSelectionOverlay:
+                _focusedSelectionState.shouldSuppressSelectionOverlay(
+              focusedEnabled: _isInpaintMode && _focusedInpaintEnabled,
+              currentToolId: _state.currentTool?.id,
+              previewPath: _state.previewPath,
+            ),
+          ),
+        ),
+        if (_isInpaintMode && focusAreaRect != null && contextCrop != null)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _FocusedContextOverlayPainter(
+                  canvasController: _state.canvasController,
+                  focusAreaRect: focusAreaRect,
+                  contextCrop: contextCrop,
+                  repaint: Listenable.merge([
+                    _state.renderNotifier,
+                    _state.canvasController,
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        if (_isInpaintMode && _isMaskFillMode)
+          Positioned.fill(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (event) {
+                  unawaited(_fillClosedMaskRegionsAt(event.localPosition));
+                },
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        if (_isInpaintMode)
+          Positioned(
+            top: 16,
+            left: 16,
+            child: _buildFocusedSelectionCard(),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildFocusedSelectionCard() {
+    final theme = Theme.of(context);
+    final hasFocusArea =
+        _focusedInpaintEnabled && _focusedSelectionState.hasCommittedRect;
+
+    return Container(
+      width: 220,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.35),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _toggleFocusedInpaint,
+                  icon: Icon(
+                    _focusedInpaintEnabled
+                        ? Icons.crop_free
+                        : Icons.filter_center_focus,
+                    size: 16,
+                  ),
+                  label: Text(
+                    _focusedInpaintEnabled
+                        ? 'Focused Area Selection'
+                        : 'Focused Inpaint',
+                  ),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            !_focusedInpaintEnabled
+                ? '点击按钮后进入聚焦模式，再框选区域并绘制蒙版。'
+                : hasFocusArea
+                    ? '已选定聚焦区域，可继续用画笔编辑蒙版。'
+                    : '先框选聚焦区域，再切换画笔绘制蒙版。',
+            style: theme.textTheme.bodySmall,
+          ),
+          if (_focusedInpaintEnabled) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _buildFocusModeButton(
+                  icon: Icons.crop_square,
+                  label: '选区',
+                  toolId: 'rect_selection',
+                ),
+                const SizedBox(width: 8),
+                _buildFocusModeButton(
+                  icon: Icons.brush_outlined,
+                  label: '画笔',
+                  toolId: 'brush',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _focusedSelectionState.hasCommittedRect
+                    ? () {
+                        setState(() {
+                          _focusedSelectionState.clear();
+                          _state.clearSelection(saveHistory: false);
+                          _state.clearPreview();
+                          _state.setToolById('rect_selection');
+                        });
+                      }
+                    : null,
+                icon: const Icon(Icons.clear, size: 16),
+                label: const Text('清除选区'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Minimum Context Area: ${_minimumContextMegaPixels.round()}',
+              style: theme.textTheme.labelMedium,
+            ),
+            Slider(
+              value: _minimumContextMegaPixels,
+              min: 0,
+              max: 192,
+              divisions: 192,
+              onChanged: (value) {
+                setState(() {
+                  _minimumContextMegaPixels = value;
+                });
+              },
+            ),
+            Text(
+              '外框是实际送去 Focused Inpaint 的区域，内框是主要重绘区域；两框之间的带宽就是 Minimum Context Area。',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _toggleFocusedInpaint() {
+    setState(() {
+      _focusedInpaintEnabled = !_focusedInpaintEnabled;
+      if (_focusedInpaintEnabled) {
+        if (!_focusedSelectionState.hasCommittedRect) {
+          _state.setToolById('rect_selection');
+        }
+      } else {
+        _state.clearSelection(saveHistory: false);
+        _state.clearPreview();
+        _focusedSelectionState.clear();
+        _state.setToolById('brush');
+      }
+    });
+  }
+
+  void _consumeFocusedSelection() {
+    if (!_isInpaintMode || !_focusedInpaintEnabled) {
+      return;
+    }
+    if (_state.currentTool?.id != 'rect_selection') {
+      return;
+    }
+    final consumed =
+        _focusedSelectionState.captureSelection(_state.selectionPath);
+    if (!consumed) {
+      return;
+    }
+
+    _state.clearSelection(saveHistory: false);
+    _state.clearPreview();
+    _state.setToolById('brush');
+    _state.requestUiUpdate();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Widget _buildFocusModeButton({
+    required IconData icon,
+    required String label,
+    required String toolId,
+  }) {
+    final theme = Theme.of(context);
+    final selected = _state.currentTool?.id == toolId;
+
+    return Expanded(
+      child: OutlinedButton.icon(
+        onPressed: () {
+          _state.setToolById(toolId);
+        },
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: selected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurface,
+          backgroundColor: selected
+              ? theme.colorScheme.primary.withValues(alpha: 0.12)
+              : Colors.transparent,
+          side: BorderSide(
+            color: selected
+                ? theme.colorScheme.primary
+                : theme.colorScheme.outline.withValues(alpha: 0.35),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
   }
 
   /// 加载蒙版文件
@@ -951,7 +2239,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
       }
 
       // 将蒙版添加为新图层
-      final layer = await _state.layerManager.addLayerFromImage(
+      final layer = await _addMaskLayerAboveSource(
         bytes,
         name: '蒙版',
       );
@@ -982,5 +2270,51 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
   /// 加载蒙版
   Future<void> _loadMask() async {
     await _loadMaskFile();
+  }
+}
+
+class _FocusedContextOverlayPainter extends CustomPainter {
+  _FocusedContextOverlayPainter({
+    required this.canvasController,
+    required this.focusAreaRect,
+    required this.contextCrop,
+    super.repaint,
+  });
+
+  final CanvasController canvasController;
+  final Rect focusAreaRect;
+  final FocusedInpaintCrop contextCrop;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final matrix = canvasController.transformMatrix.storage;
+    final screenSelectionPath = (Path()..addRect(focusAreaRect)).transform(
+      matrix,
+    );
+    final screenContextPath = (Path()
+          ..addRect(
+            Rect.fromLTWH(
+              contextCrop.x.toDouble(),
+              contextCrop.y.toDouble(),
+              contextCrop.width.toDouble(),
+              contextCrop.height.toDouble(),
+            ),
+          ))
+        .transform(matrix);
+
+    FocusedOverlayPainter(
+      contextPath: screenContextPath,
+      focusPath: screenSelectionPath,
+    ).paint(canvas, size);
+  }
+
+  @override
+  bool shouldRepaint(covariant _FocusedContextOverlayPainter oldDelegate) {
+    return contextCrop.x != oldDelegate.contextCrop.x ||
+        contextCrop.y != oldDelegate.contextCrop.y ||
+        contextCrop.width != oldDelegate.contextCrop.width ||
+        contextCrop.height != oldDelegate.contextCrop.height ||
+        focusAreaRect != oldDelegate.focusAreaRect ||
+        canvasController != oldDelegate.canvasController;
   }
 }

@@ -2,12 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
+
 import '../../data/models/gallery/nai_image_metadata.dart';
 import '../../data/models/image/image_params.dart';
 import '../../data/services/metadata/unified_metadata_parser.dart';
 import '../constants/api_constants.dart';
 import '../enums/precise_ref_type.dart';
 import 'app_logger.dart';
+import 'prompt_semantics_utils.dart';
 
 /// 统一图像保存工具类
 ///
@@ -34,17 +37,17 @@ class ImageSaveUtils {
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
   }) {
-    // 计算有效的负面提示词（应用 UC 预设）
-    final effectiveNegativePrompt = UcPresets.applyPresetWithNsfwCheck(
-      params.negativePrompt,
-      params.prompt,
-      params.model,
-      params.ucPreset,
+    final promptSemantics = buildPromptSemanticsSnapshot(
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      model: params.model,
+      qualityToggle: params.qualityToggle,
+      ucPreset: params.ucPreset,
     );
 
     final commentJson = <String, dynamic>{
-      'prompt': params.prompt,
-      'uc': effectiveNegativePrompt,
+      'prompt': promptSemantics.effectivePrompt,
+      'uc': promptSemantics.effectiveNegativePrompt,
       'seed': actualSeed,
       'steps': params.steps,
       'width': params.width,
@@ -58,45 +61,35 @@ class ImageSaveUtils {
       'sm': params.smea,
       'sm_dyn': params.smeaDyn,
       // NAI官方格式字段
-      'version': params.isV4Model ? 'v4' : 'v3',
+      'version': params.isV4Model ? 1 : 'v3',
       'legacy_v3_extend': false,
-      // 模型信息
-      'model': params.model,
-      // UC预设和质量标签
-      'uc_preset': params.ucPreset,
-      'quality_toggle': params.qualityToggle,
-      // 生成动作类型
-      'action': params.action.value,
       // img2img参数
       if (params.isImg2Img) ...{
         'strength': params.strength,
         'noise': params.noise,
       },
-      // 应用专属字段
-      'fixed_prefix': fixedPrefixTags ?? [],
-      'fixed_suffix': fixedSuffixTags ?? [],
     };
 
     // V4多角色提示词
-    if (charCaptions != null && charCaptions.isNotEmpty) {
+    if (params.isV4Model) {
       commentJson['v4_prompt'] = {
         'caption': {
-          'base_caption': params.prompt,
-          'char_captions': charCaptions,
+          'base_caption': promptSemantics.effectivePrompt,
+          'char_captions': charCaptions ?? const [],
         },
         'use_coords': useCoords,
         'use_order': true,
+        'legacy_uc': false,
       };
-      if (charNegCaptions != null && charNegCaptions.isNotEmpty) {
-        commentJson['v4_negative_prompt'] = {
-          'caption': {
-            'base_caption': effectiveNegativePrompt,
-            'char_captions': charNegCaptions,
-          },
-          'use_coords': false,
-          'use_order': false,
-        };
-      }
+      commentJson['v4_negative_prompt'] = {
+        'caption': {
+          'base_caption': promptSemantics.effectiveNegativePrompt,
+          'char_captions': charNegCaptions ?? const [],
+        },
+        'use_coords': false,
+        'use_order': false,
+        'legacy_uc': false,
+      };
     }
 
     // Vibe Transfer 数据（关键！之前缺失）
@@ -140,12 +133,68 @@ class ImageSaveUtils {
     required Map<String, dynamic> commentJson,
     required ImageParams params,
   }) {
+    final promptSemantics = buildPromptSemanticsSnapshot(
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      model: params.model,
+      qualityToggle: params.qualityToggle,
+      ucPreset: params.ucPreset,
+    );
     return {
-      'Description': params.prompt,
+      'Description': promptSemantics.effectivePrompt,
       'Software': 'NovelAI',
       'Source': _getModelSourceName(params.model),
       'Comment': jsonEncode(commentJson),
     };
+  }
+
+  /// 根据传入参数重建图像内嵌元数据。
+  ///
+  /// 如果原图已经带有 NovelAI 文本块，则优先保留原有的
+  /// `Description`、`Software`、`Source`，仅用新的参数覆盖 Comment。
+  static Future<Uint8List> rebuildImageBytesWithMetadata({
+    required Uint8List imageBytes,
+    required ImageParams params,
+    int? actualSeed,
+    List<String>? fixedPrefixTags,
+    List<String>? fixedSuffixTags,
+    List<Map<String, dynamic>>? charCaptions,
+    List<Map<String, dynamic>>? charNegCaptions,
+    bool useCoords = false,
+    bool useStealth = false,
+  }) async {
+    final existingMetadata = _extractEmbeddedPngMetadata(imageBytes);
+    final embeddedSeed = existingMetadata?.commentJson['seed'];
+    final normalizedSeed = actualSeed ??
+        (embeddedSeed is int
+            ? embeddedSeed
+            : embeddedSeed is num
+                ? embeddedSeed.toInt()
+                : params.seed);
+
+    return _embedNaiAlignedMetadata(
+      imageBytes: imageBytes,
+      commentJson: buildCommentJson(
+        params: params,
+        actualSeed: normalizedSeed,
+        fixedPrefixTags: fixedPrefixTags,
+        fixedSuffixTags: fixedSuffixTags,
+        charCaptions: charCaptions,
+        charNegCaptions: charNegCaptions,
+        useCoords: useCoords,
+      ),
+      description: existingMetadata?.description ??
+          buildPromptSemanticsSnapshot(
+            prompt: params.prompt,
+            negativePrompt: params.negativePrompt,
+            model: params.model,
+            qualityToggle: params.qualityToggle,
+            ucPreset: params.ucPreset,
+          ).effectivePrompt,
+      source: existingMetadata?.source ?? _getModelSourceName(params.model),
+      software: existingMetadata?.software ?? 'NovelAI',
+      useStealth: useStealth,
+    );
   }
 
   /// 保存图像并嵌入完整元数据
@@ -173,7 +222,8 @@ class ImageSaveUtils {
     bool useCoords = false,
     bool useStealth = false,
   }) async {
-    final commentJson = buildCommentJson(
+    final embeddedBytes = await rebuildImageBytesWithMetadata(
+      imageBytes: imageBytes,
       params: params,
       actualSeed: actualSeed,
       fixedPrefixTags: fixedPrefixTags,
@@ -181,12 +231,6 @@ class ImageSaveUtils {
       charCaptions: charCaptions,
       charNegCaptions: charNegCaptions,
       useCoords: useCoords,
-    );
-    final embeddedBytes = await _embedNaiAlignedMetadata(
-      imageBytes: imageBytes,
-      commentJson: commentJson,
-      description: params.prompt,
-      source: _getModelSourceName(params.model),
       useStealth: useStealth,
     );
 
@@ -245,14 +289,25 @@ class ImageSaveUtils {
     return file;
   }
 
+  static bool hasEmbeddedNovelAiMetadata(Uint8List imageBytes) {
+    return _extractEmbeddedPngMetadata(imageBytes) != null;
+  }
+
   /// 从元数据重新构建 ImageParams
   ///
   /// 用于导入图像时恢复生成参数
   static ImageParams? rebuildParamsFromMetadata(NaiImageMetadata metadata) {
     try {
+      final restoredNegativePrompt = metadata.ucPreset != null
+          ? UcPresets.stripPresetByInt(
+              metadata.negativePrompt,
+              metadata.model ?? 'nai-diffusion-4-full',
+              metadata.ucPreset!,
+            )
+          : metadata.negativePrompt;
       var params = ImageParams(
         prompt: metadata.prompt,
-        negativePrompt: metadata.negativePrompt,
+        negativePrompt: restoredNegativePrompt,
         model: metadata.model ?? 'nai-diffusion-4-full',
         width: metadata.width ?? 832,
         height: metadata.height ?? 1216,
@@ -308,6 +363,41 @@ class ImageSaveUtils {
       return 'NovelAI Diffusion V2';
     }
     return 'NovelAI';
+  }
+
+  static _EmbeddedPngMetadata? _extractEmbeddedPngMetadata(Uint8List bytes) {
+    if (!UnifiedMetadataParser.isPngHeader(bytes)) {
+      return null;
+    }
+
+    try {
+      final decoder = img.PngDecoder();
+      final info = decoder.startDecode(bytes);
+      if (info is! img.PngInfo) {
+        return null;
+      }
+
+      final textData = info.textData;
+      final rawComment = textData['Comment'];
+      if (rawComment == null || rawComment.isEmpty) {
+        return null;
+      }
+
+      final commentJson = _tryDecodeJsonMap(rawComment);
+      if (commentJson == null || !commentJson.containsKey('prompt')) {
+        return null;
+      }
+
+      return _EmbeddedPngMetadata(
+        commentJson: commentJson,
+        description:
+            textData['Description'] ?? (commentJson['prompt'] as String? ?? ''),
+        software: textData['Software'] ?? 'NovelAI',
+        source: textData['Source'] ?? 'NovelAI',
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 对齐 NAI 官网格式写入 PNG 文本块：
@@ -436,5 +526,19 @@ class _NormalizedPrebuiltMetadata {
     required this.software,
     required this.source,
     required this.commentJson,
+  });
+}
+
+class _EmbeddedPngMetadata {
+  final Map<String, dynamic> commentJson;
+  final String description;
+  final String software;
+  final String source;
+
+  const _EmbeddedPngMetadata({
+    required this.commentJson,
+    required this.description,
+    required this.software,
+    required this.source,
   });
 }

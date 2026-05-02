@@ -62,7 +62,8 @@ import 'app_localizations_zh.dart';
 /// be consistent with the languages listed in the AppLocalizations.supportedLocales
 /// property.
 abstract class AppLocalizations {
-  AppLocalizations(String locale) : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+  AppLocalizations(String locale)
+      : localeName = intl.Intl.canonicalizedLocale(locale.toString());
 
   final String localeName;
 
@@ -70,7 +71,8 @@ abstract class AppLocalizations {
     return Localizations.of<AppLocalizations>(context, AppLocalizations);
   }
 
-  static const LocalizationsDelegate<AppLocalizations> delegate = _AppLocalizationsDelegate();
+  static const LocalizationsDelegate<AppLocalizations> delegate =
+      _AppLocalizationsDelegate();
 
   /// A list of this localizations delegate along with the default localizations
   /// delegates.
@@ -82,7 +84,8 @@ abstract class AppLocalizations {
   /// Additional delegates can be added by appending to this list in
   /// MaterialApp. This list does not have to be used at all if a custom list
   /// of delegates is preferred or required.
-  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates = <LocalizationsDelegate<dynamic>>[
+  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
+      <LocalizationsDelegate<dynamic>>[
     delegate,
     GlobalMaterialLocalizations.delegate,
     GlobalCupertinoLocalizations.delegate,
@@ -2375,6 +2378,18 @@ abstract class AppLocalizations {
   /// **'Edit'**
   String get img2img_edit;
 
+  /// No description provided for @img2img_editImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit Image'**
+  String get img2img_editImage;
+
+  /// No description provided for @img2img_editApplied.
+  ///
+  /// In en, this message translates to:
+  /// **'The edited image is now the new source image'**
+  String get img2img_editApplied;
+
   /// No description provided for @img2img_maskEnabled.
   ///
   /// In en, this message translates to:
@@ -2405,6 +2420,246 @@ abstract class AppLocalizations {
   /// **'In the mask, white areas will be modified during generation, while black areas will be preserved from the source image'**
   String get img2img_maskHelpText;
 
+  /// No description provided for @img2img_inpaint.
+  ///
+  /// In en, this message translates to:
+  /// **'Inpaint'**
+  String get img2img_inpaint;
+
+  /// No description provided for @img2img_inpaintStrength.
+  ///
+  /// In en, this message translates to:
+  /// **'Inpaint Strength'**
+  String get img2img_inpaintStrength;
+
+  /// No description provided for @img2img_inpaintStrengthHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Higher values make the masked area diverge more from the current source image'**
+  String get img2img_inpaintStrengthHint;
+
+  /// No description provided for @img2img_inpaintPendingHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Click Inpaint to open the canvas, mark the region you want to repaint with brush, eraser, or selection tools, then return here and use the main generate button.'**
+  String get img2img_inpaintPendingHint;
+
+  /// No description provided for @img2img_inpaintReadyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Mask loaded. The next generation will repaint only the masked area.'**
+  String get img2img_inpaintReadyHint;
+
+  /// No description provided for @img2img_inpaintMaskReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Inpaint mask is ready'**
+  String get img2img_inpaintMaskReady;
+
+  /// No description provided for @img2img_generateVariations.
+  ///
+  /// In en, this message translates to:
+  /// **'Generate Variations'**
+  String get img2img_generateVariations;
+
+  /// No description provided for @img2img_variationsReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Variation settings prepared from image metadata'**
+  String get img2img_variationsReady;
+
+  /// No description provided for @img2img_variationsPreparedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Variation settings are ready. Use the main generate button to create new results from the current image.'**
+  String get img2img_variationsPreparedHint;
+
+  /// No description provided for @img2img_variationsFallbackHint.
+  ///
+  /// In en, this message translates to:
+  /// **'No reusable metadata found. Kept the current prompt and switched to the base variation setup'**
+  String get img2img_variationsFallbackHint;
+
+  /// No description provided for @img2img_directorTools.
+  ///
+  /// In en, this message translates to:
+  /// **'Director Tools'**
+  String get img2img_directorTools;
+
+  /// No description provided for @img2img_directorToolsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Send the current source image through a Director Tool. When the result is ready, you can apply it back as the new source image.'**
+  String get img2img_directorToolsHint;
+
+  /// No description provided for @img2img_directorPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Extra Prompt'**
+  String get img2img_directorPrompt;
+
+  /// No description provided for @img2img_directorPromptHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Add guidance when needed, such as target emotion or color direction'**
+  String get img2img_directorPromptHint;
+
+  /// No description provided for @img2img_directorRun.
+  ///
+  /// In en, this message translates to:
+  /// **'Run {tool}'**
+  String img2img_directorRun(Object tool);
+
+  /// No description provided for @img2img_directorRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Processing...'**
+  String get img2img_directorRunning;
+
+  /// No description provided for @img2img_directorResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Result'**
+  String get img2img_directorResult;
+
+  /// No description provided for @img2img_directorResultReady.
+  ///
+  /// In en, this message translates to:
+  /// **'{tool} completed'**
+  String img2img_directorResultReady(Object tool);
+
+  /// No description provided for @img2img_directorApplied.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied the Director Tool result as the new source image'**
+  String get img2img_directorApplied;
+
+  /// No description provided for @img2img_directorDefry.
+  ///
+  /// In en, this message translates to:
+  /// **'Defry'**
+  String get img2img_directorDefry;
+
+  /// No description provided for @img2img_directorDefryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Reduce noise or over-saturation in the result (0 = off, 5 = max)'**
+  String get img2img_directorDefryHint;
+
+  /// No description provided for @img2img_directorEmotionLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Emotion Level'**
+  String get img2img_directorEmotionLevel;
+
+  /// No description provided for @img2img_directorEmotionLevelHint.
+  ///
+  /// In en, this message translates to:
+  /// **'How strongly the emotion is applied (0 = subtle, 5 = strong)'**
+  String get img2img_directorEmotionLevelHint;
+
+  /// No description provided for @img2img_directorEmotionPresets.
+  ///
+  /// In en, this message translates to:
+  /// **'Presets'**
+  String get img2img_directorEmotionPresets;
+
+  /// No description provided for @img2img_directorApplyAsSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as Source'**
+  String get img2img_directorApplyAsSource;
+
+  /// No description provided for @img2img_directorSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get img2img_directorSave;
+
+  /// No description provided for @img2img_directorSourceImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Source Image'**
+  String get img2img_directorSourceImage;
+
+  /// No description provided for @img2img_directorCompare.
+  ///
+  /// In en, this message translates to:
+  /// **'Compare'**
+  String get img2img_directorCompare;
+
+  /// No description provided for @img2img_variationsStarted.
+  ///
+  /// In en, this message translates to:
+  /// **'Generating variations...'**
+  String get img2img_variationsStarted;
+
+  /// No description provided for @img2img_directorRemoveBackground.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove Background'**
+  String get img2img_directorRemoveBackground;
+
+  /// No description provided for @img2img_directorLineArt.
+  ///
+  /// In en, this message translates to:
+  /// **'Line Art'**
+  String get img2img_directorLineArt;
+
+  /// No description provided for @img2img_directorSketch.
+  ///
+  /// In en, this message translates to:
+  /// **'Sketch'**
+  String get img2img_directorSketch;
+
+  /// No description provided for @img2img_directorColorize.
+  ///
+  /// In en, this message translates to:
+  /// **'Colorize'**
+  String get img2img_directorColorize;
+
+  /// No description provided for @img2img_directorEmotion.
+  ///
+  /// In en, this message translates to:
+  /// **'Fix Emotion'**
+  String get img2img_directorEmotion;
+
+  /// No description provided for @img2img_directorDeclutter.
+  ///
+  /// In en, this message translates to:
+  /// **'Declutter'**
+  String get img2img_directorDeclutter;
+
+  /// No description provided for @img2img_enhance.
+  ///
+  /// In en, this message translates to:
+  /// **'Enhance'**
+  String get img2img_enhance;
+
+  /// No description provided for @img2img_enhanceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Enhance keeps using the current prompt while it upscales and regenerates the source image in latent space.'**
+  String get img2img_enhanceHint;
+
+  /// No description provided for @img2img_enhanceMagnitude.
+  ///
+  /// In en, this message translates to:
+  /// **'Magnitude'**
+  String get img2img_enhanceMagnitude;
+
+  /// No description provided for @img2img_enhanceShowIndividualSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Show Individual Settings'**
+  String get img2img_enhanceShowIndividualSettings;
+
+  /// No description provided for @img2img_enhanceUpscaleAmount.
+  ///
+  /// In en, this message translates to:
+  /// **'Upscale Amount'**
+  String get img2img_enhanceUpscaleAmount;
+
   /// No description provided for @editor_title.
   ///
   /// In en, this message translates to:
@@ -2416,6 +2671,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Done'**
   String get editor_done;
+
+  /// No description provided for @editor_tolerance.
+  ///
+  /// In en, this message translates to:
+  /// **'Tolerance'**
+  String get editor_tolerance;
+
+  /// No description provided for @editor_intensity.
+  ///
+  /// In en, this message translates to:
+  /// **'Intensity'**
+  String get editor_intensity;
+
+  /// No description provided for @editor_sourcePoint.
+  ///
+  /// In en, this message translates to:
+  /// **'Alt+Click to set source point'**
+  String get editor_sourcePoint;
 
   /// No description provided for @editor_saveAndClose.
   ///
@@ -5979,7 +6252,8 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'{enabled}/{total} characters'**
-  String characterEditor_characterCountWithEnabled(Object enabled, Object total);
+  String characterEditor_characterCountWithEnabled(
+      Object enabled, Object total);
 
   /// No description provided for @characterEditor_tooltipWithCount.
   ///
@@ -13775,6 +14049,12 @@ abstract class AppLocalizations {
   /// **'Invert Selection'**
   String get selection_invert_selection;
 
+  /// No description provided for @selection_cut_to_layer.
+  ///
+  /// In en, this message translates to:
+  /// **'Cut to Layer'**
+  String get selection_cut_to_layer;
+
   /// No description provided for @search_results.
   ///
   /// In en, this message translates to:
@@ -14196,7 +14476,8 @@ abstract class AppLocalizations {
   String get cannotOpenUrl;
 }
 
-class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {
+class _AppLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
   const _AppLocalizationsDelegate();
 
   @override
@@ -14205,25 +14486,25 @@ class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> 
   }
 
   @override
-  bool isSupported(Locale locale) => <String>['en', 'zh'].contains(locale.languageCode);
+  bool isSupported(Locale locale) =>
+      <String>['en', 'zh'].contains(locale.languageCode);
 
   @override
   bool shouldReload(_AppLocalizationsDelegate old) => false;
 }
 
 AppLocalizations lookupAppLocalizations(Locale locale) {
-
-
   // Lookup logic when only language code is specified.
   switch (locale.languageCode) {
-    case 'en': return AppLocalizationsEn();
-    case 'zh': return AppLocalizationsZh();
+    case 'en':
+      return AppLocalizationsEn();
+    case 'zh':
+      return AppLocalizationsZh();
   }
 
   throw FlutterError(
-    'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
-    'an issue with the localizations generation tool. Please file an issue '
-    'on GitHub with a reproducible sample app and the gen-l10n configuration '
-    'that was used.'
-  );
+      'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
+      'an issue with the localizations generation tool. Please file an issue '
+      'on GitHub with a reproducible sample app and the gen-l10n configuration '
+      'that was used.');
 }

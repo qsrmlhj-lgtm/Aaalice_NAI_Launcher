@@ -1,14 +1,17 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/cache/thumbnail_cache_service.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../core/utils/image_share_sanitizer.dart';
 import '../../../data/models/gallery/local_image_record.dart';
 import '../../../data/services/thumbnail_service.dart';
+import '../../providers/share_image_settings_provider.dart';
+import '../../services/image_workflow_launcher.dart';
 import '../../themes/theme_extension.dart';
 import '../common/app_toast.dart';
 import '../common/floating_action_buttons.dart';
@@ -16,7 +19,7 @@ import '../common/floating_action_buttons.dart';
 enum _ImageLoadState { idle, loading, loaded, error }
 
 /// Steam风格本地图片卡片，包含边缘发光、光泽扫过、悬停动画效果
-class LocalImageCard3D extends StatefulWidget {
+class LocalImageCard3D extends ConsumerStatefulWidget {
   final LocalImageRecord record;
   final double width;
   final double? height;
@@ -28,6 +31,7 @@ class LocalImageCard3D extends StatefulWidget {
   final bool showFavoriteIndicator;
   final VoidCallback? onFavoriteToggle;
   final VoidCallback? onSendToHome;
+  final VoidCallback? onSendToImg2Img;
   final bool isVisible;
   final int priority;
 
@@ -48,17 +52,18 @@ class LocalImageCard3D extends StatefulWidget {
     this.showFavoriteIndicator = true,
     this.onFavoriteToggle,
     this.onSendToHome,
+    this.onSendToImg2Img,
     this.isVisible = false,
     this.priority = 5,
     this.dragWrapper,
   });
 
   @override
-  State<LocalImageCard3D> createState() => _LocalImageCard3DState();
+  ConsumerState<LocalImageCard3D> createState() => _LocalImageCard3DState();
 }
 
-class _LocalImageCard3DState extends State<LocalImageCard3D>
-    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+class _LocalImageCard3DState extends ConsumerState<LocalImageCard3D>
+    with TickerProviderStateMixin {
   bool _isHovered = false;
   late AnimationController _glossController;
   late Animation<double> _glossAnimation;
@@ -67,9 +72,6 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
   ThumbnailCacheService? _thumbnailService;
   _ImageLoadState _loadState = _ImageLoadState.idle;
   bool _isLoadingThumbnail = false;
-
-  @override
-  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -116,7 +118,8 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
 
       final originalFile = File(path);
       if (!await originalFile.exists()) {
-        AppLogger.e('[CardLoad] Original file NOT FOUND: $path', 'LocalImageCard3D');
+        AppLogger.e(
+            '[CardLoad] Original file NOT FOUND: $path', 'LocalImageCard3D');
         if (mounted) {
           setState(() => _loadState = _ImageLoadState.error);
         }
@@ -136,15 +139,6 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
         return;
       }
 
-      // 先显示原图，后台生成缩略图
-      // AppLogger.i('[CardLoad] Using original image: $fileName', 'LocalImageCard3D');
-      if (mounted) {
-        setState(() {
-          _displayPath = path;
-          _loadState = _ImageLoadState.loaded;
-        });
-      }
-
       final thumbnailService = ThumbnailService.instance;
       await thumbnailService.initialize();
       thumbnailService.updateVisibility(
@@ -153,18 +147,26 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
         priority: widget.priority,
       );
 
-      // 后台生成缩略图（但不切换到缩略图，避免闪烁）
-      unawaited(
-        thumbnailService
-            .getThumbnail(path, size: ThumbnailSize.small, priority: widget.priority)
-            .then((generatedPath) {
-          if (generatedPath != null && mounted) {
-            // AppLogger.i('[CardLoad] Thumbnail generated: $fileName', 'LocalImageCard3D');
-            // 只缓存缩略图路径，不切换到缩略图显示，避免图片闪烁
-            _thumbnailPath = generatedPath;
-          }
-        }),
+      final generatedPath = await thumbnailService.getThumbnail(
+        path,
+        size: ThumbnailSize.small,
+        priority: widget.priority,
       );
+
+      if (!mounted || widget.record.path != path) return;
+
+      if (generatedPath != null) {
+        setState(() {
+          _thumbnailPath = generatedPath;
+          _displayPath = generatedPath;
+          _loadState = _ImageLoadState.loaded;
+        });
+      } else {
+        setState(() {
+          _displayPath = path;
+          _loadState = _ImageLoadState.loaded;
+        });
+      }
     } catch (e, stack) {
       AppLogger.e('[CardLoad] ERROR: $fileName', e, stack, 'LocalImageCard3D');
       if (mounted) {
@@ -187,6 +189,18 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
     setState(() => _isHovered = false);
   }
 
+  Future<void> _openUpscale() async {
+    try {
+      final bytes = await File(widget.record.path).readAsBytes();
+      if (mounted) {
+        ImageWorkflowLauncher.openUpscale(ref, bytes);
+        AppToast.info(context, '已载入图生图超分面板');
+      }
+    } catch (e) {
+      if (mounted) AppToast.error(context, '读取图像失败: $e');
+    }
+  }
+
   Future<void> _copyImageToClipboard() async {
     File? tempFile;
     try {
@@ -196,9 +210,24 @@ class _LocalImageCard3DState extends State<LocalImageCard3D>
         return;
       }
 
+      final stripMetadata = ref
+          .read(shareImageSettingsProvider)
+          .effectiveStripMetadataForCopyAndDrag;
+      final sourceParts = sourceFile.path.split(RegExp(r'[/\\]'));
+      final sourceName =
+          sourceParts.isNotEmpty ? sourceParts.last : 'shared.png';
+      final originalBytes = await sourceFile.readAsBytes();
+      final shareImage = await ImageShareSanitizer.prepareForCopyOrDrag(
+        originalBytes,
+        fileName: sourceName,
+        stripMetadata: stripMetadata,
+      );
+
       final tempDir = await getTemporaryDirectory();
-      tempFile = File('${tempDir.path}/NAI_${DateTime.now().millisecondsSinceEpoch}.png');
-      await tempFile.writeAsBytes(await sourceFile.readAsBytes());
+      tempFile = File(
+        '${tempDir.path}/NAI_${DateTime.now().millisecondsSinceEpoch}_${shareImage.fileName}',
+      );
+      await tempFile.writeAsBytes(shareImage.bytes, flush: true);
 
       const psCommand = r'''
 Add-Type -AssemblyName System.Windows.Forms;
@@ -231,19 +260,22 @@ $image = [System.Drawing.Image]::FromFile("''';
     final theme = Theme.of(context);
     final extension = theme.extension<AppThemeExtension>();
 
-    final intensity = switch ((extension?.enableNeonGlow, extension?.isLightTheme)) {
+    final intensity =
+        switch ((extension?.enableNeonGlow, extension?.isLightTheme)) {
       (true, _) => (edgeGlow: 1.3, gloss: 1.0),
       (_, true) => (edgeGlow: 0.6, gloss: 1.0),
       _ => (edgeGlow: 1.0, gloss: 0.8),
     };
 
     final glowColor = extension?.glowColor ?? theme.colorScheme.primary;
-    return (_EffectIntensity(edgeGlow: intensity.edgeGlow, gloss: intensity.gloss), glowColor);
+    return (
+      _EffectIntensity(edgeGlow: intensity.edgeGlow, gloss: intensity.gloss),
+      glowColor
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
     final theme = Theme.of(context);
     final cardHeight = widget.height ?? widget.width;
     final colorScheme = theme.colorScheme;
@@ -267,7 +299,8 @@ $image = [System.Drawing.Image]::FromFile("''';
             border: widget.isSelected
                 ? Border.all(color: colorScheme.primary, width: 3)
                 : _isHovered
-                    ? Border.all(color: colorScheme.primary.withOpacity(0.3), width: 2)
+                    ? Border.all(
+                        color: colorScheme.primary.withOpacity(0.3), width: 2)
                     : null,
             boxShadow: [
               BoxShadow(
@@ -369,7 +402,8 @@ $image = [System.Drawing.Image]::FromFile("''';
 
   Widget _buildImageLayer() => switch (_loadState) {
         _ImageLoadState.error => _buildErrorPlaceholder(),
-        _ImageLoadState.loading when _displayPath == null => _buildLoadingPlaceholder(),
+        _ImageLoadState.loading when _displayPath == null =>
+          _buildLoadingPlaceholder(),
         _ when _displayPath != null => _buildOptimizedImage(_displayPath!),
         _ => _buildLoadingPlaceholder(),
       };
@@ -384,7 +418,8 @@ $image = [System.Drawing.Image]::FromFile("''';
             SizedBox(
               width: 32,
               height: 32,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey[600]),
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             Text(
@@ -406,12 +441,14 @@ $image = [System.Drawing.Image]::FromFile("''';
           children: [
             Icon(Icons.broken_image, color: Colors.red[400], size: 40),
             const SizedBox(height: 8),
-            Text('加载失败', style: TextStyle(color: Colors.red[300], fontSize: 12)),
+            Text('加载失败',
+                style: TextStyle(color: Colors.red[300], fontSize: 12)),
             const SizedBox(height: 4),
             TextButton.icon(
               onPressed: _loadThumbnail,
               icon: Icon(Icons.refresh, color: Colors.red[300], size: 16),
-              label: Text('重试', style: TextStyle(color: Colors.red[300], fontSize: 11)),
+              label: Text('重试',
+                  style: TextStyle(color: Colors.red[300], fontSize: 11)),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 minimumSize: Size.zero,
@@ -427,11 +464,14 @@ $image = [System.Drawing.Image]::FromFile("''';
   Widget _buildOptimizedImage(String imagePath) {
     final pixelRatio = MediaQuery.of(context).devicePixelRatio;
     final cacheWidth = (widget.width * pixelRatio * 1.5).toInt();
+    final cacheHeight =
+        ((widget.height ?? widget.width) * pixelRatio * 1.5).toInt();
 
     return Image.file(
       File(imagePath),
       fit: BoxFit.cover,
       cacheWidth: cacheWidth,
+      cacheHeight: cacheHeight,
       gaplessPlayback: true,
       frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
         if (wasSynchronouslyLoaded || frame != null) return child;
@@ -441,13 +481,15 @@ $image = [System.Drawing.Image]::FromFile("''';
             child: SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white38),
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white38),
             ),
           ),
         );
       },
       errorBuilder: (context, error, stackTrace) {
-        AppLogger.w('Image load failed, attempting fallback: $imagePath', 'LocalImageCard3D');
+        AppLogger.w('Image load failed, attempting fallback: $imagePath',
+            'LocalImageCard3D');
         return _buildErrorFallback(imagePath);
       },
     );
@@ -470,16 +512,19 @@ $image = [System.Drawing.Image]::FromFile("''';
       isVisible: _isHovered,
       buttons: [
         FloatingActionButtonData(
-          icon: widget.record.isFavorite ? Icons.favorite : Icons.favorite_border,
+          icon:
+              widget.record.isFavorite ? Icons.favorite : Icons.favorite_border,
           onTap: widget.onFavoriteToggle,
           iconColor: widget.record.isFavorite ? Colors.red : Colors.white,
           visible: widget.onFavoriteToggle != null,
         ),
-        FloatingActionButtonData(icon: Icons.copy, onTap: _copyImageToClipboard),
+        FloatingActionButtonData(
+            icon: Icons.copy, onTap: _copyImageToClipboard),
         FloatingActionButtonData(
           icon: Icons.send,
           onTap: () => _showSendToHomeMenu(context),
-          visible: widget.onSendToHome != null,
+          visible:
+              widget.onSendToHome != null || widget.onSendToImg2Img != null,
         ),
       ],
     );
@@ -511,13 +556,15 @@ $image = [System.Drawing.Image]::FromFile("''';
                 widget.onSendToHome!();
               }
             : null,
-        onSendToImg2Img: () {
-          Navigator.of(dialogContext).pop();
-          AppToast.info(dialogContext, '图生图功能制作中');
-        },
+        onSendToImg2Img: widget.onSendToImg2Img != null
+            ? () {
+                Navigator.of(dialogContext).pop();
+                widget.onSendToImg2Img!();
+              }
+            : null,
         onUpscale: () {
           Navigator.of(dialogContext).pop();
-          AppToast.info(dialogContext, '放大功能制作中');
+          _openUpscale();
         },
       ),
     );
@@ -528,7 +575,8 @@ $image = [System.Drawing.Image]::FromFile("''';
       tween: Tween(begin: 0.0, end: 1.0),
       duration: const Duration(milliseconds: 150),
       curve: Curves.easeOutBack,
-      builder: (context, value, child) => Transform.scale(scale: value, child: child),
+      builder: (context, value, child) =>
+          Transform.scale(scale: value, child: child),
       child: Container(
         width: 28,
         height: 28,
@@ -587,8 +635,10 @@ $image = [System.Drawing.Image]::FromFile("''';
             spacing: 4,
             runSpacing: 2,
             children: [
-              if (metadata.seed != null) _buildMetadataChip('Seed: ${metadata.seed}'),
-              if (metadata.steps != null) _buildMetadataChip('${metadata.steps} steps'),
+              if (metadata.seed != null)
+                _buildMetadataChip('Seed: ${metadata.seed}'),
+              if (metadata.steps != null)
+                _buildMetadataChip('${metadata.steps} steps'),
             ],
           ),
         ],
@@ -603,7 +653,8 @@ $image = [System.Drawing.Image]::FromFile("''';
         color: Colors.white.withOpacity(0.2),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 10)),
+      child:
+          Text(text, style: const TextStyle(color: Colors.white, fontSize: 10)),
     );
   }
 
@@ -697,7 +748,8 @@ class _EdgeGlowPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_EdgeGlowPainter oldDelegate) {
-    return oldDelegate.glowColor != glowColor || oldDelegate.intensity != intensity;
+    return oldDelegate.glowColor != glowColor ||
+        oldDelegate.intensity != intensity;
   }
 }
 
@@ -776,7 +828,8 @@ class _GlossPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_GlossPainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.intensity != intensity;
+    return oldDelegate.progress != progress ||
+        oldDelegate.intensity != intensity;
   }
 }
 
@@ -839,8 +892,8 @@ class _SendToHomeMenu extends StatelessWidget {
                     context,
                     icon: Icons.image,
                     label: '图生图',
-                    subtitle: '制作中',
-                    enabled: false,
+                    subtitle: onSendToImg2Img == null ? '不可用' : '载入源图',
+                    enabled: onSendToImg2Img != null,
                     onTap: onSendToImg2Img,
                   ),
                   Divider(height: 1, color: theme.colorScheme.outlineVariant),
@@ -848,8 +901,7 @@ class _SendToHomeMenu extends StatelessWidget {
                     context,
                     icon: Icons.zoom_in,
                     label: '放大',
-                    subtitle: '制作中',
-                    enabled: false,
+                    subtitle: '超分放大',
                     onTap: onUpscale,
                   ),
                 ],
@@ -870,7 +922,9 @@ class _SendToHomeMenu extends StatelessWidget {
     bool enabled = true,
   }) {
     final theme = Theme.of(context);
-    final color = enabled ? theme.colorScheme.onSurface : theme.colorScheme.onSurface.withOpacity(0.38);
+    final color = enabled
+        ? theme.colorScheme.onSurface
+        : theme.colorScheme.onSurface.withOpacity(0.38);
 
     return Material(
       color: Colors.transparent,
@@ -884,7 +938,9 @@ class _SendToHomeMenu extends StatelessWidget {
               Icon(
                 icon,
                 size: 20,
-                color: enabled ? theme.colorScheme.primary : theme.colorScheme.onSurface.withOpacity(0.38),
+                color: enabled
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurface.withOpacity(0.38),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -892,11 +948,15 @@ class _SendToHomeMenu extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(label, style: theme.textTheme.bodyMedium?.copyWith(color: color, fontWeight: FontWeight.w500)),
+                    Text(label,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: color, fontWeight: FontWeight.w500)),
                     Text(
                       subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: enabled ? theme.colorScheme.onSurfaceVariant : color,
+                        color: enabled
+                            ? theme.colorScheme.onSurfaceVariant
+                            : color,
                         fontSize: 11,
                       ),
                     ),

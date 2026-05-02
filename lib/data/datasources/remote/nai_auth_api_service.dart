@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/nai_api_endpoint.dart';
 import '../../../core/utils/app_logger.dart';
 
 part 'nai_auth_api_service.g.dart';
@@ -22,14 +23,18 @@ class NAIAuthApiService {
   NAIAuthApiService(this._dio);
 
   /// 验证 API Token 是否有效
-  Future<Map<String, dynamic>> validateToken(String token) async {
+  Future<Map<String, dynamic>> validateToken(
+    String token, {
+    NaiApiEndpointConfig endpoint = NaiApiEndpointConfig.official,
+    bool allowAnyTokenFormat = false,
+  }) async {
     final normalizedToken = _normalizeToken(token);
 
     if (normalizedToken.isEmpty) {
       throw ArgumentError('Token 为空，无法验证');
     }
 
-    if (!_isSupportedTokenFormat(normalizedToken)) {
+    if (!allowAnyTokenFormat && !_isSupportedTokenFormat(normalizedToken)) {
       throw ArgumentError('Token 格式无效');
     }
 
@@ -38,9 +43,15 @@ class NAIAuthApiService {
 
     // 详细的日志记录用于诊断登录问题
     final tokenFormat = normalizedToken.startsWith('pst-') ? 'pst' : 'jwt';
-    final prefix = normalizedToken.startsWith('pst-') 
-        ? normalizedToken.substring(0, normalizedToken.length > 10 ? 10 : normalizedToken.length)
-        : normalizedToken.substring(0, normalizedToken.length > 20 ? 20 : normalizedToken.length);
+    final prefix = normalizedToken.startsWith('pst-')
+        ? normalizedToken.substring(
+            0,
+            normalizedToken.length > 10 ? 10 : normalizedToken.length,
+          )
+        : normalizedToken.substring(
+            0,
+            normalizedToken.length > 20 ? 20 : normalizedToken.length,
+          );
     AppLogger.i(
       'Validating token: format=$tokenFormat, length=${normalizedToken.length}, prefix=$prefix...',
       'NAIAuth',
@@ -52,7 +63,7 @@ class NAIAuthApiService {
 
     try {
       final response = await _dio.get(
-        '${ApiConstants.baseUrl}${ApiConstants.userSubscriptionEndpoint}',
+        endpoint.mainUrl(ApiConstants.userSubscriptionEndpoint),
         options: Options(
           headers: {'Authorization': authHeader},
           receiveTimeout: _timeout,
@@ -71,7 +82,8 @@ class NAIAuthApiService {
           'NAIAuth',
         );
         // 添加更详细的错误信息
-        if (message?.toString().contains('Invalid Authorization header') ?? false) {
+        if (message?.toString().contains('Invalid Authorization header') ??
+            false) {
           throw DioException(
             requestOptions: e.requestOptions,
             response: e.response,
@@ -86,11 +98,14 @@ class NAIAuthApiService {
   }
 
   /// 使用 Access Key 登录
-  Future<Map<String, dynamic>> loginWithKey(String accessKey) async {
+  Future<Map<String, dynamic>> loginWithKey(
+    String accessKey, {
+    NaiApiEndpointConfig endpoint = NaiApiEndpointConfig.official,
+  }) async {
     AppLogger.d('Attempting login with access key', 'NAIAuth');
 
     final response = await _dio.post(
-      '${ApiConstants.baseUrl}${ApiConstants.loginEndpoint}',
+      endpoint.mainUrl(ApiConstants.loginEndpoint),
       data: {'key': accessKey},
       options: Options(
         receiveTimeout: _timeout,
@@ -117,17 +132,16 @@ class NAIAuthApiService {
   String _normalizeToken(String token) {
     final trimmedToken = token.trim();
     final unquotedToken = _stripWrappingQuotes(trimmedToken);
-    
+
     // 循环移除所有 Bearer 前缀（处理重复添加的情况）
     var normalizedToken = unquotedToken;
     var previousToken = '';
     while (normalizedToken != previousToken) {
       previousToken = normalizedToken;
-      normalizedToken = normalizedToken
-          .replaceFirst(_bearerPrefixRegex, '')
-          .trim();
+      normalizedToken =
+          normalizedToken.replaceFirst(_bearerPrefixRegex, '').trim();
     }
-    
+
     // 移除所有空白字符
     return normalizedToken.replaceAll(_allWhitespaceRegex, '');
   }
@@ -136,8 +150,7 @@ class NAIAuthApiService {
     if (value.length >= 2) {
       final first = value[0];
       final last = value[value.length - 1];
-      if ((first == '"' && last == '"') ||
-          (first == '\'' && last == '\'')) {
+      if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
         return value.substring(1, value.length - 1);
       }
     }

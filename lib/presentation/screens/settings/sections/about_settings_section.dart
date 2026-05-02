@@ -5,6 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_version.dart';
 import '../../../../core/services/update_check_service.dart';
+import '../../../../core/storage/local_storage_service.dart';
+import '../../../../core/utils/app_logger.dart';
 import '../../../providers/update_provider.dart';
 import '../../../widgets/common/update_check_dialog.dart';
 import '../widgets/settings_card.dart';
@@ -26,6 +28,8 @@ class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
     final updateState = ref.watch(updateStateProvider);
     final updateNotifier = ref.read(updateStateProvider.notifier);
     final updateService = ref.watch(updateCheckServiceProvider);
+    final localStorageService = ref.watch(localStorageServiceProvider);
+    final fileLoggingEnabled = localStorageService.getFileLoggingEnabled();
 
     return SettingsCard(
       title: '关于',
@@ -35,7 +39,25 @@ class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: Text(context.l10n.app_title),
-            subtitle: Text(context.l10n.settings_version(AppVersion.versionName)),
+            subtitle:
+                Text(context.l10n.settings_version(AppVersion.versionName)),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.article_outlined),
+            title: const Text('记录应用日志'),
+            subtitle: const Text(
+              '默认关闭；仅在排查问题时开启。开启后会写入 Documents/NAI_Launcher/logs，关闭后不再创建或写入日志文件。',
+            ),
+            value: fileLoggingEnabled,
+            onChanged: (value) async {
+              await AppLogger.setFileLoggingEnabled(value);
+              await localStorageService.setFileLoggingEnabled(
+                AppLogger.fileLoggingEnabled,
+              );
+              if (mounted) {
+                setState(() {});
+              }
+            },
           ),
           // 检查更新按钮
           FutureBuilder<DateTime?>(
@@ -74,7 +96,8 @@ class _AboutSettingsSectionState extends ConsumerState<AboutSettingsSection> {
               return SwitchListTile(
                 secondary: const Icon(Icons.new_releases_outlined),
                 title: Text(context.l10n.includePrereleaseUpdates),
-                subtitle: Text(context.l10n.includePrereleaseUpdatesDescription),
+                subtitle:
+                    Text(context.l10n.includePrereleaseUpdatesDescription),
                 value: includePrerelease,
                 onChanged: (value) async {
                   await updateNotifier.setIncludePrerelease(value);

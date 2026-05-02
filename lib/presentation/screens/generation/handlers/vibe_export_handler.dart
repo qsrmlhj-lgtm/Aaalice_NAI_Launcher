@@ -330,15 +330,19 @@ class VibeExportHandler {
     String targetImagePath,
     List<VibeReference> vibes,
   ) async {
-    // 注意：PNG iTXt 元数据嵌入功能暂不实现
-    // 当前使用 .naiv4vibe 文件作为替代方案
+    final carrierImageBytes = await File(targetImagePath).readAsBytes();
+    final fileName = vibes.length == 1
+        ? '${vibes.first.displayName}_vibe.png'
+        : 'vibe_bundle_${vibes.length}.png';
 
-    AppLogger.i(
-      'Embedding ${vibes.length} vibes into $targetImagePath',
-      _tag,
+    final result = await VibeExportUtils.exportToEmbeddedPng(
+      vibes,
+      carrierImageBytes: carrierImageBytes,
+      fileName: fileName,
     );
 
-    if (context.mounted) {
+    if (result != null && context.mounted) {
+      AppLogger.i('Embedded ${vibes.length} vibes into image: $result', _tag);
       AppToast.success(
         context,
         context.l10n.vibe_export_embedSuccess(vibes.length),

@@ -16,6 +16,54 @@ import 'presentation/themes/app_theme.dart';
 import 'presentation/widgets/shortcuts/shortcut_aware_widget.dart';
 import 'presentation/widgets/shortcuts/shortcut_help_dialog.dart';
 
+/// 全局副作用挂载层
+///
+/// 只负责启动需要常驻的 provider 监听，不让它们把根部 MaterialApp 一起拖着重建。
+class AppBootstrapEffects extends ConsumerStatefulWidget {
+  final Widget child;
+  final ProviderListenable<dynamic>? anlasWatcher;
+  final ProviderListenable<dynamic>? backgroundRefresh;
+
+  const AppBootstrapEffects({
+    super.key,
+    required this.child,
+    this.anlasWatcher,
+    this.backgroundRefresh,
+  });
+
+  @override
+  ConsumerState<AppBootstrapEffects> createState() =>
+      _AppBootstrapEffectsState();
+}
+
+class _AppBootstrapEffectsState extends ConsumerState<AppBootstrapEffects> {
+  ProviderSubscription<dynamic>? _anlasWatcherSubscription;
+  ProviderSubscription<dynamic>? _backgroundRefreshSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _anlasWatcherSubscription = ref.listenManual(
+      widget.anlasWatcher ?? anlasBalanceWatcherProvider,
+      (_, __) {},
+    );
+    _backgroundRefreshSubscription = ref.listenManual(
+      widget.backgroundRefresh ?? backgroundRefreshNotifierProvider,
+      (_, __) {},
+    );
+  }
+
+  @override
+  void dispose() {
+    _anlasWatcherSubscription?.close();
+    _backgroundRefreshSubscription?.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// NAI Launcher 主应用
 /// 预加载已在 SplashScreen 完成
 class NAILauncherApp extends ConsumerWidget {
@@ -28,12 +76,6 @@ class NAILauncherApp extends ConsumerWidget {
     final fontScale = ref.watch(fontScaleNotifierProvider);
     final locale = ref.watch(localeNotifierProvider);
     final router = ref.watch(appRouterProvider);
-
-    // 初始化余额变化监听器（自动记录点数消耗）
-    ref.watch(anlasBalanceWatcherProvider);
-
-    // 【修复】初始化后台刷新服务（确保 Danbooru 标签等数据自动同步）
-    ref.watch(backgroundRefreshNotifierProvider);
 
     // 定义全局快捷键映射
     final globalShortcuts = <String, VoidCallback>{
@@ -90,42 +132,44 @@ class NAILauncherApp extends ConsumerWidget {
       },
     };
 
-    return GlobalShortcuts(
-      shortcuts: globalShortcuts,
-      child: MaterialApp.router(
-        title: 'NAI Launcher',
-        debugShowCheckedModeBanner: false,
+    return AppBootstrapEffects(
+      child: GlobalShortcuts(
+        shortcuts: globalShortcuts,
+        child: MaterialApp.router(
+          title: 'NAI Launcher',
+          debugShowCheckedModeBanner: false,
 
-        // 主题 (fontFamily 为空时使用主题原生字体)
-        theme: AppTheme.getTheme(
-          themeType,
-          Brightness.light,
-          fontConfig: fontType.fontFamily.isEmpty ? null : fontType,
+          // 主题 (fontFamily 为空时使用主题原生字体)
+          theme: AppTheme.getTheme(
+            themeType,
+            Brightness.light,
+            fontConfig: fontType.fontFamily.isEmpty ? null : fontType,
+          ),
+          darkTheme: AppTheme.getTheme(
+            themeType,
+            Brightness.dark,
+            fontConfig: fontType.fontFamily.isEmpty ? null : fontType,
+          ),
+          themeMode: ThemeMode.dark, // 默认深色模式
+
+          // 国际化
+          locale: locale,
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+
+          // 路由
+          routerConfig: router,
+
+          // 字体缩放全局应用
+          builder: (context, child) {
+            return MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(fontScale),
+              ),
+              child: child!,
+            );
+          },
         ),
-        darkTheme: AppTheme.getTheme(
-          themeType,
-          Brightness.dark,
-          fontConfig: fontType.fontFamily.isEmpty ? null : fontType,
-        ),
-        themeMode: ThemeMode.dark, // 默认深色模式
-
-        // 国际化
-        locale: locale,
-        supportedLocales: AppLocalizations.supportedLocales,
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-
-        // 路由
-        routerConfig: router,
-
-        // 字体缩放全局应用
-        builder: (context, child) {
-          return MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              textScaler: TextScaler.linear(fontScale),
-            ),
-            child: child!,
-          );
-        },
       ),
     );
   }

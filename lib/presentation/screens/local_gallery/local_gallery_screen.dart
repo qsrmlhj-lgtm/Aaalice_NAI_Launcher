@@ -10,6 +10,7 @@ import 'package:nai_launcher/core/utils/localization_extension.dart';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/constants/api_constants.dart';
 import '../../../core/constants/storage_keys.dart';
 import '../../../core/shortcuts/default_shortcuts.dart';
 import '../../../core/utils/app_logger.dart';
@@ -21,7 +22,6 @@ import '../../../core/utils/zip_utils.dart';
 import '../../../data/models/character/character_prompt.dart' as char;
 import '../../../data/models/gallery/gallery_category.dart';
 import '../../../data/models/gallery/local_image_record.dart';
-import '../../../data/models/image/image_params.dart';
 import '../../widgets/metadata/metadata_import_dialog.dart';
 import '../../../data/repositories/gallery_folder_repository.dart';
 import '../../providers/bulk_operation_provider.dart';
@@ -32,6 +32,10 @@ import '../../providers/gallery_folder_provider.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/local_gallery_provider.dart';
 import '../../providers/gallery_scan_progress_provider.dart';
+import '../../providers/reverse_prompt_provider.dart';
+import '../../router/app_router.dart';
+import '../../services/image_workflow_launcher.dart';
+import '../../utils/asset_protection_guard.dart';
 import '../../providers/selection_mode_provider.dart';
 import '../../widgets/bulk_metadata_edit_dialog.dart';
 import '../../widgets/collection_select_dialog.dart';
@@ -65,13 +69,13 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   final bool _use3DCardView = true;
   bool _showCategoryPanel = true;
   AppLifecycleListener? _lifecycleListener;
-  
+
   // 防抖计时器，防止频繁触发刷新
   Timer? _refreshDebounceTimer;
-  
+
   // 上次刷新时间，用于限制刷新频率
   DateTime? _lastRefreshTime;
-  
+
   // 最小刷新间隔（毫秒）
   static const int _minRefreshIntervalMs = 5000; // 5秒
 
@@ -102,14 +106,14 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
             _autoRefresh().catchError((e, stack) {
-              AppLogger.e('Auto refresh on resume failed', e, stack, 'LocalGalleryScreen');
+              AppLogger.e('Auto refresh on resume failed', e, stack,
+                  'LocalGalleryScreen');
             });
           }
         });
       },
     );
   }
-
 
   @override
   void dispose() {
@@ -165,8 +169,9 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final theme = Theme.of(context);
 
-    final contentWidth =
-        _showCategoryPanel && screenWidth > 800 ? screenWidth - 250 : screenWidth;
+    final contentWidth = _showCategoryPanel && screenWidth > 800
+        ? screenWidth - 250
+        : screenWidth;
     final columns = (contentWidth / 200).floor().clamp(2, 8);
     final itemWidth = contentWidth / columns;
 
@@ -332,18 +337,26 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     // 应用分类过滤
     if (id == 'favorites') {
       // 收藏特殊处理
-      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(true);
+      ref
+          .read(localGalleryNotifierProvider.notifier)
+          .setShowFavoritesOnly(true);
     } else if (id != null && category != null) {
       // 普通分类：按文件夹路径过滤
-      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(false);
+      ref
+          .read(localGalleryNotifierProvider.notifier)
+          .setShowFavoritesOnly(false);
       ref.read(localGalleryNotifierProvider.notifier).setSelectedCategory(
-        id,
-        category.folderPath,
-      );
+            id,
+            category.folderPath,
+          );
     } else {
       // 全部：清除分类过滤
-      ref.read(localGalleryNotifierProvider.notifier).setShowFavoritesOnly(false);
-      ref.read(localGalleryNotifierProvider.notifier).setSelectedCategory(null, null);
+      ref
+          .read(localGalleryNotifierProvider.notifier)
+          .setShowFavoritesOnly(false);
+      ref
+          .read(localGalleryNotifierProvider.notifier)
+          .setSelectedCategory(null, null);
     }
   }
 
@@ -358,6 +371,15 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       icon: Icons.delete_outline,
     );
     if (confirmed) {
+      final protected = await AssetProtectionGuard.confirmDangerousAction(
+        context: context,
+        ref: ref,
+        title: '保护模式：确认删除分类',
+        content: '将删除此分类记录，文件夹及内容会保留。请再次确认。',
+        confirmText: '确认删除',
+        icon: Icons.delete_outline,
+      );
+      if (!protected || !mounted) return;
       await ref
           .read(galleryCategoryNotifierProvider.notifier)
           .deleteCategory(id, deleteFolder: false);
@@ -380,6 +402,16 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   }
 
   Future<void> _handleImageDrop(String imagePath, String categoryId) async {
+    final protected = await AssetProtectionGuard.confirmDangerousAction(
+      context: context,
+      ref: ref,
+      title: '保护模式：确认移动图片',
+      content: '将把图片移动到目标分类文件夹。请确认不是误拖拽。',
+      confirmText: '确认移动',
+      icon: Icons.drive_file_move_outline,
+    );
+    if (!protected || !mounted) return;
+
     final newPath = await ref
         .read(galleryCategoryNotifierProvider.notifier)
         .moveImageToCategory(imagePath, categoryId);
@@ -399,41 +431,48 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
   Future<void> _autoRefresh() async {
     // 取消之前的防抖计时器
     _refreshDebounceTimer?.cancel();
-    
+
     // 设置防抖延迟，避免频繁触发
     _refreshDebounceTimer = Timer(const Duration(milliseconds: 500), () async {
       if (!mounted) return;
-      
+
       // 检查当前是否仍在本地画廊页面
       final router = GoRouter.of(context);
       final currentPath = router.routeInformationProvider.value.uri.path;
       if (currentPath != '/local-gallery') {
-        AppLogger.d('[AutoRefresh] Skipped: not on local gallery page (current: $currentPath)', 'LocalGalleryScreen');
+        AppLogger.d(
+            '[AutoRefresh] Skipped: not on local gallery page (current: $currentPath)',
+            'LocalGalleryScreen');
         return;
       }
-      
+
       // 检查刷新频率限制
       final now = DateTime.now();
       if (_lastRefreshTime != null) {
         final elapsed = now.difference(_lastRefreshTime!).inMilliseconds;
         if (elapsed < _minRefreshIntervalMs) {
-          AppLogger.d('[AutoRefresh] Skipped: too frequent (${elapsed}ms < ${_minRefreshIntervalMs}ms)', 'LocalGalleryScreen');
+          AppLogger.d(
+              '[AutoRefresh] Skipped: too frequent (${elapsed}ms < ${_minRefreshIntervalMs}ms)',
+              'LocalGalleryScreen');
           return;
         }
       }
-      
+
       // 检查是否有扫描正在进行
       final scanState = ref.read(galleryScanProgressProvider);
       if (scanState.isScanning) {
-        AppLogger.d('[AutoRefresh] Skipped: scan in progress', 'LocalGalleryScreen');
+        AppLogger.d(
+            '[AutoRefresh] Skipped: scan in progress', 'LocalGalleryScreen');
         return;
       }
-      
+
       AppLogger.i('[AutoRefresh] Executing auto refresh', 'LocalGalleryScreen');
       _lastRefreshTime = now;
 
       await ref.read(localGalleryNotifierProvider.notifier).refresh();
-      await ref.read(galleryCategoryNotifierProvider.notifier).syncWithFileSystem();
+      await ref
+          .read(galleryCategoryNotifierProvider.notifier)
+          .syncWithFileSystem();
     });
   }
 
@@ -444,7 +483,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     BulkOperationState bulkOpState,
   ) {
     return LocalGalleryToolbar(
-      onRefresh: () => ref.read(localGalleryNotifierProvider.notifier).refresh(),
+      onRefresh: () =>
+          ref.read(localGalleryNotifierProvider.notifier).refresh(),
       onEnterSelectionMode: () =>
           ref.read(localGallerySelectionNotifierProvider.notifier).enter(),
       canUndo: bulkOpState.canUndo,
@@ -470,7 +510,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     if (state.error != null) {
       return GalleryErrorView(
         error: state.error,
-        onRetry: () => ref.read(localGalleryNotifierProvider.notifier).refresh(),
+        onRetry: () =>
+            ref.read(localGalleryNotifierProvider.notifier).refresh(),
       );
     }
 
@@ -489,7 +530,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       groupedGridViewKey: _groupedGridViewKey,
       onReuseMetadata: _reuseMetadata,
       onSendToImg2Img: _sendToImg2Img,
-      onContextMenu: (record, position) => _showImageContextMenu(record, position),
+      onContextMenu: (record, position) =>
+          _showImageContextMenu(record, position),
     );
   }
 
@@ -505,7 +547,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       } else {
         if (bulkOpState.canUndo) _undo();
       }
-    } else if (event.logicalKey == LogicalKeyboardKey.keyY && bulkOpState.canRedo) {
+    } else if (event.logicalKey == LogicalKeyboardKey.keyY &&
+        bulkOpState.canRedo) {
       _redo();
     }
   }
@@ -616,7 +659,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final l10n = context.l10n;
 
     // 从数据库获取所有选中项的完整记录（支持跨页）
-    final service = await ref.read(localGalleryNotifierProvider.notifier).getService();
+    final service =
+        await ref.read(localGalleryNotifierProvider.notifier).getService();
     final selectedImages = await service.getRecordsByPaths(
       selectionState.selectedIds.toList(),
     );
@@ -627,7 +671,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       // ignore: use_build_context_synchronously
       context: context,
       title: l10n.localGallery_confirmBulkDelete,
-      content: l10n.localGallery_confirmBulkDeleteContent(selectedImages.length),
+      content:
+          l10n.localGallery_confirmBulkDeleteContent(selectedImages.length),
       confirmText: l10n.common_delete,
       cancelText: l10n.common_cancel,
       type: ThemedConfirmDialogType.danger,
@@ -635,6 +680,16 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     );
 
     if (!confirmed || !mounted) return;
+
+    final protected = await AssetProtectionGuard.confirmDangerousAction(
+      context: context,
+      ref: ref,
+      title: '保护模式：再次确认删除',
+      content: '将永久删除 ${selectedImages.length} 张本地图片文件。此操作无法撤销。',
+      confirmText: l10n.common_delete,
+      icon: Icons.delete_forever_outlined,
+    );
+    if (!protected || !mounted) return;
 
     final deletedImages = <LocalImageRecord>[];
     for (final image in selectedImages) {
@@ -664,7 +719,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
 
     // 从数据库获取所有选中项的完整记录（支持跨页）
-    final service = await ref.read(localGalleryNotifierProvider.notifier).getService();
+    final service =
+        await ref.read(localGalleryNotifierProvider.notifier).getService();
     final selectedImages = await service.getRecordsByPaths(
       selectionState.selectedIds.toList(),
     );
@@ -681,8 +737,11 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     if (outputPath == null || !mounted) return;
 
-    final finalPath =
+    final requestedPath =
         outputPath.endsWith('.zip') ? outputPath : '$outputPath.zip';
+    final finalPath = AssetProtectionGuard.shouldPreventOverwrite(ref)
+        ? await AssetProtectionGuard.resolveNonOverwritingPath(requestedPath)
+        : requestedPath;
 
     AppToast.info(context, '正在打包 ${selectedImages.length} 张图片...');
 
@@ -712,7 +771,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final l10n = context.l10n;
 
     // 从数据库获取所有选中项的完整记录（支持跨页）
-    final service = await ref.read(localGalleryNotifierProvider.notifier).getService();
+    final service =
+        await ref.read(localGalleryNotifierProvider.notifier).getService();
     final selectedImages = await service.getRecordsByPaths(
       selectionState.selectedIds.toList(),
     );
@@ -720,7 +780,7 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     if (selectedImages.isEmpty) return;
 
     final folders = folderState.folders;
-    
+
     if (folders.isEmpty) {
       // ignore: use_build_context_synchronously
       if (mounted) AppToast.info(context, l10n.localGallery_noFoldersAvailable);
@@ -761,15 +821,27 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
 
     if (selectedFolder == null || !mounted) return;
 
+    final protected = await AssetProtectionGuard.confirmDangerousAction(
+      context: context,
+      ref: ref,
+      title: '保护模式：确认批量移动',
+      content: '将移动 ${selectedImages.length} 张本地图片文件到目标文件夹。请确认不是误操作。',
+      confirmText: '确认移动',
+      icon: Icons.drive_file_move_outline,
+    );
+    if (!protected || !mounted) return;
+
     final imagePaths = selectedImages.map((img) => img.path).toList();
-    final movedCount = await GalleryFolderRepository.instance.moveImagesToFolder(
+    final movedCount =
+        await GalleryFolderRepository.instance.moveImagesToFolder(
       imagePaths,
       selectedFolder,
     );
 
     if (mounted) {
       if (movedCount > 0) {
-        AppToast.info(context, context.l10n.localGallery_movedImages(movedCount));
+        AppToast.info(
+            context, context.l10n.localGallery_movedImages(movedCount));
         ref.read(localGallerySelectionNotifierProvider.notifier).exit();
         ref.read(localGalleryNotifierProvider.notifier).refresh();
         ref.read(galleryFolderNotifierProvider.notifier).refresh();
@@ -783,7 +855,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     final selectionState = ref.read(localGallerySelectionNotifierProvider);
 
     // 从数据库获取所有选中项的完整记录（支持跨页）
-    final service = await ref.read(localGalleryNotifierProvider.notifier).getService();
+    final service =
+        await ref.read(localGalleryNotifierProvider.notifier).getService();
     final selectedImages = await service.getRecordsByPaths(
       selectionState.selectedIds.toList(),
     );
@@ -826,10 +899,12 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         return;
       }
 
-      final options = await MetadataImportDialog.show(context, metadata: metadata);
+      final options =
+          await MetadataImportDialog.show(context, metadata: metadata);
       if (options == null || !mounted) return;
 
-      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
+      final paramsNotifier =
+          ref.read(generationParamsNotifierProvider.notifier);
 
       // 安全获取角色提示词列表（防止 null）
       final characterPrompts = metadata.characterPrompts;
@@ -846,8 +921,13 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         appliedCount++;
       }
 
-      if (options.importNegativePrompt && metadata.negativePrompt.isNotEmpty) {
-        paramsNotifier.updateNegativePrompt(_formatPrompt(metadata.negativePrompt));
+      if (options.importNegativePrompt &&
+          (metadata.negativePrompt.isNotEmpty || options.importUcPreset)) {
+        paramsNotifier
+            .updateNegativePrompt(_formatPrompt(_resolveImportedNegativePrompt(
+          metadata,
+          importUcPreset: options.importUcPreset,
+        )));
         appliedCount++;
       }
 
@@ -857,18 +937,29 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       }
 
       _applyParam(options.importSeed, metadata.seed, paramsNotifier.updateSeed);
-      _applyParam(options.importSteps, metadata.steps, paramsNotifier.updateSteps);
-      _applyParam(options.importScale, metadata.scale, paramsNotifier.updateScale);
-      _applyParam(options.importSampler, metadata.sampler, paramsNotifier.updateSampler);
-      _applyParam(options.importModel, metadata.model, paramsNotifier.updateModel);
+      _applyParam(
+          options.importSteps, metadata.steps, paramsNotifier.updateSteps);
+      _applyParam(
+          options.importScale, metadata.scale, paramsNotifier.updateScale);
+      _applyParam(options.importSampler, metadata.sampler,
+          paramsNotifier.updateSampler);
+      _applyParam(
+          options.importModel, metadata.model, paramsNotifier.updateModel);
       _applyParam(options.importSmea, metadata.smea, paramsNotifier.updateSmea);
-      _applyParam(options.importSmeaDyn, metadata.smeaDyn, paramsNotifier.updateSmeaDyn);
-      _applyParam(options.importNoiseSchedule, metadata.noiseSchedule, paramsNotifier.updateNoiseSchedule);
-      _applyParam(options.importCfgRescale, metadata.cfgRescale, paramsNotifier.updateCfgRescale);
-      _applyParam(options.importQualityToggle, metadata.qualityToggle, paramsNotifier.updateQualityToggle);
-      _applyParam(options.importUcPreset, metadata.ucPreset, paramsNotifier.updateUcPreset);
+      _applyParam(options.importSmeaDyn, metadata.smeaDyn,
+          paramsNotifier.updateSmeaDyn);
+      _applyParam(options.importNoiseSchedule, metadata.noiseSchedule,
+          paramsNotifier.updateNoiseSchedule);
+      _applyParam(options.importCfgRescale, metadata.cfgRescale,
+          paramsNotifier.updateCfgRescale);
+      _applyParam(options.importQualityToggle, metadata.qualityToggle,
+          paramsNotifier.updateQualityToggle);
+      _applyParam(options.importUcPreset, metadata.ucPreset,
+          paramsNotifier.updateUcPreset);
 
-      if (options.importSize && metadata.width != null && metadata.height != null) {
+      if (options.importSize &&
+          metadata.width != null &&
+          metadata.height != null) {
         paramsNotifier.updateSize(metadata.width!, metadata.height!);
         appliedCount++;
       }
@@ -876,7 +967,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       if (!mounted) return;
 
       if (appliedCount > 0) {
-        AppToast.info(context, context.l10n.metadataImport_appliedToMain(appliedCount));
+        AppToast.info(
+            context, context.l10n.metadataImport_appliedToMain(appliedCount));
       } else {
         AppToast.warning(context, context.l10n.metadataImport_noParamsSelected);
       }
@@ -892,12 +984,30 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     return NaiPromptFormatter.format(SdToNaiConverter.convert(prompt));
   }
 
+  String _resolveImportedNegativePrompt(
+    NaiImageMetadata metadata, {
+    required bool importUcPreset,
+  }) {
+    if (!importUcPreset || metadata.ucPreset == null) {
+      return metadata.negativePrompt;
+    }
+
+    final model =
+        metadata.model ?? ref.read(generationParamsNotifierProvider).model;
+    return UcPresets.stripPresetByInt(
+      metadata.negativePrompt,
+      model,
+      metadata.ucPreset!,
+    );
+  }
+
   void _applyParam<T>(bool shouldApply, T? value, void Function(T) updater) {
     if (shouldApply && value != null) updater(value);
   }
 
   void _applyCharacterPrompts(NaiImageMetadata metadata) {
-    final characterNotifier = ref.read(characterPromptNotifierProvider.notifier);
+    final characterNotifier =
+        ref.read(characterPromptNotifierProvider.notifier);
     final characters = <char.CharacterPrompt>[];
 
     // 安全获取角色提示词列表
@@ -946,12 +1056,12 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       }
 
       final imageBytes = await file.readAsBytes();
-      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
+      ImageWorkflowLauncher.openImageToImage(ref, imageBytes);
 
-      paramsNotifier.setSourceImage(imageBytes);
-      paramsNotifier.updateAction(ImageGenerationAction.img2img);
-
-      if (mounted) AppToast.success(context, '图片已发送到图生图，请切换到生成页面');
+      if (mounted) {
+        context.go(AppRoutes.home);
+        AppToast.success(context, '图片已发送到图生图');
+      }
     } catch (e) {
       if (mounted) AppToast.error(context, '发送失败: $e');
     }
@@ -965,7 +1075,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         return;
       }
 
-      final paramsNotifier = ref.read(generationParamsNotifierProvider.notifier);
+      final paramsNotifier =
+          ref.read(generationParamsNotifierProvider.notifier);
       paramsNotifier.addVibeReferences([vibeData]);
 
       if (mounted) {
@@ -976,6 +1087,27 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     }
   }
 
+  Future<void> _sendToReversePrompt(LocalImageRecord record) async {
+    try {
+      final file = File(record.path);
+      if (!await file.exists()) {
+        if (mounted) AppToast.info(context, '图片文件不存在');
+        return;
+      }
+
+      await ref
+          .read(reversePromptProvider.notifier)
+          .addImage(await file.readAsBytes(), name: path.basename(record.path));
+
+      if (mounted) {
+        context.go(AppRoutes.home);
+        AppToast.success(context, '图片已发送到反推模块');
+      }
+    } catch (e) {
+      if (mounted) AppToast.error(context, '发送失败: $e');
+    }
+  }
+
   Future<void> _showSendDestinationDialog(LocalImageRecord record) async {
     final destination = await ImageSendDestinationDialog.show(context, record);
     if (destination == null || !mounted) return;
@@ -983,6 +1115,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     switch (destination) {
       case SendDestination.img2img:
         await _sendToImg2Img(record);
+      case SendDestination.reversePrompt:
+        await _sendToReversePrompt(record);
       case SendDestination.vibeTransfer:
         await _sendToVibeTransfer(record);
     }
@@ -1071,7 +1205,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         }
       case 'copy_seed':
         if (metadata?.seed != null) {
-          await Clipboard.setData(ClipboardData(text: metadata!.seed.toString()));
+          await Clipboard.setData(
+              ClipboardData(text: metadata!.seed.toString()));
           if (mounted) AppToast.success(context, 'Seed 已复制');
         }
       case 'open_folder':
@@ -1121,6 +1256,15 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     );
 
     if (confirmed == true && mounted) {
+      final protected = await AssetProtectionGuard.confirmDangerousAction(
+        context: context,
+        ref: ref,
+        title: '保护模式：再次确认删除',
+        content: '将永久删除图片「${path.basename(record.path)}」。此操作无法撤销。',
+        confirmText: '确认删除',
+        icon: Icons.delete_outline,
+      );
+      if (!protected || !mounted) return;
       try {
         final file = File(record.path);
         if (await file.exists()) {
@@ -1148,7 +1292,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
       builder: (pickerContext, child) => Theme(
         data: Theme.of(pickerContext).copyWith(
           dialogTheme: DialogThemeData(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
         child: child!,
@@ -1183,7 +1328,8 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     _groupedGridViewKey.currentState?.scrollToGroup(targetGroup);
 
     if (context.mounted) {
-      AppToast.info(context, '已跳转到 ${picked.year}-${picked.month.toString().padLeft(2, '0')}');
+      AppToast.info(context,
+          '已跳转到 ${picked.year}-${picked.month.toString().padLeft(2, '0')}');
     }
   }
 }

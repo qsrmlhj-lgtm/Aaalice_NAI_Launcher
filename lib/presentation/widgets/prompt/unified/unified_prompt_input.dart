@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 
@@ -15,6 +19,13 @@ import '../../autocomplete/strategies/alias_strategy.dart';
 import '../../autocomplete/strategies/cooccurrence_strategy.dart';
 import '../../common/app_toast.dart';
 import '../../common/weight_adjust_toolbar.dart';
+import '../../../prompt_assistant/models/prompt_assistant_models.dart';
+import '../../../prompt_assistant/providers/prompt_assistant_config_provider.dart';
+import '../../../prompt_assistant/providers/prompt_assistant_history_provider.dart';
+import '../../../prompt_assistant/providers/prompt_assistant_state_provider.dart';
+import '../../../prompt_assistant/services/prompt_assistant_service.dart';
+import '../../../prompt_assistant/widgets/prompt_assistant_overlay.dart';
+import '../../../providers/fixed_tags_provider.dart';
 import '../comfyui_import_wrapper.dart';
 import '../nai_syntax_controller.dart';
 import 'unified_prompt_config.dart';
@@ -64,6 +75,15 @@ class UnifiedPromptInput extends ConsumerStatefulWidget {
   /// 是否扩展填满空间
   final bool expands;
 
+  /// 输入框会话标识（用于历史栈隔离）
+  final String? sessionId;
+
+  /// 是否显示右下角助手
+  final bool enableAssistant;
+
+  /// 打开助手设置回调
+  final VoidCallback? onOpenAssistantSettings;
+
   /// ComfyUI 多角色导入回调
   ///
   /// 当用户确认导入 ComfyUI 格式的多角色提示词时触发。
@@ -83,6 +103,9 @@ class UnifiedPromptInput extends ConsumerStatefulWidget {
     this.maxLines,
     this.minLines,
     this.expands = false,
+    this.sessionId,
+    this.enableAssistant = true,
+    this.onOpenAssistantSettings,
     this.onComfyuiImport,
   });
 
@@ -102,6 +125,51 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
 
   /// 自动补全策略 Future（异步初始化）
   Future<AutocompleteStrategy>? _autocompleteStrategyFuture;
+  StreamSubscription<StreamingChunk>? _assistantStreamSub;
+  late String _sessionId;
+
+  bool get _isDesktop {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.windows:
+      case TargetPlatform.macOS:
+      case TargetPlatform.linux:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _handleHardwareKeyEvent(KeyEvent event) {
+    if (!_isDesktop ||
+        !_effectiveFocusNode.hasFocus ||
+        event is! KeyDownEvent) {
+      return false;
+    }
+
+    final logicalKey = event.logicalKey;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+    if (!widget.enableAssistant) {
+      return false;
+    }
+
+    final assistantConfig = ref.read(promptAssistantConfigProvider);
+    if (!assistantConfig.enabled || !assistantConfig.desktopOverlayEnabled) {
+      return false;
+    }
+
+    if (isCtrl && isShift && logicalKey == LogicalKeyboardKey.keyE) {
+      unawaited(_runAssistantAction(AssistantTaskType.llm));
+      return true;
+    }
+    if (isCtrl && isShift && logicalKey == LogicalKeyboardKey.keyT) {
+      unawaited(_runAssistantAction(AssistantTaskType.translate));
+      return true;
+    }
+
+    return false;
+  }
 
   /// 获取有效的文本控制器
   TextEditingController get _effectiveController {
@@ -116,9 +184,38 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
     return widget.focusNode ?? _internalFocusNode!;
   }
 
+  String _resolveSessionId(String? sessionId) {
+    final providedSessionId = sessionId?.trim();
+    if (providedSessionId != null && providedSessionId.isNotEmpty) {
+      return providedSessionId;
+    }
+    return 'prompt_${identityHashCode(this)}';
+  }
+
+  bool _shouldResetAutocompleteStrategy(UnifiedPromptInput oldWidget) {
+    final oldConfig = oldWidget.config;
+    final newConfig = widget.config;
+    final oldAutocomplete = oldConfig.autocompleteConfig;
+    final newAutocomplete = newConfig.autocompleteConfig;
+
+    return oldConfig.enableAutocomplete != newConfig.enableAutocomplete ||
+        oldAutocomplete.maxSuggestions != newAutocomplete.maxSuggestions ||
+        oldAutocomplete.showTranslation != newAutocomplete.showTranslation ||
+        oldAutocomplete.showCategory != newAutocomplete.showCategory ||
+        oldAutocomplete.showCount != newAutocomplete.showCount ||
+        oldAutocomplete.enableChineseSearch !=
+            newAutocomplete.enableChineseSearch ||
+        oldAutocomplete.debounceDelay != newAutocomplete.debounceDelay ||
+        oldAutocomplete.minQueryLength != newAutocomplete.minQueryLength ||
+        oldAutocomplete.autoInsertComma != newAutocomplete.autoInsertComma ||
+        oldAutocomplete.replaceUnderscoreWithSpace !=
+            newAutocomplete.replaceUnderscoreWithSpace;
+  }
+
   @override
   void initState() {
     super.initState();
+    _sessionId = _resolveSessionId(widget.sessionId);
 
     // 初始化内部控制器（如果需要）
     if (widget.controller == null) {
@@ -147,11 +244,23 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
 
     // 初始化自动补全策略（延迟到第一次 build 后，因为需要 ref）
     // 策略将在 _ensureAutocompleteStrategy 中惰性创建
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyEvent);
   }
 
   @override
   void didUpdateWidget(UnifiedPromptInput oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    final oldEffectiveFocusNode = oldWidget.focusNode ?? _internalFocusNode!;
+    final newEffectiveFocusNode = widget.focusNode ?? _internalFocusNode!;
+    if (oldEffectiveFocusNode != newEffectiveFocusNode) {
+      oldEffectiveFocusNode.removeListener(_onFocusChanged);
+      newEffectiveFocusNode.addListener(_onFocusChanged);
+    }
+
+    if (widget.sessionId != oldWidget.sessionId) {
+      _sessionId = _resolveSessionId(widget.sessionId);
+    }
 
     // 外部控制器变化
     if (widget.controller != oldWidget.controller) {
@@ -184,10 +293,16 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
         _syntaxController = null;
       }
     }
+
+    if (_shouldResetAutocompleteStrategy(oldWidget)) {
+      _autocompleteStrategyFuture = null;
+    }
   }
 
   @override
   void dispose() {
+    _assistantStreamSub?.cancel();
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyEvent);
     _effectiveFocusNode.removeListener(_onFocusChanged);
     widget.controller?.removeListener(_syncFromExternalController);
     _internalController?.dispose();
@@ -196,10 +311,82 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
     super.dispose();
   }
 
+  Future<void> _runAssistantAction(AssistantTaskType taskType) async {
+    final text = _assistantInputText().trim();
+    if (text.isEmpty) {
+      if (mounted) AppToast.warning(context, '请输入提示词后再操作');
+      return;
+    }
+
+    final beforeText = _effectiveController.text;
+    ref
+        .read(promptAssistantHistoryProvider.notifier)
+        .push(_sessionId, beforeText);
+
+    final stateNotifier = ref.read(promptAssistantStateProvider.notifier);
+    final label = taskType == AssistantTaskType.llm ? '优化中' : '翻译中';
+    stateNotifier.startProcessing(_sessionId, label);
+
+    final service = ref.read(promptAssistantServiceProvider);
+    final buffer = StringBuffer();
+
+    await _assistantStreamSub?.cancel();
+    final stream = taskType == AssistantTaskType.llm
+        ? service.optimizePrompt(
+            text,
+            sessionId: _sessionId,
+          )
+        : service.translatePrompt(
+            text,
+            sessionId: _sessionId,
+          );
+
+    _assistantStreamSub = stream.listen(
+      (chunk) {
+        if (chunk.done) return;
+        if (chunk.delta.isEmpty) return;
+        buffer.write(chunk.delta);
+      },
+      onError: (e) {
+        stateNotifier.setError(_sessionId, e.toString());
+        if (mounted) AppToast.error(context, '助手请求失败: $e');
+      },
+      onDone: () {
+        if (buffer.isNotEmpty) {
+          final finalText = buffer.toString();
+          _effectiveController.text = finalText;
+          _effectiveController.selection =
+              TextSelection.collapsed(offset: _effectiveController.text.length);
+        }
+        stateNotifier.finishProcessing(_sessionId);
+        final afterText = _effectiveController.text;
+        ref.read(promptAssistantHistoryProvider.notifier).recordExternalChange(
+              _sessionId,
+              before: beforeText,
+              after: afterText,
+            );
+        ref.read(promptAssistantHistoryProvider.notifier).push(
+              _sessionId,
+              afterText,
+            );
+      },
+      cancelOnError: true,
+    );
+  }
+
+  String _assistantInputText() {
+    return ref
+        .read(fixedTagsNotifierProvider)
+        .stripFromPrompt(_effectiveController.text);
+  }
+
   /// 焦点变化回调
   void _onFocusChanged() {
     if (!_effectiveFocusNode.hasFocus) {
       _formatOnBlur();
+      ref
+          .read(promptAssistantHistoryProvider.notifier)
+          .push(_sessionId, _effectiveController.text);
     }
   }
 
@@ -366,7 +553,18 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       );
     }
 
-    return result;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        result,
+        if (widget.enableAssistant)
+          PromptAssistantOverlay(
+            sessionId: _sessionId,
+            controller: _effectiveController,
+            onOpenSettings: widget.onOpenAssistantSettings,
+          ),
+      ],
+    );
   }
 
   /// 构建文本输入框
@@ -417,6 +615,16 @@ class _UnifiedPromptInputState extends ConsumerState<UnifiedPromptInput> {
       expands: widget.expands,
       textAlignVertical: widget.expands ? TextAlignVertical.top : null,
       readOnly: widget.config.readOnly,
+      inputFormatters: widget.config.readOnly
+          ? null
+          : [
+              TextInputFormatter.withFunction((oldValue, newValue) {
+                return TextSelectionUtils.wrapSelectionOnBracketReplacement(
+                  oldValue,
+                  newValue,
+                );
+              }),
+            ],
       onChanged: widget.config.enableAutocomplete ? null : _handleTextChanged,
       onSubmitted: widget.onSubmitted,
       showClearButton: widget.config.showClearButton,

@@ -12,15 +12,23 @@ import '../image_metadata_service.dart';
 import 'scan_config.dart';
 import 'scan_state_manager.dart';
 
+typedef ExistingFileCacheEntry = (
+  int,
+  int,
+  int,
+  MetadataStatus,
+  DateTime?,
+);
+
 /// 文件处理阶段
 enum FileProcessingStage {
-  discovered,      // 发现文件
-  indexing,        // 索引中（检查是否需要处理）
-  extracting,      // 提取元数据中
-  caching,         // 缓存元数据
-  completed,       // 完成
-  skipped,         // 跳过（无需处理）
-  error,           // 错误
+  discovered, // 发现文件
+  indexing, // 索引中（检查是否需要处理）
+  extracting, // 提取元数据中
+  caching, // 缓存元数据
+  completed, // 完成
+  skipped, // 跳过（无需处理）
+  error, // 错误
 }
 
 /// 单文件处理结果
@@ -44,14 +52,14 @@ class FileProcessingResult {
 
 /// 流式扫描统计
 class StreamScanStats {
-  final int totalDiscovered;      // 发现的文件总数
-  final int processed;            // 已处理数量
-  final int skipped;              // 跳过数量
-  final int withMetadata;         // 有元数据的数量
-  final int failed;               // 失败的数量
-  final String currentFile;       // 当前处理的文件
+  final int totalDiscovered; // 发现的文件总数
+  final int processed; // 已处理数量
+  final int skipped; // 跳过数量
+  final int withMetadata; // 有元数据的数量
+  final int failed; // 失败的数量
+  final String currentFile; // 当前处理的文件
   final FileProcessingStage currentStage; // 当前阶段
-  final double progress;          // 总体进度 (0.0 - 1.0)
+  final double progress; // 总体进度 (0.0 - 1.0)
 
   StreamScanStats({
     this.totalDiscovered = 0,
@@ -88,22 +96,24 @@ class StreamScanStats {
 
   /// 计算剩余文件数
   int get remaining => totalDiscovered - processed - skipped;
+
   /// 计算覆盖率
-  double get coverage => totalDiscovered > 0 ? withMetadata / totalDiscovered : 0.0;
+  double get coverage =>
+      totalDiscovered > 0 ? withMetadata / totalDiscovered : 0.0;
 }
 
 /// 画廊流式扫描器
-/// 
+///
 /// 真正的流式处理：发现文件 → 立即处理 → 实时更新
 /// 每处理一张图就更新UI，而不是先收集所有文件
-/// 
+///
 /// 【单例模式】使用 [instance] 获取全局唯一实例，防止并发扫描
 class GalleryStreamScanner {
   // 单例实例
   static GalleryStreamScanner? _instance;
-  
+
   /// 获取全局唯一实例
-  /// 
+  ///
   /// [dataSource] 数据源，仅在首次创建实例时需要
   static GalleryStreamScanner instance({GalleryDataSource? dataSource}) {
     if (_instance == null) {
@@ -114,13 +124,13 @@ class GalleryStreamScanner {
     }
     return _instance!;
   }
-  
+
   /// 重置单例（用于测试）
   static void resetInstance() {
     _instance?._cleanup();
     _instance = null;
   }
-  
+
   /// 清理资源
   void _cleanup() {
     if (!_statsController.isClosed) {
@@ -130,7 +140,7 @@ class GalleryStreamScanner {
       _resultController.close();
     }
   }
-  
+
   final GalleryDataSource _dataSource;
   final ScanStateManager _stateManager = ScanStateManager.instance;
   final _metadataService = ImageMetadataService();
@@ -138,16 +148,16 @@ class GalleryStreamScanner {
   // 状态
   bool _isRunning = false;
   bool _shouldCancel = false;
-  
+
   // 互斥锁，防止并发扫描
   final _scanLock = Lock();
-  
+
   // 统计
   final _statsController = StreamController<StreamScanStats>.broadcast();
   final _resultController = StreamController<FileProcessingResult>.broadcast();
-  
+
   // 缓存
-  final _existingMap = <String, (int, int, int, MetadataStatus, DateTime?)>{};
+  final _existingMap = <String, ExistingFileCacheEntry>{};
 
   Stream<StreamScanStats> get statsStream => _statsController.stream;
   Stream<FileProcessingResult> get resultStream => _resultController.stream;
@@ -155,11 +165,11 @@ class GalleryStreamScanner {
   /// 私有构造函数
   GalleryStreamScanner._internal({required GalleryDataSource dataSource})
       : _dataSource = dataSource;
-  
+
   /// @deprecated 使用 [instance] 代替
-  /// 
+  ///
   /// 公共构造函数（向后兼容）
-  /// 
+  ///
   /// ⚠️ 警告：直接创建实例可能导致并发扫描问题。
   /// 请优先使用 [GalleryStreamScanner.instance(dataSource: dataSource)]
   factory GalleryStreamScanner({required GalleryDataSource dataSource}) {
@@ -167,131 +177,156 @@ class GalleryStreamScanner {
   }
 
   /// 开始流式扫描
-  /// 
+  ///
   /// [onFileProcessed] - 每个文件处理完成时的回调
   /// [checkConsistency] - 是否在扫描前检查数据一致性（删除不存在的文件记录）
-  /// 
+  /// [retryMissingMetadata] - 是否重新尝试历史上标记为无元数据的文件
+  /// [retryFailedMetadata] - 是否重新尝试历史上提取失败的文件
+  ///
   /// 使用互斥锁保证同一时间只有一个扫描任务在运行
   Future<void> startScanning(
     Directory rootDir, {
-    void Function(FileProcessingResult result, StreamScanStats stats)? onFileProcessed,
+    void Function(FileProcessingResult result, StreamScanStats stats)?
+        onFileProcessed,
     bool checkConsistency = true,
+    bool retryMissingMetadata = false,
+    bool retryFailedMetadata = false,
   }) async {
     // 使用互斥锁防止并发扫描
     await _scanLock.synchronized(() async {
       if (_isRunning) {
-        AppLogger.w('[StreamScan] Scanner already running', 'GalleryStreamScanner');
+        AppLogger.w(
+            '[StreamScan] Scanner already running', 'GalleryStreamScanner');
         return;
       }
 
       _isRunning = true;
       _shouldCancel = false;
-      
-      AppLogger.i('[StreamScan] Starting stream scan: ${rootDir.path}', 'GalleryStreamScanner');
+
+      AppLogger.i('[StreamScan] Starting stream scan: ${rootDir.path}',
+          'GalleryStreamScanner');
 
       try {
-      // 1. 预加载数据库记录（只加载一次），获取已有元数据数量
-      final existingMetadataCount = await _preloadExistingRecords();
-      
-      // 2. 【新增】检查数据一致性：删除数据库中不存在于文件系统的记录
-      if (checkConsistency) {
-        await _fixDataConsistency();
-      }
-      
-      // 3. 【关键修改】先遍历一遍统计总数（让用户看到固定的总进度）
-      AppLogger.i('[StreamScan] Counting total files...', 'GalleryStreamScanner');
-      final totalFiles = await _countTotalFiles(rootDir);
-      AppLogger.i('[StreamScan] Total files to scan: $totalFiles', 'GalleryStreamScanner');
-      
-      // 4. 启动扫描状态管理器（使用固定的总文件数）
-      // 使用异步版本确保与 ScanStateManager 的状态同步
-      final scanStarted = await _stateManager.startScanAsync(
-        type: ScanType.incremental,
-        rootPath: rootDir.path,
-        total: totalFiles, // 【修复】使用固定的总数
-        existingInDatabase: _existingMap.length,
-        metadataCacheCount: existingMetadataCount,
-      );
-      
-      if (!scanStarted) {
-        AppLogger.w('[StreamScan] Scan start was rejected by ScanStateManager', 'GalleryStreamScanner');
-        return;
-      }
+        // 1. 预加载数据库记录（只加载一次），获取已有元数据数量
+        final existingMetadataCount = await _preloadExistingRecords();
 
-      // 5. 流式处理：发现文件 → 立即处理
-      // 【修复】使用预统计的总数，让进度显示更直观（如 0/8751 → 8751/8751）
-      var stats = StreamScanStats(totalDiscovered: totalFiles);
-      var processedCount = 0;
-      var skippedCount = 0; // 【调试】统计跳过的文件数
-      
-      await for (final file in _scanDirectory(rootDir)) {
-        if (_shouldCancel) break;
+        // 2. 【新增】检查数据一致性：删除数据库中不存在于文件系统的记录
+        if (checkConsistency) {
+          await _fixDataConsistency();
+        }
 
-        // 立即处理这个文件
-        final result = await _processSingleFile(file, stats);
-        
-        // 更新统计
-        processedCount++;
-        final isProcessed = result.stage == FileProcessingStage.completed || 
-                           result.stage == FileProcessingStage.error;
-        final isSkipped = result.stage == FileProcessingStage.skipped;
-        final isError = result.stage == FileProcessingStage.error;
-        
-        if (isSkipped) skippedCount++;
-        
-        stats = stats.copyWith(
-          processed: isProcessed ? stats.processed + 1 : stats.processed,
-          skipped: isSkipped ? stats.skipped + 1 : stats.skipped,
-          withMetadata: result.metadata != null && result.metadata!.hasData
-              ? stats.withMetadata + 1
-              : stats.withMetadata,
-          failed: isError ? stats.failed + 1 : stats.failed,
-          currentFile: p.basename(file.path),
-          // 【修复】不覆盖 currentStage，保留 _processSingleFile 内部设置的阶段
-          progress: totalFiles > 0 ? processedCount / totalFiles : 0.0,
+        final retryPriorityPaths = buildRetryPriorityPaths(
+          _existingMap,
+          retryMissingMetadata: retryMissingMetadata,
+          retryFailedMetadata: retryFailedMetadata,
         );
-        
-        // 【调试】每100个文件打印一次跳过统计
-        if (processedCount % 100 == 0) {
-          AppLogger.d(
-            '[StreamScan] Progress: $processedCount/$totalFiles, '
-            'skipped: $skippedCount (${(skippedCount/processedCount*100).toStringAsFixed(1)}%)',
-            'GalleryStreamScanner',
+
+        // 3. 【关键修改】先遍历一遍统计总数（让用户看到固定的总进度）
+        AppLogger.i(
+            '[StreamScan] Counting total files...', 'GalleryStreamScanner');
+        final totalFiles = await _countTotalFiles(rootDir);
+        AppLogger.i('[StreamScan] Total files to scan: $totalFiles',
+            'GalleryStreamScanner');
+
+        // 4. 启动扫描状态管理器（使用固定的总文件数）
+        // 使用异步版本确保与 ScanStateManager 的状态同步
+        final scanStarted = await _stateManager.startScanAsync(
+          type: ScanType.incremental,
+          rootPath: rootDir.path,
+          total: totalFiles, // 【修复】使用固定的总数
+          existingInDatabase: _existingMap.length,
+          metadataCacheCount: existingMetadataCount,
+        );
+
+        if (!scanStarted) {
+          AppLogger.w(
+              '[StreamScan] Scan start was rejected by ScanStateManager',
+              'GalleryStreamScanner');
+          return;
+        }
+
+        // 5. 流式处理：发现文件 → 立即处理
+        // 【修复】使用预统计的总数，让进度显示更直观（如 0/8751 → 8751/8751）
+        var stats = StreamScanStats(totalDiscovered: totalFiles);
+        var processedCount = 0;
+        var skippedCount = 0; // 【调试】统计跳过的文件数
+
+        await for (final file in _scanDirectory(
+          rootDir,
+          priorityPaths: retryPriorityPaths,
+        )) {
+          if (_shouldCancel) break;
+
+          // 立即处理这个文件
+          final result = await _processSingleFile(
+            file,
+            stats,
+            retryMissingMetadata: retryMissingMetadata,
+            retryFailedMetadata: retryFailedMetadata,
           );
+
+          // 更新统计
+          processedCount++;
+          final isProcessed = result.stage == FileProcessingStage.completed ||
+              result.stage == FileProcessingStage.error;
+          final isSkipped = result.stage == FileProcessingStage.skipped;
+          final isError = result.stage == FileProcessingStage.error;
+
+          if (isSkipped) skippedCount++;
+
+          stats = stats.copyWith(
+            processed: isProcessed ? stats.processed + 1 : stats.processed,
+            skipped: isSkipped ? stats.skipped + 1 : stats.skipped,
+            withMetadata: result.metadata != null && result.metadata!.hasData
+                ? stats.withMetadata + 1
+                : stats.withMetadata,
+            failed: isError ? stats.failed + 1 : stats.failed,
+            currentFile: p.basename(file.path),
+            // 【修复】不覆盖 currentStage，保留 _processSingleFile 内部设置的阶段
+            progress: totalFiles > 0 ? processedCount / totalFiles : 0.0,
+          );
+
+          // 【调试】每100个文件打印一次跳过统计
+          if (processedCount % 100 == 0) {
+            AppLogger.d(
+              '[StreamScan] Progress: $processedCount/$totalFiles, '
+                  'skipped: $skippedCount (${(skippedCount / processedCount * 100).toStringAsFixed(1)}%)',
+              'GalleryStreamScanner',
+            );
+          }
+
+          // 发送结果
+          _resultController.add(result);
+          _statsController.add(stats);
+
+          // 回调
+          onFileProcessed?.call(result, stats);
+
+          // 更新 ScanStateManager（使用固定的总数）
+          _stateManager.updateProgress(
+            processed: processedCount,
+            total: totalFiles,
+            currentFile: p.basename(file.path),
+            phase: _stageToPhase(result.stage),
+          );
+
+          // 让出时间片，避免阻塞UI
+          if (processedCount % 10 == 0) {
+            await Future.delayed(Duration.zero);
+          }
         }
 
-        // 发送结果
-        _resultController.add(result);
-        _statsController.add(stats);
-        
-        // 回调
-        onFileProcessed?.call(result, stats);
-
-        // 更新 ScanStateManager（使用固定的总数）
-        _stateManager.updateProgress(
-          processed: processedCount,
-          total: totalFiles,
-          currentFile: p.basename(file.path),
-          phase: _stageToPhase(result.stage),
+        // 扫描完成
+        _stateManager.completeScan();
+        AppLogger.i(
+          '[StreamScan] Scan completed: ${stats.totalDiscovered} discovered, '
+              '${stats.processed} processed, ${stats.withMetadata} with metadata, '
+              '${stats.skipped} skipped (${(stats.skipped / stats.totalDiscovered * 100).toStringAsFixed(1)}%)',
+          'GalleryStreamScanner',
         );
-
-        // 让出时间片，避免阻塞UI
-        if (processedCount % 10 == 0) {
-          await Future.delayed(Duration.zero);
-        }
-      }
-
-      // 扫描完成
-      _stateManager.completeScan();
-      AppLogger.i(
-        '[StreamScan] Scan completed: ${stats.totalDiscovered} discovered, '
-        '${stats.processed} processed, ${stats.withMetadata} with metadata, '
-        '${stats.skipped} skipped (${(stats.skipped/stats.totalDiscovered*100).toStringAsFixed(1)}%)',
-        'GalleryStreamScanner',
-      );
-
       } catch (e, stack) {
-        AppLogger.e('[StreamScan] Scan failed', e, stack, 'GalleryStreamScanner');
+        AppLogger.e(
+            '[StreamScan] Scan failed', e, stack, 'GalleryStreamScanner');
         _stateManager.errorScan(e.toString());
       } finally {
         _isRunning = false;
@@ -300,9 +335,9 @@ class GalleryStreamScanner {
       }
     });
   }
-  
+
   /// 关闭扫描器并释放资源
-  /// 
+  ///
   /// ⚠️ 警告：只有在确定不再使用扫描器时才调用此方法
   /// 单例模式下通常不需要手动关闭
   Future<void> dispose() async {
@@ -327,7 +362,7 @@ class GalleryStreamScanner {
   /// 文件签名到路径的映射（用于检测移动/重命名）
   /// 签名格式: "size:mtime"
   final Map<String, String> _signatureToPath = {};
-  
+
   /// 路径到文件ID的映射（用于移动检测）
   final Map<String, int> _pathToId = {};
 
@@ -338,7 +373,7 @@ class GalleryStreamScanner {
     _signatureToPath.clear();
     _pathToId.clear();
     var metadataCount = 0;
-    
+
     for (final img in existingRecords) {
       if (!img.isDeleted && img.id != null) {
         _existingMap[img.filePath] = (
@@ -349,11 +384,12 @@ class GalleryStreamScanner {
           img.lastScannedAt,
         );
         _pathToId[img.filePath] = img.id!;
-        
+
         // 建立签名映射（用于检测移动/重命名）
-        final signature = '${img.fileSize}:${img.modifiedAt.millisecondsSinceEpoch}';
+        final signature =
+            '${img.fileSize}:${img.modifiedAt.millisecondsSinceEpoch}';
         _signatureToPath[signature] = img.filePath;
-        
+
         // 统计已有元数据的记录
         if (img.metadataStatus == MetadataStatus.success) {
           metadataCount++;
@@ -362,32 +398,33 @@ class GalleryStreamScanner {
     }
     AppLogger.i(
       '[StreamScan] Preloaded ${_existingMap.length} existing records, '
-      '$metadataCount with metadata',
+          '$metadataCount with metadata',
       'GalleryStreamScanner',
     );
     return metadataCount;
   }
 
   /// 修复数据一致性
-  /// 
+  ///
   /// 检查数据库中所有未删除的记录，如果文件不存在则标记为已删除
   /// 返回被标记为删除的记录数量
   Future<int> _fixDataConsistency() async {
-    AppLogger.i('[StreamScan] Checking data consistency...', 'GalleryStreamScanner');
-    
+    AppLogger.i(
+        '[StreamScan] Checking data consistency...', 'GalleryStreamScanner');
+
     final orphanedPaths = <String>[];
-    
+
     for (final entry in _existingMap.entries) {
       if (_shouldCancel) break;
-      
+
       final path = entry.key;
       final file = File(path);
-      
+
       if (!await file.exists()) {
         orphanedPaths.add(path);
       }
     }
-    
+
     if (orphanedPaths.isNotEmpty) {
       await _dataSource.batchMarkAsDeleted(orphanedPaths);
       // 从本地缓存中移除
@@ -399,63 +436,78 @@ class GalleryStreamScanner {
         'GalleryStreamScanner',
       );
     }
-    
+
     return orphanedPaths.length;
   }
 
   /// 处理单个文件
   Future<FileProcessingResult> _processSingleFile(
     File file,
-    StreamScanStats stats,
-  ) async {
+    StreamScanStats stats, {
+    bool retryMissingMetadata = false,
+    bool retryFailedMetadata = false,
+  }) async {
     final path = file.path;
     final fileName = p.basename(path);
-    
-      // 【修复】在 try 外获取 existing，确保 catch 块也能访问
-      final existing = _existingMap[path];
+
+    // 【修复】在 try 外获取 existing，确保 catch 块也能访问
+    final existing = _existingMap[path];
 
     try {
       // 阶段1: 索引检查
       _updateStage(stats, FileProcessingStage.indexing, fileName);
-      
+
       final stat = await file.stat();
-      
+
       // 【调试日志】打印缓存命中情况
       if (existing != null) {
         final (_, _, _, metadataStatus, lastScannedAt) = existing;
         AppLogger.d(
           '[StreamScan] Cache hit: $fileName, '
-          'status=${metadataStatus.name}, lastScannedAt=$lastScannedAt',
+              'status=${metadataStatus.name}, lastScannedAt=$lastScannedAt',
           'GalleryStreamScanner',
         );
       } else {
-        AppLogger.d('[StreamScan] Cache miss: $fileName', 'GalleryStreamScanner');
+        AppLogger.d(
+            '[StreamScan] Cache miss: $fileName', 'GalleryStreamScanner');
       }
-      
+
       // 【新增】检测移动/重命名：检查是否有相同签名（size+mtime）的旧记录
       final signature = '${stat.size}:${stat.modified.millisecondsSinceEpoch}';
       final movedFromPath = _signatureToPath[signature];
       final bool isMoved = movedFromPath != null && movedFromPath != path;
-      
+
       final bool needsUpdate;
       if (existing == null && !isMoved) {
         needsUpdate = true; // 真正的新文件
       } else if (isMoved) {
         needsUpdate = true; // 移动/重命名，需要更新路径
       } else if (existing != null) {
-        final (existingSize, existingMtime, _, metadataStatus, lastScannedAt) = existing;
+        final (existingSize, existingMtime, _, metadataStatus, lastScannedAt) =
+            existing;
         if (stat.size != existingSize ||
             stat.modified.millisecondsSinceEpoch != existingMtime) {
           needsUpdate = true; // 文件已变化
         } else if (lastScannedAt == null) {
           needsUpdate = true; // 从未扫描（迁移后的旧数据）
         } else if (metadataStatus == MetadataStatus.none) {
-          // 【修复】已扫描过但没有元数据的文件，跳过避免重复处理
-          // 只有当文件被修改过（mtime变化）才需要重新扫描
-          needsUpdate = false;
+          needsUpdate = retryMissingMetadata;
           AppLogger.d(
-            '[StreamScan] Skip re-scan (no metadata): $fileName, '
-            'last scanned at $lastScannedAt',
+            retryMissingMetadata
+                ? '[StreamScan] Retry missing metadata: $fileName, '
+                    'last scanned at $lastScannedAt'
+                : '[StreamScan] Skip re-scan (no metadata): $fileName, '
+                    'last scanned at $lastScannedAt',
+            'GalleryStreamScanner',
+          );
+        } else if (metadataStatus == MetadataStatus.failed) {
+          needsUpdate = retryFailedMetadata;
+          AppLogger.d(
+            retryFailedMetadata
+                ? '[StreamScan] Retry failed metadata: $fileName, '
+                    'last scanned at $lastScannedAt'
+                : '[StreamScan] Skip re-scan (failed metadata): $fileName, '
+                    'last scanned at $lastScannedAt',
             'GalleryStreamScanner',
           );
         } else {
@@ -486,20 +538,26 @@ class GalleryStreamScanner {
           );
 
           // 更新文件路径
-          await _dataSource.updateFilePath(oldImageId, path, newFileName: fileName);
-          
+          await _dataSource.updateFilePath(oldImageId, path,
+              newFileName: fileName);
+
           // 更新本地缓存
           final oldRecord = _existingMap.remove(movedFromPath);
           if (oldRecord != null) {
-            _existingMap[path] = (stat.size, stat.modified.millisecondsSinceEpoch, 
-                oldImageId, oldRecord.$4, DateTime.now());
+            _existingMap[path] = (
+              stat.size,
+              stat.modified.millisecondsSinceEpoch,
+              oldImageId,
+              oldRecord.$4,
+              DateTime.now()
+            );
           }
           _pathToId.remove(movedFromPath);
           _pathToId[path] = oldImageId;
-          
+
           // 清除该签名的映射（避免重复匹配）
           _signatureToPath.remove(signature);
-          
+
           return FileProcessingResult(
             path: path,
             stage: FileProcessingStage.completed,
@@ -515,11 +573,11 @@ class GalleryStreamScanner {
 
       // 阶段3: 写入数据库
       _updateStage(stats, FileProcessingStage.caching, fileName);
-      
+
       final isNewFile = existing == null;
       final metadataStatus = metadata != null && metadata.hasData
           ? MetadataStatus.success
-          : MetadataStatus.none;
+          : MetadataStatus.failed;
 
       final imageId = await _dataSource.upsertImage(
         filePath: path,
@@ -540,21 +598,23 @@ class GalleryStreamScanner {
       if (metadata != null && metadata.hasData) {
         await _dataSource.upsertMetadata(imageId, metadata);
         _metadataService.cacheMetadata(path, metadata);
-        
+
         // 更新 ScanStateManager 的元数据计数
         _stateManager.incrementMetadataCacheCount();
       }
-      
+
       // 【修复】无论是否有元数据，都更新本地缓存，确保 lastScannedAt 被设置
       // 这样下次扫描时可以正确跳过已处理的文件
       _existingMap[path] = (
         stat.size,
         stat.modified.millisecondsSinceEpoch,
         imageId,
-        metadata != null && metadata.hasData ? MetadataStatus.success : MetadataStatus.none,
+        metadata != null && metadata.hasData
+            ? MetadataStatus.success
+            : MetadataStatus.failed,
         DateTime.now(), // 关键：确保 lastScannedAt 被设置
       );
-      
+
       // 更新路径映射
       _pathToId[path] = imageId;
 
@@ -566,13 +626,13 @@ class GalleryStreamScanner {
         isNewFile: isNewFile,
         metadataUpdated: metadata != null && metadata.hasData,
       );
-
     } catch (e) {
-      AppLogger.w('[StreamScan] Error processing $fileName: $e', 'GalleryStreamScanner');
-      
+      AppLogger.w('[StreamScan] Error processing $fileName: $e',
+          'GalleryStreamScanner');
+
       // 【修复】增加失败计数
       _stateManager.incrementFailedCount();
-      
+
       // 【修复】即使处理失败，也更新缓存标记为已扫描
       // 避免每次扫描都重复处理有问题的文件
       if (existing != null) {
@@ -581,11 +641,11 @@ class GalleryStreamScanner {
           existingSize,
           existingMtime,
           existingId,
-          MetadataStatus.none,
+          MetadataStatus.failed,
           DateTime.now(), // 标记为已扫描，即使失败
         );
       }
-      
+
       return FileProcessingResult(
         path: path,
         stage: FileProcessingStage.error,
@@ -595,10 +655,11 @@ class GalleryStreamScanner {
   }
 
   /// 更新当前阶段
-  /// 
+  ///
   /// 【重要】同时更新 _statsController 和 ScanStateManager，
   /// 确保 UI 能实时看到阶段变化
-  void _updateStage(StreamScanStats stats, FileProcessingStage stage, String fileName) {
+  void _updateStage(
+      StreamScanStats stats, FileProcessingStage stage, String fileName) {
     // 更新本地 stats controller（供内部使用）
     _statsController.add(
       stats.copyWith(
@@ -606,7 +667,7 @@ class GalleryStreamScanner {
         currentFile: fileName,
       ),
     );
-    
+
     // 【修复】同步更新 ScanStateManager，让 UI 能看到阶段变化
     _stateManager.updateProgress(
       currentFile: fileName,
@@ -623,21 +684,45 @@ class GalleryStreamScanner {
   }
 
   /// 扫描目录
-  Stream<File> _scanDirectory(Directory rootDir) async* {
+  Stream<File> _scanDirectory(
+    Directory rootDir, {
+    List<String> priorityPaths = const [],
+  }) async* {
     const supportedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
-    
-    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+    final emittedPaths = <String>{};
+
+    for (final path in priorityPaths) {
       if (_shouldCancel) break;
-      
+
+      final ext = p.extension(path).toLowerCase();
+      if (!supportedExtensions.contains(ext)) {
+        continue;
+      }
+
+      final file = File(path);
+      if (!await file.exists()) {
+        continue;
+      }
+
+      emittedPaths.add(path);
+      yield file;
+    }
+
+    await for (final entity
+        in rootDir.list(recursive: true, followLinks: false)) {
+      if (_shouldCancel) break;
+
       if (entity is File) {
         // 跳过缩略图
-        if (entity.path.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
+        if (entity.path.contains(
+                '${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
             entity.path.contains('.thumb.')) {
           continue;
         }
-        
+
         final ext = p.extension(entity.path).toLowerCase();
-        if (supportedExtensions.contains(ext)) {
+        if (supportedExtensions.contains(ext) &&
+            !emittedPaths.contains(entity.path)) {
           yield entity;
         }
       }
@@ -645,30 +730,32 @@ class GalleryStreamScanner {
   }
 
   /// 统计总文件数（预扫描）
-  /// 
+  ///
   /// 在开始处理前先遍历一遍目录，统计总文件数
   /// 这样可以让用户看到固定的进度（如 0/8751 → 8751/8751）
   Future<int> _countTotalFiles(Directory rootDir) async {
     const supportedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
     var count = 0;
-    
-    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+
+    await for (final entity
+        in rootDir.list(recursive: true, followLinks: false)) {
       if (_shouldCancel) break;
-      
+
       if (entity is File) {
         // 跳过缩略图
-        if (entity.path.contains('${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
+        if (entity.path.contains(
+                '${Platform.pathSeparator}.thumbs${Platform.pathSeparator}') ||
             entity.path.contains('.thumb.')) {
           continue;
         }
-        
+
         final ext = p.extension(entity.path).toLowerCase();
         if (supportedExtensions.contains(ext)) {
           count++;
         }
       }
     }
-    
+
     return count;
   }
 
@@ -689,4 +776,35 @@ class GalleryStreamScanner {
         return ScanPhase.idle;
     }
   }
+}
+
+List<String> buildRetryPriorityPaths(
+  Map<String, ExistingFileCacheEntry> existingMap, {
+  required bool retryMissingMetadata,
+  required bool retryFailedMetadata,
+}) {
+  final candidates = existingMap.entries.where((entry) {
+    final status = entry.value.$4;
+    return (retryMissingMetadata && status == MetadataStatus.none) ||
+        (retryFailedMetadata && status == MetadataStatus.failed);
+  }).toList()
+    ..sort((a, b) {
+      final aScannedAt = a.value.$5;
+      final bScannedAt = b.value.$5;
+
+      if (aScannedAt == null && bScannedAt == null) {
+        return a.key.compareTo(b.key);
+      }
+      if (aScannedAt == null) return -1;
+      if (bScannedAt == null) return 1;
+
+      final compare = aScannedAt.compareTo(bScannedAt);
+      if (compare != 0) {
+        return compare;
+      }
+
+      return a.key.compareTo(b.key);
+    });
+
+  return candidates.map((entry) => entry.key).toList(growable: false);
 }

@@ -290,3 +290,6 @@ final updateCheckServiceProvider = Provider<UpdateCheckService>(
     );
   },
 );
+
+/// 公开的异步初始化 Provider，供需要等待服务可用的调用方使用。
+final updateCheckServiceReadyProvider = _updateCheckServiceFutureProvider;

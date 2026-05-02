@@ -27,6 +27,16 @@ class VibeFolderSyncResult {
   final List<String> errors;
 }
 
+class VibeStoredImportParams {
+  const VibeStoredImportParams({
+    required this.strength,
+    required this.infoExtracted,
+  });
+
+  final double strength;
+  final double infoExtracted;
+}
+
 /// Vibe 文件系统存储服务
 ///
 /// 负责 vibes 文件夹内的文件读写、重命名、删除以及与 Hive 条目的同步。
@@ -63,6 +73,71 @@ class VibeFileStorageService {
       AppLogger.e('保存 Vibe 文件失败: $filePath', e, stackTrace, _tag);
       rethrow;
     }
+  }
+
+  /// 覆盖单个 .naiv4vibe 文件，但尽量保留已有结构和其他模型编码
+  Future<void> overwriteVibeFile(
+    String filePath,
+    VibeReference vibe, {
+    required String displayName,
+    String defaultModel = 'nai-diffusion-4-full',
+  }) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw StateError('Vibe 文件不存在: $filePath');
+    }
+
+    final extension = p.extension(filePath).toLowerCase();
+    if (extension != _singleFileExtension) {
+      throw UnsupportedError('仅支持覆盖单个 $_singleFileExtension 文件');
+    }
+
+    Map<String, dynamic> jsonData;
+    try {
+      final existingJson = await file.readAsString();
+      final decoded = jsonDecode(existingJson);
+      jsonData =
+          decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    } catch (_) {
+      jsonData = <String, dynamic>{};
+    }
+
+    final importInfo = Map<String, dynamic>.from(
+      (jsonData['importInfo'] as Map?)?.cast<String, dynamic>() ??
+          const <String, dynamic>{},
+    );
+    importInfo['model'] = defaultModel;
+    importInfo['information_extracted'] = vibe.infoExtracted;
+    importInfo['strength'] = vibe.strength;
+
+    final encodings = Map<String, dynamic>.from(
+      (jsonData['encodings'] as Map?)?.cast<String, dynamic>() ??
+          const <String, dynamic>{},
+    );
+    encodings[defaultModel] = <String, dynamic>{
+      'vibe': <String, dynamic>{
+        'encoding': vibe.vibeEncoding,
+      },
+    };
+
+    jsonData
+      ..['identifier'] = jsonData['identifier'] ?? 'novelai-vibe-transfer'
+      ..['version'] = jsonData['version'] ?? 1
+      ..['type'] = 'encoding'
+      ..['name'] = displayName
+      ..['importInfo'] = importInfo
+      ..['encodings'] = encodings;
+
+    if (vibe.rawImageData != null && vibe.rawImageData!.isNotEmpty) {
+      jsonData['image'] = base64Encode(vibe.rawImageData!);
+    }
+    if (vibe.thumbnail != null && vibe.thumbnail!.isNotEmpty) {
+      jsonData['thumbnail'] = base64Encode(vibe.thumbnail!);
+    }
+
+    await file
+        .writeAsString(const JsonEncoder.withIndent('  ').convert(jsonData));
+    AppLogger.i('Vibe 文件覆盖成功: $filePath', _tag);
   }
 
   /// 保存多个 Vibe 到 .naiv4vibebundle 文件
@@ -127,6 +202,49 @@ class VibeFileStorageService {
     }
   }
 
+  /// 轻量读取文件里保存的导入参数。
+  ///
+  /// 用于列表页/导入页纠正 Hive 中的旧参数快照，避免回读整份重对象。
+  Future<VibeStoredImportParams?> loadImportParams(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return null;
+      }
+
+      final extension = p.extension(filePath).toLowerCase();
+      if (extension != _singleFileExtension &&
+          extension != _bundleFileExtension) {
+        return null;
+      }
+
+      final jsonString = await file.readAsString();
+      final decoded = jsonDecode(jsonString);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final importInfo = switch (extension) {
+        _singleFileExtension =>
+          (decoded['importInfo'] as Map?)?.cast<String, dynamic>(),
+        _bundleFileExtension => _extractBundleImportInfo(decoded),
+        _ => null,
+      };
+
+      if (importInfo == null) {
+        return null;
+      }
+
+      return VibeStoredImportParams(
+        strength: _extractStoredStrength(importInfo, 0.6),
+        infoExtracted: _extractStoredInfoExtracted(importInfo, 0.7),
+      );
+    } catch (e, stackTrace) {
+      AppLogger.e('读取 Vibe 导入参数失败: $filePath', e, stackTrace, _tag);
+      return null;
+    }
+  }
+
   /// 删除 Vibe 文件
   Future<bool> deleteVibeFile(String filePath) async {
     try {
@@ -174,28 +292,67 @@ class VibeFileStorageService {
     }
   }
 
-  /// 从 bundle 中提取单个 vibe
-  Future<VibeReference?> extractVibeFromBundle(String bundlePath, int index) async {
+  /// 从 bundle 中批量提取 vibe。
+  ///
+  /// 导入多个子 Vibe 时必须走这个入口，避免按索引重复读取和解析整份 bundle。
+  Future<List<VibeReference>> extractVibesFromBundle(
+    String bundlePath, {
+    int startIndex = 0,
+    int? limit,
+  }) async {
     try {
       final file = File(bundlePath);
       if (!await file.exists()) {
         AppLogger.w('Bundle 文件不存在: $bundlePath', _tag);
-        return null;
+        return const [];
+      }
+
+      final safeStartIndex = startIndex < 0 ? 0 : startIndex;
+      final safeLimit = limit == null || limit >= 0 ? limit : 0;
+      if (safeLimit == 0) {
+        return const [];
       }
 
       final bytes = await file.readAsBytes();
-      final vibes = await VibeFileParser.fromBundle(p.basename(bundlePath), bytes);
+      final vibes =
+          await VibeFileParser.fromBundle(p.basename(bundlePath), bytes);
 
-      if (index < 0 || index >= vibes.length) {
-        AppLogger.w('Bundle 索引越界: $index, length: ${vibes.length}', _tag);
-        return null;
+      if (safeStartIndex >= vibes.length) {
+        AppLogger.w(
+          'Bundle 起始索引越界: $safeStartIndex, length: ${vibes.length}',
+          _tag,
+        );
+        return const [];
       }
 
-      return vibes[index];
+      final endIndex = safeLimit == null
+          ? vibes.length
+          : (safeStartIndex + safeLimit)
+              .clamp(safeStartIndex, vibes.length)
+              .toInt();
+      return vibes.sublist(safeStartIndex, endIndex);
     } catch (e, stackTrace) {
-      AppLogger.e('从 Bundle 提取 Vibe 失败: $bundlePath', e, stackTrace, _tag);
+      AppLogger.e('从 Bundle 批量提取 Vibe 失败: $bundlePath', e, stackTrace, _tag);
+      return const [];
+    }
+  }
+
+  /// 从 bundle 中提取单个 vibe
+  Future<VibeReference?> extractVibeFromBundle(
+    String bundlePath,
+    int index,
+  ) async {
+    if (index < 0) {
+      AppLogger.w('Bundle 索引越界: $index', _tag);
       return null;
     }
+
+    final vibes = await extractVibesFromBundle(
+      bundlePath,
+      startIndex: index,
+      limit: 1,
+    );
+    return vibes.isEmpty ? null : vibes.first;
   }
 
   /// 从 bundle 中提取前 N 个缩略图
@@ -294,23 +451,24 @@ class VibeFileStorageService {
     // 分批并行处理文件，避免同时打开太多文件句柄
     const batchSize = 4;
     final fileList = files.whereType<File>().toList();
-    
+
     for (var i = 0; i < fileList.length; i += batchSize) {
       final batch = fileList.sublist(
         i,
         i + batchSize > fileList.length ? fileList.length : i + batchSize,
       );
-      
+
       // 并行处理当前批次
       final batchResults = await Future.wait(
         batch.map((entity) async {
           final filePath = entity.path;
           final normalizedPath = _normalizePath(filePath);
-          
+
           try {
             final existingEntry = existingPathMap[normalizedPath];
-            final discovered = await _buildEntryFromFile(filePath, existingEntry);
-            
+            final discovered =
+                await _buildEntryFromFile(filePath, existingEntry);
+
             return (
               path: normalizedPath,
               entry: discovered,
@@ -326,12 +484,12 @@ class VibeFileStorageService {
           }
         }),
       );
-      
+
       // 处理批次结果
       for (final result in batchResults) {
         scannedCount++;
         currentPathSet.add(result.path);
-        
+
         if (result.error != null) {
           failedCount++;
           errors.add(result.error!);
@@ -380,7 +538,11 @@ class VibeFileStorageService {
       final fallbackName = p.basenameWithoutExtension(filePath);
 
       if (extension == _bundleFileExtension) {
-        return await _buildBundleEntryFromFile(filePath, fallbackName, existingEntry);
+        return await _buildBundleEntryFromFile(
+          filePath,
+          fallbackName,
+          existingEntry,
+        );
       }
 
       final vibe = await loadVibeFromFile(filePath);
@@ -420,7 +582,8 @@ class VibeFileStorageService {
     ).copyWith(
       bundleId: existingEntry?.bundleId ?? p.basenameWithoutExtension(filePath),
       bundledVibeNames: names,
-      bundledVibePreviews: previews.isEmpty ? existingEntry?.bundledVibePreviews : previews,
+      bundledVibePreviews:
+          previews.isEmpty ? existingEntry?.bundledVibePreviews : previews,
       bundledVibeEncodings: encodings,
     );
   }
@@ -532,6 +695,52 @@ class VibeFileStorageService {
     return sanitized;
   }
 
+  Map<String, dynamic>? _extractBundleImportInfo(
+    Map<String, dynamic> jsonData,
+  ) {
+    final vibes = jsonData['vibes'] as List<dynamic>?;
+    if (vibes == null || vibes.isEmpty) {
+      return null;
+    }
+
+    final first = vibes.first;
+    if (first is! Map) {
+      return null;
+    }
+
+    return (first['importInfo'] as Map?)?.cast<String, dynamic>();
+  }
+
+  double _extractStoredStrength(
+    Map<String, dynamic>? importInfo,
+    double defaultValue,
+  ) {
+    final strengthValue = importInfo?['strength'];
+    return switch (strengthValue) {
+      final double v => VibeReference.sanitizeStrength(v),
+      final int v => VibeReference.sanitizeStrength(v.toDouble()),
+      final String v => VibeReference.sanitizeStrength(
+          double.tryParse(v) ?? defaultValue,
+        ),
+      _ => defaultValue,
+    };
+  }
+
+  double _extractStoredInfoExtracted(
+    Map<String, dynamic>? importInfo,
+    double defaultValue,
+  ) {
+    final infoValue = importInfo?['information_extracted'];
+    return switch (infoValue) {
+      final double v => VibeReference.sanitizeInfoExtracted(v),
+      final int v => VibeReference.sanitizeInfoExtracted(v.toDouble()),
+      final String v => VibeReference.sanitizeInfoExtracted(
+          double.tryParse(v) ?? defaultValue,
+        ),
+      _ => defaultValue,
+    };
+  }
+
   String _buildNaiv4VibeJson(
     VibeReference vibe, {
     required String displayName,
@@ -541,7 +750,8 @@ class VibeFileStorageService {
     final idSource = vibe.vibeEncoding.isNotEmpty
         ? vibe.vibeEncoding
         : base64Encode(vibe.rawImageData ?? vibe.thumbnail ?? Uint8List(0));
-    final id = base64Url.encode(utf8.encode('$idSource|$timestamp')).substring(0, 32);
+    final id =
+        base64Url.encode(utf8.encode('$idSource|$timestamp')).substring(0, 32);
 
     final isRawImage =
         vibe.sourceType == VibeSourceType.rawImage && vibe.rawImageData != null;
@@ -574,6 +784,12 @@ class VibeFileStorageService {
       data['image'] = base64Encode(vibe.rawImageData!);
     }
 
+    if (!isRawImage &&
+        vibe.rawImageData != null &&
+        vibe.rawImageData!.isNotEmpty) {
+      data['image'] = base64Encode(vibe.rawImageData!);
+    }
+
     if (vibe.thumbnail != null && vibe.thumbnail!.isNotEmpty) {
       data['thumbnail'] = base64Encode(vibe.thumbnail!);
     }
@@ -595,6 +811,7 @@ class VibeFileStorageService {
                 },
               },
         'importInfo': {
+          'information_extracted': vibe.infoExtracted,
           'strength': vibe.strength,
         },
       };

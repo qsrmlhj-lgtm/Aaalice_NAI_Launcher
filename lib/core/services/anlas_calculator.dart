@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../constants/api_constants.dart';
 import '../../data/models/image/image_params.dart';
 
 /// Anlas 消耗计算器
@@ -9,6 +10,9 @@ import '../../data/models/image/image_params.dart';
 /// 验证数据: scripts/nai_pricing_data.json
 class AnlasCalculator {
   AnlasCalculator._();
+
+  static const int opusTier = 3;
+  static const int novelAiUpscaleOpusFreeMaxInputPixels = 640 * 640;
 
   /// V4/V4.5 模型标识
   static const _v4Models = [
@@ -25,23 +29,99 @@ class AnlasCalculator {
     'nai-diffusion-3-furry',
   ];
 
+  static int _resolvePreciseReferenceExtraCost(ImageParams params) {
+    if (!params.model.contains('diffusion-4-5')) {
+      return 0;
+    }
+    return params.preciseReferences.length * 5;
+  }
+
   /// 计算预估 Anlas 消耗
   ///
   /// [params] 图像生成参数
   /// [isOpus] 是否 Opus 订阅
   static int calculate(ImageParams params, {bool isOpus = false}) {
-    return calculateFromValues(
+    return calculateRequestCost(
       width: params.width,
       height: params.height,
       steps: params.steps,
-      nSamples: params.nSamples,
+      batchCount: params.nSamples,
+      batchSize: 1,
       smea: params.smea,
       smeaDyn: params.smeaDyn,
       model: params.model,
-      isOpus: isOpus,
+      subscriptionTier: isOpus ? opusTier : 0,
       strength: params.action == ImageGenerationAction.img2img
           ? params.strength
           : 1.0,
+      extraPerSampleCost: _resolvePreciseReferenceExtraCost(params),
+    );
+  }
+
+  static int calculateRequestCost({
+    required int width,
+    required int height,
+    required int steps,
+    required int batchCount,
+    required int batchSize,
+    required bool smea,
+    required bool smeaDyn,
+    required String model,
+    int subscriptionTier = 0,
+    double strength = 1.0,
+    int extraPerSampleCost = 0,
+  }) {
+    if (batchCount <= 0 || batchSize <= 0) {
+      return 0;
+    }
+
+    var singleRequestCost = 0;
+    for (var index = 0; index < batchSize; index++) {
+      final isFirstImageInRequest = index == 0;
+      singleRequestCost += calculateFromValues(
+        width: width,
+        height: height,
+        steps: steps,
+        nSamples: 1,
+        smea: smea,
+        smeaDyn: smeaDyn,
+        model: model,
+        subscriptionTier: isFirstImageInRequest ? subscriptionTier : 0,
+        strength: strength,
+      );
+      singleRequestCost += extraPerSampleCost;
+    }
+
+    return singleRequestCost * batchCount;
+  }
+
+  /// 估算 NovelAI 云端超分消耗。
+  ///
+  /// NovelAI 未公开独立的超分价格公式，这里按网页实测主生成价格系数估算输出面积，
+  /// 并套用当前已知的 Opus 免费输入阈值（<= 640x640）。
+  static int calculateNovelAiUpscaleCost({
+    required int inputWidth,
+    required int inputHeight,
+    required int scale,
+    int subscriptionTier = 0,
+  }) {
+    final normalizedScale = scale.clamp(1, 4);
+    final inputPixels = inputWidth * inputHeight;
+    if (subscriptionTier == opusTier &&
+        inputPixels <= novelAiUpscaleOpusFreeMaxInputPixels) {
+      return 0;
+    }
+
+    return calculateFromValues(
+      width: inputWidth * normalizedScale,
+      height: inputHeight * normalizedScale,
+      steps: 28,
+      nSamples: 1,
+      smea: false,
+      smeaDyn: false,
+      model: ImageModels.animeDiffusionV45Full,
+      subscriptionTier: 0,
+      strength: 1.0,
     );
   }
 
@@ -54,7 +134,8 @@ class AnlasCalculator {
     required bool smea,
     required bool smeaDyn,
     required String model,
-    required bool isOpus,
+    bool isOpus = false,
+    int subscriptionTier = 0,
     double strength = 1.0,
   }) {
     // 计算分辨率（像素数）
@@ -92,7 +173,7 @@ class AnlasCalculator {
 
     // Opus 免费条件检查
     final opusDiscount = _isOpusFree(
-      isOpus: isOpus,
+      isOpus: isOpus || subscriptionTier == opusTier,
       steps: steps,
       resolution: r,
       version: version,
@@ -155,6 +236,41 @@ class AnlasCalculator {
       return resolution <= 640 * 640;
     }
     return resolution <= 1024 * 1024;
+  }
+
+  /// 计算导演工具（augment-image）的 Anlas 消耗
+  ///
+  /// 参考 NAI SDK `_cost.py` 的 `calculate_dimension_cost` 公式:
+  ///   `ceil(2.951823174884865e-6 * pixels + 5.753298233447344e-7 * pixels * 28)`
+  ///
+  /// [isBgRemoval] 背景移除工具使用 `cost * 3 + 5` 的特殊定价。
+  /// [isOpus] Opus 用户在分辨率 <= 1024×1024 时免费（背景移除除外）。
+  static int calculateAugmentCost({
+    required int width,
+    required int height,
+    bool isBgRemoval = false,
+    bool isOpus = false,
+  }) {
+    int pixels = width * height;
+    if (pixels < 65536) pixels = 65536;
+
+    const steps = 28;
+    const constantCoeff = 2.951823174884865e-6;
+    const stepCoeff = 5.753298233447344e-7;
+    final cost = math.max(
+      (constantCoeff * pixels + stepCoeff * pixels * steps).ceil(),
+      2,
+    );
+
+    if (isBgRemoval) {
+      return cost * 3 + 5;
+    }
+
+    if (isOpus && pixels <= 1048576) {
+      return 0;
+    }
+
+    return cost;
   }
 
   /// 获取分辨率等级描述

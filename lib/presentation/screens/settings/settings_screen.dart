@@ -11,6 +11,8 @@ import 'sections/data_source_settings_section.dart';
 import 'sections/queue_settings_section.dart';
 import 'sections/notification_settings_section.dart';
 import 'sections/about_settings_section.dart';
+import 'sections/comfyui_settings_section.dart';
+import 'sections/prompt_assistant_settings_section.dart';
 
 /// 设置页面 Section 数据模型
 class _SettingsSection {
@@ -40,7 +42,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _contentScrollController = ScrollController();
   bool _isContentScrolled = false;
 
-  // 9 个设置 Section 定义
+  // 10 个设置 Section 定义
   late final List<_SettingsSection> _sections;
 
   @override
@@ -99,6 +101,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         selectedIcon: Icons.notifications,
         label: '通知',
         widget: NotificationSettingsSection(),
+      ),
+      _SettingsSection(
+        icon: Icons.auto_awesome_outlined,
+        selectedIcon: Icons.auto_awesome,
+        label: '助手',
+        widget: PromptAssistantSettingsSection(),
+      ),
+      _SettingsSection(
+        icon: Icons.auto_fix_high_outlined,
+        selectedIcon: Icons.auto_fix_high,
+        label: 'ComfyUI',
+        widget: ComfyUISettingsSection(),
       ),
       _SettingsSection(
         icon: Icons.info_outlined,

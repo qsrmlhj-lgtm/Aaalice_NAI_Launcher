@@ -55,6 +55,8 @@ class _VibeExportDialogAdvancedState
   // Embed 选项
   String? _selectedImagePath;
   Uint8List? _selectedImagePreview;
+  List<_CarrierImageOption> _carrierImageOptions = const [];
+  String? _selectedCarrierImageId;
   bool _isValidatingImage = false;
 
   // Encoding 选项
@@ -80,6 +82,87 @@ class _VibeExportDialogAdvancedState
       return '导出 Bundle: ${entry.displayName}';
     }
     return '导出 Vibe (${widget.entries.length} 个选中)';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncInternalVibeSelections();
+    _rebuildCarrierImageOptions();
+  }
+
+  @override
+  void didUpdateWidget(covariant VibeExportDialogAdvanced oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entries != widget.entries) {
+      _syncInternalVibeSelections();
+      _rebuildCarrierImageOptions();
+    }
+  }
+
+  void _syncInternalVibeSelections() {
+    if (!_isSingleBundle) {
+      _selectedInternalVibes.clear();
+      return;
+    }
+
+    final count = widget.entries.first.bundledVibeCount;
+    if (_selectedInternalVibes.length == count) {
+      return;
+    }
+
+    _selectedInternalVibes
+      ..clear()
+      ..addAll(List<bool>.filled(count, true));
+  }
+
+  void _rebuildCarrierImageOptions() {
+    if (widget.entries.length != 1) {
+      _carrierImageOptions = const [];
+      _selectedCarrierImageId = null;
+      return;
+    }
+
+    final options = <_CarrierImageOption>[];
+    for (final entry in widget.entries) {
+      for (final candidate in VibeExportUtils.collectImageCandidates(entry)) {
+        final label = widget.entries.length == 1
+            ? candidate.label
+            : '${entry.displayName} - ${candidate.label}';
+        options.add(
+          _CarrierImageOption(
+            id: '${entry.id}:${candidate.id}',
+            label: label,
+            bytes: candidate.bytes,
+          ),
+        );
+      }
+    }
+
+    _carrierImageOptions = options;
+    if (_carrierImageOptions.any((option) => option.id == _selectedCarrierImageId)) {
+      return;
+    }
+    _selectedCarrierImageId =
+        _carrierImageOptions.isNotEmpty ? _carrierImageOptions.first.id : null;
+  }
+
+  Uint8List? _currentCarrierImageBytes() {
+    if (_selectedImagePreview != null && _selectedImagePreview!.isNotEmpty) {
+      return _selectedImagePreview;
+    }
+
+    final selectedId = _selectedCarrierImageId;
+    if (selectedId == null) {
+      return null;
+    }
+
+    for (final option in _carrierImageOptions) {
+      if (option.id == selectedId) {
+        return option.bytes;
+      }
+    }
+    return null;
   }
 
   @override
@@ -470,11 +553,11 @@ class _VibeExportDialogAdvancedState
 
   /// 构建嵌入图片选项
   Widget _buildEmbedIntoImageOption(ThemeData theme) {
-    final isMultiSelect = widget.entries.length > 1;
     final isBundleInternalExport = _isSingleBundle && !_exportWholeBundle;
+    final isBatchPngExport = widget.entries.length > 1;
 
-    // 嵌入图片在导出单个 vibe 时不可用
-    final isDisabled = isMultiSelect || isBundleInternalExport;
+    // 从 bundle 导出内部单个 vibe 时暂不支持嵌入图片
+    final isDisabled = isBundleInternalExport;
 
     return _OptionCard(
       isSelected: _embedIntoImage,
@@ -491,19 +574,67 @@ class _VibeExportDialogAdvancedState
               });
             },
       icon: Icons.image_outlined,
-      title: 'Embed Into Image',
+      title: 'Export as PNG',
       subtitle: isBundleInternalExport
           ? '从 bundle 导出单个 vibe 时不支持嵌入图片'
-          : (isMultiSelect ? '嵌入到图片功能仅支持单个 Vibe' : '将 Vibe 数据嵌入到现有 PNG 图片中'),
-      child: _embedIntoImage && !isMultiSelect
+          : '将 Vibe 数据嵌入到 PNG 图片元数据中导出',
+      child: _embedIntoImage
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 12),
                 const Divider(height: 1),
                 const SizedBox(height: 12),
+                if (isBatchPngExport) ...[
+                  Text(
+                    '批量导出会使用每个 Vibe 的第一张可用图片；没有图片的条目会自动跳过',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ] else if (_carrierImageOptions.isNotEmpty) ...[
+                  Text(
+                    '导出载体图',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey<String?>(
+                      _selectedImagePath == null ? _selectedCarrierImageId : null,
+                    ),
+                    initialValue:
+                        _selectedImagePath == null ? _selectedCarrierImageId : null,
+                    items: _carrierImageOptions
+                        .map(
+                          (option) => DropdownMenuItem<String>(
+                            value: option.id,
+                            child: Text(
+                              option.label,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedCarrierImageId = value;
+                        _selectedImagePath = null;
+                        _selectedImagePreview = null;
+                        _errorMessage = _validateExportOptions().errorMessage;
+                      });
+                    },
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 // 图片选择
-                if (_selectedImagePath == null) ...[
+                if (!isBatchPngExport && _selectedImagePath == null) ...[
                   OutlinedButton.icon(
                     onPressed: _isValidatingImage ? null : _pickImage,
                     icon: _isValidatingImage
@@ -513,9 +644,9 @@ class _VibeExportDialogAdvancedState
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.folder_open),
-                    label: const Text('选择 PNG 图片...'),
+                    label: const Text('选择外部 PNG 图片...'),
                   ),
-                ] else ...[
+                ] else if (!isBatchPngExport) ...[
                   Row(
                     children: [
                       // 图片预览
@@ -564,14 +695,16 @@ class _VibeExportDialogAdvancedState
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '将保存为新文件，不会覆盖原图',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                      fontStyle: FontStyle.italic,
+                  if (_selectedImagePath != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '当前使用外部 PNG 作为导出载体图',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ],
             )
@@ -733,10 +866,17 @@ class _VibeExportDialogAdvancedState
     }
 
     // 嵌入图片需要选择图片
-    if (_embedIntoImage && _selectedImagePath == null) {
+    if (_embedIntoImage && widget.entries.length > 1) {
+      if (VibeExportUtils.buildEmbeddedPngExportPlans(widget.entries).isEmpty) {
+        return const _ValidationResult(
+          isValid: false,
+          errorMessage: '当前选中的 Vibe 都没有可用图片，无法导出 PNG',
+        );
+      }
+    } else if (_embedIntoImage && _currentCarrierImageBytes() == null) {
       return const _ValidationResult(
         isValid: false,
-        errorMessage: '请选择一个 PNG 图片用于嵌入',
+        errorMessage: '请选择一个 PNG 载体图用于导出',
       );
     }
 
@@ -831,7 +971,7 @@ class _VibeExportDialogAdvancedState
       }
 
       // 嵌入图片
-      if (_embedIntoImage && _selectedImagePath != null) {
+      if (_embedIntoImage) {
         setState(() => _statusMessage = '正在嵌入图片...');
         final embedPath = await _embedIntoImageFile();
         if (embedPath != null) {
@@ -947,35 +1087,33 @@ class _VibeExportDialogAdvancedState
 
   /// 嵌入到图片
   Future<String?> _embedIntoImageFile() async {
-    if (_selectedImagePath == null || widget.entries.isEmpty) return null;
+    if (widget.entries.isEmpty) return null;
+    if (widget.entries.length > 1) {
+      final exportedPaths = await VibeExportUtils.exportEntriesToEmbeddedPngDirectory(
+        widget.entries,
+      );
+      if (exportedPaths.isEmpty) {
+        return null;
+      }
+      return exportedPaths.join(',');
+    }
 
-    final entry = widget.entries.first;
-    final vibeRef = entry.toVibeReference();
+    final carrierImageBytes = _currentCarrierImageBytes();
+    if (carrierImageBytes == null) {
+      return null;
+    }
 
     try {
-      // 读取原图
-      final imageBytes = await File(_selectedImagePath!).readAsBytes();
+      final vibes = widget.entries.map((entry) => entry.toVibeReference()).toList();
+      final fileName = widget.entries.length == 1
+          ? '${widget.entries.first.displayName}_vibe.png'
+          : 'vibe_bundle_${widget.entries.length}.png';
 
-      // 嵌入 Vibe 数据
-      final embeddedBytes = await VibeImageEmbedder.embedVibeToImage(
-        imageBytes,
-        vibeRef,
+      return VibeExportUtils.exportToEmbeddedPng(
+        vibes,
+        carrierImageBytes: carrierImageBytes,
+        fileName: fileName,
       );
-
-      // 选择保存位置
-      final savePath = await FilePicker.platform.saveFile(
-        dialogTitle: '保存嵌入 Vibe 的图片',
-        fileName: '${entry.displayName}_embedded.png',
-        type: FileType.custom,
-        allowedExtensions: ['png'],
-      );
-
-      if (savePath == null) return null;
-
-      // 保存文件
-      await File(savePath).writeAsBytes(embeddedBytes);
-
-      return savePath;
     } on InvalidImageFormatException catch (e) {
       throw Exception('无效的图片格式: ${e.message}');
     } on VibeEmbedException catch (e) {
@@ -1042,6 +1180,18 @@ class _VibeExportDialogAdvancedState
 
     return savePath;
   }
+}
+
+class _CarrierImageOption {
+  const _CarrierImageOption({
+    required this.id,
+    required this.label,
+    required this.bytes,
+  });
+
+  final String id;
+  final String label;
+  final Uint8List bytes;
 }
 
 /// 选项卡片组件

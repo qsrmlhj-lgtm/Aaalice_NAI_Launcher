@@ -4,15 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../data/models/image/image_params.dart';
 import '../../../../data/models/image/resolution_preset.dart';
+import '../../../providers/generation/generation_params_selectors.dart';
 import '../../../providers/image_generation_provider.dart';
+import '../../../utils/asset_protection_guard.dart';
 import '../../../widgets/common/themed_dropdown.dart';
 import '../../../widgets/common/themed_input.dart';
 import '../../../widgets/common/themed_button.dart';
 import '../../../widgets/common/themed_slider.dart';
 import '../../../widgets/common/themed_divider.dart';
 import 'img2img_panel.dart';
+import 'reverse_prompt_panel.dart';
 import 'unified_reference_panel.dart';
 import 'precise_reference_panel.dart';
 import 'prompt_input.dart';
@@ -52,7 +54,9 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final params = ref.watch(generationParamsNotifierProvider);
+    final params = ref.watch(
+      generationParamsNotifierProvider.select(selectParameterPanelViewData),
+    );
     final generationState = ref.watch(imageGenerationNotifierProvider);
     final theme = Theme.of(context);
     final isGenerating = generationState.isGenerating;
@@ -82,7 +86,7 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
                   ? () => ref
                       .read(imageGenerationNotifierProvider.notifier)
                       .cancel()
-                  : () {
+                  : () async {
                       if (params.prompt.isEmpty) {
                         AppToast.info(
                           context,
@@ -90,9 +94,17 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
                         );
                         return;
                       }
+                      final confirmed =
+                          await AssetProtectionGuard.confirmHighAnlasCost(
+                        context: context,
+                        ref: ref,
+                      );
+                      if (!confirmed || !context.mounted) {
+                        return;
+                      }
                       ref
                           .read(imageGenerationNotifierProvider.notifier)
-                          .generate(params);
+                          .generate(ref.read(generationParamsNotifierProvider));
                     },
               icon: isGenerating
                   ? const Icon(Icons.stop)
@@ -390,6 +402,11 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
 
         // ==================== 新功能面板 ====================
 
+        // 反推面板
+        const ReversePromptPanel(),
+
+        const SizedBox(height: 8),
+
         // 图生图面板
         const Img2ImgPanel(),
 
@@ -557,6 +574,8 @@ class _SizeSelector extends StatefulWidget {
 class _SizeSelectorState extends State<_SizeSelector> {
   late TextEditingController _widthController;
   late TextEditingController _heightController;
+  late FocusNode _widthFocusNode;
+  late FocusNode _heightFocusNode;
   final FocusNode _dropdownFocusNode = FocusNode();
   String? _selectedPresetId;
 
@@ -565,6 +584,8 @@ class _SizeSelectorState extends State<_SizeSelector> {
     super.initState();
     _widthController = TextEditingController(text: widget.width.toString());
     _heightController = TextEditingController(text: widget.height.toString());
+    _widthFocusNode = FocusNode();
+    _heightFocusNode = FocusNode();
     _updateSelectedPreset();
   }
 
@@ -572,10 +593,39 @@ class _SizeSelectorState extends State<_SizeSelector> {
   void didUpdateWidget(covariant _SizeSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.width != widget.width || oldWidget.height != widget.height) {
-      _widthController.text = widget.width.toString();
-      _heightController.text = widget.height.toString();
+      _syncFieldController(
+        controller: _widthController,
+        focusNode: _widthFocusNode,
+        targetValue: widget.width,
+      );
+      _syncFieldController(
+        controller: _heightController,
+        focusNode: _heightFocusNode,
+        targetValue: widget.height,
+      );
       _updateSelectedPreset();
     }
+  }
+
+  void _syncFieldController({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required int targetValue,
+  }) {
+    final nextText = resolveManualSizeFieldSyncText(
+      currentText: controller.text,
+      targetValue: targetValue,
+      hasFocus: focusNode.hasFocus,
+    );
+    if (nextText == null) {
+      return;
+    }
+
+    controller.value = controller.value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+      composing: TextRange.empty,
+    );
   }
 
   void _updateSelectedPreset() {
@@ -588,6 +638,8 @@ class _SizeSelectorState extends State<_SizeSelector> {
   void dispose() {
     _widthController.dispose();
     _heightController.dispose();
+    _widthFocusNode.dispose();
+    _heightFocusNode.dispose();
     _dropdownFocusNode.dispose();
     super.dispose();
   }
@@ -742,6 +794,7 @@ class _SizeSelectorState extends State<_SizeSelector> {
             Expanded(
               child: ThemedTextField(
                 controller: _widthController,
+                focusNode: _widthFocusNode,
                 keyboardType: TextInputType.number,
                 labelText: l10n.resolution_width,
                 style: const TextStyle(fontSize: 13),
@@ -763,6 +816,7 @@ class _SizeSelectorState extends State<_SizeSelector> {
             Expanded(
               child: ThemedTextField(
                 controller: _heightController,
+                focusNode: _heightFocusNode,
                 keyboardType: TextInputType.number,
                 labelText: l10n.resolution_height,
                 style: const TextStyle(fontSize: 13),
@@ -792,6 +846,24 @@ class _SizeSelectorState extends State<_SizeSelector> {
       ],
     );
   }
+}
+
+@visibleForTesting
+String? resolveManualSizeFieldSyncText({
+  required String currentText,
+  required int targetValue,
+  required bool hasFocus,
+}) {
+  if (hasFocus) {
+    return null;
+  }
+
+  final nextText = targetValue.toString();
+  if (currentText == nextText) {
+    return null;
+  }
+
+  return nextText;
 }
 
 /// SMEA Auto 按钮 (V3 模型)

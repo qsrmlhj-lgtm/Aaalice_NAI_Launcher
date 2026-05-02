@@ -415,6 +415,78 @@ void main() {
     });
 
     // ============================================================
+    // 搜索测试
+    // ============================================================
+
+    group('search', () {
+      test('should find prompt substrings inside tag-like tokens', () async {
+        final now = DateTime.now();
+        final imageId = await dataSource.upsertImage(
+          filePath: '/test/prompt_substring.png',
+          fileName: 'prompt_substring.png',
+          fileSize: 1000,
+          createdAt: now,
+          modifiedAt: now,
+        );
+
+        await dataSource.upsertMetadata(
+          imageId,
+          const NaiImageMetadata(
+            prompt: 'artist:shycocoa, 1girl, blue_eyes',
+            negativePrompt: '',
+            seed: 1,
+          ),
+        );
+
+        final cocoaResults = await dataSource.advancedSearch(
+          textQuery: 'cocoa',
+          limit: 10,
+        );
+        final eyesResults = await dataSource.advancedSearch(
+          textQuery: 'eyes',
+          limit: 10,
+        );
+
+        expect(cocoaResults, contains(imageId));
+        expect(eyesResults, contains(imageId));
+      });
+
+      test('should find model and sampler metadata fields', () async {
+        final now = DateTime.now();
+        final imageId = await dataSource.upsertImage(
+          filePath: '/test/model_sampler.png',
+          fileName: 'model_sampler.png',
+          fileSize: 1000,
+          createdAt: now,
+          modifiedAt: now,
+        );
+
+        await dataSource.upsertMetadata(
+          imageId,
+          const NaiImageMetadata(
+            prompt: 'unrelated prompt',
+            negativePrompt: '',
+            seed: 1,
+            model: 'nai-diffusion-v45-full',
+            sampler: 'k_euler_ancestral',
+          ),
+        );
+
+        final modelResults = await dataSource.advancedSearch(
+          textQuery: 'v45',
+          limit: 10,
+        );
+        final samplerResults = await dataSource.advancedSearch(
+          textQuery: 'euler',
+          limit: 10,
+        );
+
+        expect(modelResults, contains(imageId));
+        expect(samplerResults, contains(imageId));
+      });
+    });
+
+    // ============================================================
     // getFavoritesByImageIds 测试
     // ============================================================
 

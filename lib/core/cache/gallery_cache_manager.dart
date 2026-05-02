@@ -202,7 +202,7 @@ class GalleryCacheManager {
   }
 
   /// 注册统计信息刷新回调
-  /// 
+  ///
   /// 当统计信息缓存失效时，会通知所有注册的监听者（如设置页面的统计组件）。
   /// 注意：此回调与缓存清除回调是分开的，不会触发状态重置。
   void registerOnStatisticsInvalidated(VoidCallback callback) {
@@ -220,7 +220,10 @@ class GalleryCacheManager {
       try {
         callback();
       } catch (e) {
-        AppLogger.w('Statistics invalidation callback failed: $e', 'GalleryCacheManager');
+        AppLogger.w(
+          'Statistics invalidation callback failed: $e',
+          'GalleryCacheManager',
+        );
       }
     }
   }
@@ -316,18 +319,21 @@ class GalleryCacheManager {
     _cachedStatistics = null;
     _statisticsCacheTime = null;
   }
-  
+
   /// 使统计信息缓存失效（公共接口）
-  /// 
+  ///
   /// 当外部操作（如扫描新文件）修改了数据库后，调用此方法使统计缓存失效，
   /// 下次获取统计时将重新计算。
   /// 同时通知统计信息监听者（如设置页面的统计组件）立即刷新。
-  /// 
+  ///
   /// 注意：此方法不会触发缓存清除回调，仅用于刷新统计信息显示。
   void invalidateStatistics() {
     _invalidateStatisticsCache();
     _notifyStatisticsInvalidated(); // 通知设置页面的统计组件刷新
-    AppLogger.d('Cache statistics invalidated and notified', 'GalleryCacheManager');
+    AppLogger.d(
+      'Cache statistics invalidated and notified',
+      'GalleryCacheManager',
+    );
   }
 
   /// 获取缓存统计（带缓存）
@@ -485,7 +491,10 @@ class GalleryCacheManager {
     try {
       final box = ImageMetadataService().persistentBox;
       if (box == null || !box.isOpen) {
-        AppLogger.w('Persistent box not available for compression', 'GalleryCacheManager');
+        AppLogger.w(
+          'Persistent box not available for compression',
+          'GalleryCacheManager',
+        );
         return false;
       }
 
@@ -557,6 +566,7 @@ class L2CacheCleaner {
 
   /// 缓存大小阈值（MB）
   static const int _sizeThresholdMB = 500;
+  static const int _automaticCleanupHardLimitMB = 2048;
 
   /// 检查并执行清理
   Future<void> checkAndClean() async {
@@ -570,18 +580,28 @@ class L2CacheCleaner {
 
       // 检查是否需要定期清理
       if (now.difference(lastCleanupTime) > _cleanupInterval) {
+        if (await _shouldSkipAutomaticCleanupForSize()) {
+          await box.put(_lastCleanupKey, now.millisecondsSinceEpoch.toString());
+          return;
+        }
+
         AppLogger.i(
           'L2 cache cleanup due (last: $lastCleanupTime)',
           'L2CacheCleaner',
         );
-        await performCleanup();
+        await performCleanup(compactAfterCleanup: false);
         await box.put(_lastCleanupKey, now.millisecondsSinceEpoch.toString());
       } else {
         // 检查是否需要基于大小的清理
         await _checkSizeAndClean(box);
       }
     } catch (e, stack) {
-      AppLogger.e('Failed to check L2 cache cleanup', e, stack, 'L2CacheCleaner');
+      AppLogger.e(
+        'Failed to check L2 cache cleanup',
+        e,
+        stack,
+        'L2CacheCleaner',
+      );
     }
   }
 
@@ -602,11 +622,25 @@ class L2CacheCleaner {
       final cacheSizeMB = await _getCacheSizeMB();
 
       if (cacheSizeMB > _sizeThresholdMB) {
+        if (cacheSizeMB > _automaticCleanupHardLimitMB) {
+          AppLogger.w(
+            'L2 cache size ($cacheSizeMB MB) exceeds automatic cleanup hard limit '
+                '($_automaticCleanupHardLimitMB MB); skipping background cleanup to avoid UI stalls. '
+                'Use manual cache clear if disk space needs to be reclaimed.',
+            'L2CacheCleaner',
+          );
+          await box.put(
+            _lastSizeCheckKey,
+            now.millisecondsSinceEpoch.toString(),
+          );
+          return;
+        }
+
         AppLogger.i(
           'L2 cache size ($cacheSizeMB MB) exceeds threshold ($_sizeThresholdMB MB), performing cleanup',
           'L2CacheCleaner',
         );
-        await performCleanup();
+        await performCleanup(compactAfterCleanup: false);
       }
 
       await box.put(_lastSizeCheckKey, now.millisecondsSinceEpoch.toString());
@@ -627,13 +661,31 @@ class L2CacheCleaner {
     }
   }
 
+  Future<bool> _shouldSkipAutomaticCleanupForSize() async {
+    final cacheSizeMB = await _getCacheSizeMB();
+    if (cacheSizeMB <= _automaticCleanupHardLimitMB) {
+      return false;
+    }
+
+    AppLogger.w(
+      'Skipping scheduled L2 cleanup because cache is $cacheSizeMB MB, above '
+          'the automatic cleanup hard limit ($_automaticCleanupHardLimitMB MB). '
+          'This avoids a long Hive scan/compact on the UI process.',
+      'L2CacheCleaner',
+    );
+    return true;
+  }
+
   /// 执行清理
-  Future<void> performCleanup() async {
+  Future<void> performCleanup({bool compactAfterCleanup = true}) async {
     try {
       final box = ImageMetadataService().persistentBox;
 
       if (box == null || !box.isOpen) {
-        AppLogger.w('Persistent box not available for cleanup', 'L2CacheCleaner');
+        AppLogger.w(
+          'Persistent box not available for cleanup',
+          'L2CacheCleaner',
+        );
         return;
       }
 
@@ -685,19 +737,27 @@ class L2CacheCleaner {
         }
       }
 
-      // 尝试压缩
-      try {
-        await box.compact();
-      } catch (_) {
-        // 忽略压缩错误
+      if (compactAfterCleanup) {
+        // 尝试压缩
+        try {
+          await box.compact();
+        } catch (_) {
+          // 忽略压缩错误
+        }
       }
 
       AppLogger.i(
-        'L2 cache cleaned: $freedEntries entries removed, $checkedCount checked',
+        'L2 cache cleaned: $freedEntries entries removed, $checkedCount checked, '
+            'compacted=$compactAfterCleanup',
         'L2CacheCleaner',
       );
     } catch (e, stack) {
-      AppLogger.e('Failed to perform L2 cache cleanup', e, stack, 'L2CacheCleaner');
+      AppLogger.e(
+        'Failed to perform L2 cache cleanup',
+        e,
+        stack,
+        'L2CacheCleaner',
+      );
     }
   }
 

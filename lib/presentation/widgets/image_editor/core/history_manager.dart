@@ -14,6 +14,11 @@ abstract class EditorAction {
   /// 撤销操作
   void undo(EditorState state);
 
+  /// 释放操作持有的资源（如 ui.Image 缓存）
+  ///
+  /// 当操作从历史栈中移除（超出 maxHistorySize 或清空）时调用。
+  void dispose() {}
+
   /// 操作描述
   String get description;
 
@@ -49,11 +54,13 @@ class HistoryManager extends ChangeNotifier {
   void execute(EditorAction action, EditorState state) {
     action.execute(state);
     _undoStack.add(action);
+    for (final a in _redoStack) {
+      a.dispose();
+    }
     _redoStack.clear();
 
-    // 限制历史记录大小
     while (_undoStack.length > maxHistorySize) {
-      _undoStack.removeAt(0);
+      _undoStack.removeAt(0).dispose();
     }
     notifyListeners();
   }
@@ -82,6 +89,12 @@ class HistoryManager extends ChangeNotifier {
 
   /// 清空历史
   void clear() {
+    for (final a in _undoStack) {
+      a.dispose();
+    }
+    for (final a in _redoStack) {
+      a.dispose();
+    }
     _undoStack.clear();
     _redoStack.clear();
     notifyListeners();
@@ -129,24 +142,53 @@ class AddStrokeAction extends EditorAction {
 class ClearLayerAction extends EditorAction {
   final String layerId;
   List<StrokeData>? _previousStrokes;
+  Image? _previousBaseImage;
+  Uint8List? _previousBaseImageBytes;
 
   ClearLayerAction({required this.layerId});
 
   @override
   void execute(EditorState state) {
     final layer = state.layerManager.getLayerById(layerId);
-    if (layer != null) {
-      _previousStrokes = List.from(layer.strokes);
-      state.layerManager.clearLayer(layerId);
+    if (layer == null) return;
+
+    _previousStrokes = List.from(layer.strokes.map((s) => s.copyWith()));
+
+    _previousBaseImage?.dispose();
+    _previousBaseImage = layer.baseImage?.clone();
+    _previousBaseImageBytes = layer.baseImageBytes != null
+        ? Uint8List.fromList(layer.baseImageBytes!)
+        : null;
+
+    if (layer.hasBaseImage) {
+      layer.clearBaseImage();
     }
+    state.layerManager.clearLayer(layerId);
   }
 
   @override
   void undo(EditorState state) {
-    if (_previousStrokes == null) return;
-    for (final stroke in _previousStrokes!) {
-      state.layerManager.addStrokeToLayer(layerId, stroke);
+    final layer = state.layerManager.getLayerById(layerId);
+    if (layer == null) return;
+
+    if (_previousBaseImage != null) {
+      layer.setBaseImageSync(
+        _previousBaseImage!.clone(),
+        _previousBaseImageBytes,
+      );
     }
+
+    if (_previousStrokes != null) {
+      for (final stroke in _previousStrokes!) {
+        state.layerManager.addStrokeToLayer(layerId, stroke);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _previousBaseImage?.dispose();
+    _previousBaseImage = null;
   }
 
   @override
@@ -342,6 +384,87 @@ class ResizeCanvasAction extends EditorAction {
 
   @override
   String get description => '调整画布大小 (${mode.label})';
+}
+
+/// 替换图层图像操作（用于模糊、仿制图章等全图处理）
+///
+/// 使用预解码的 [ui.Image] 保证 execute/undo 同步完成，
+/// 避免异步解码导致 UI 闪白或撤销失效。
+class ReplaceLayerImageAction extends EditorAction {
+  final String layerId;
+  final Uint8List newImageBytes;
+  final String actionDescription;
+
+  /// 预解码的新图像（由调用者传入，确保同步 execute）
+  Image? _newImage;
+
+  /// 保存的旧图像（用于同步 undo）
+  Image? _oldImage;
+  Uint8List? _oldBaseImageBytes;
+  List<StrokeData>? _oldStrokes;
+
+  ReplaceLayerImageAction({
+    required this.layerId,
+    required this.newImageBytes,
+    Image? newImage,
+    this.actionDescription = '替换图层图像',
+  }) : _newImage = newImage;
+
+  @override
+  void execute(EditorState state) {
+    final layer = state.layerManager.getLayerById(layerId);
+    if (layer == null) return;
+
+    _oldBaseImageBytes = layer.baseImageBytes != null
+        ? Uint8List.fromList(layer.baseImageBytes!)
+        : null;
+    _oldStrokes = List.from(layer.strokes.map((s) => s.copyWith()));
+
+    _oldImage?.dispose();
+    _oldImage = layer.baseImage?.clone();
+
+    layer.clearStrokes();
+
+    if (_newImage != null) {
+      layer.setBaseImageSync(_newImage!.clone(), newImageBytes);
+    } else {
+      layer.setBaseImage(newImageBytes);
+    }
+  }
+
+  @override
+  void undo(EditorState state) {
+    final layer = state.layerManager.getLayerById(layerId);
+    if (layer == null) return;
+
+    layer.clearStrokes();
+
+    if (_oldImage != null) {
+      layer.setBaseImageSync(_oldImage!.clone(), _oldBaseImageBytes);
+    } else if (_oldBaseImageBytes != null) {
+      layer.clearBaseImage();
+      layer.setBaseImage(_oldBaseImageBytes!);
+    } else {
+      layer.clearBaseImage();
+    }
+
+    if (_oldStrokes != null) {
+      for (final stroke in _oldStrokes!) {
+        layer.addStroke(stroke);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _newImage?.dispose();
+    _newImage = null;
+    _oldImage?.dispose();
+    _oldImage = null;
+  }
+
+  @override
+  String get description => actionDescription;
 }
 
 /// 笔画数据（用于历史记录）

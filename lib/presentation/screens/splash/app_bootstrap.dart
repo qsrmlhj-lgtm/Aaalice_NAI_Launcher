@@ -100,6 +100,8 @@ class _MainAppWrapperState extends ConsumerState<_MainAppWrapper> {
   void _scheduleAutoUpdateCheck() {
     Future.delayed(const Duration(seconds: 3), () async {
       try {
+        if (!mounted) return;
+
         // 检查是否应该检查更新（24小时冷却）
         final shouldCheck = await ref.read(
           checkUpdateOnStartupProvider.future,
@@ -108,6 +110,7 @@ class _MainAppWrapperState extends ConsumerState<_MainAppWrapper> {
 
         // 执行更新检查
         await ref.read(updateStateProvider.notifier).checkForUpdates();
+        if (!mounted) return;
 
         // 如果有更新，显示对话框
         final state = ref.read(updateStateProvider);
