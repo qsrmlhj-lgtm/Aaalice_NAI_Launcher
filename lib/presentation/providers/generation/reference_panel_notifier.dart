@@ -162,12 +162,7 @@ class ReferencePanelNotifier extends _$ReferencePanelNotifier {
           );
 
           if (encoding != null) {
-            encodedVibes.add(
-              vibe.copyWith(
-                vibeEncoding: encoding,
-                sourceType: VibeSourceType.naiv4vibe,
-              ),
-            );
+            encodedVibes.add(vibe.withEncodedVibe(encoding));
           } else {
             encodedVibes.add(vibe);
           }
@@ -237,14 +232,26 @@ class ReferencePanelNotifier extends _$ReferencePanelNotifier {
     try {
       var savedCount = 0;
       var reusedCount = 0;
+      final generationParams = ref.read(generationParamsNotifierProvider);
+      final paramsNotifier =
+          ref.read(generationParamsNotifierProvider.notifier);
 
       for (final vibe in vibes) {
-        final vibeWithParams = vibe.copyWith(
-          strength: VibeReference.sanitizeStrength(strength),
-          infoExtracted: VibeReference.sanitizeInfoExtracted(infoExtracted),
+        final preparedVibe =
+            await paramsNotifier.prepareVibeForLibraryParamSave(
+          vibe,
+          strength: strength,
+          infoExtracted: infoExtracted,
+          model: generationParams.model,
         );
+        if (preparedVibe == null) {
+          return SaveToLibraryResult(
+              savedCount: savedCount, reusedCount: reusedCount);
+        }
 
-        final existingEntry = await findExistingEntry(vibe);
+        final vibeWithParams = preparedVibe.normalizedForLibraryStorage();
+
+        final existingEntry = await findExistingEntry(vibeWithParams);
 
         if (existingEntry != null) {
           await _storageService.incrementUsedCount(existingEntry.id);

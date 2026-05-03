@@ -3,8 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:nai_launcher/core/constants/api_constants.dart';
 import 'package:nai_launcher/core/enums/precise_ref_type.dart';
 import 'package:nai_launcher/core/network/request_builders/nai_image_request_builder.dart';
+import 'package:nai_launcher/core/utils/nai_api_utils.dart';
 import 'package:nai_launcher/data/models/image/image_params.dart';
 import 'package:nai_launcher/data/models/vibe/vibe_reference.dart';
 
@@ -27,6 +29,37 @@ void main() {
       );
       expect(streamResult.requestParameters['sampler'], 'raw_stream_sampler');
       expect(streamResult.requestParameters['stream'], 'msgpack');
+    });
+
+    test('should keep prompt text raw while forwarding native preset flags',
+        () async {
+      final params = ImageParams(
+        prompt: '1girl, sunset',
+        negativePrompt: 'bad hands',
+        model: ImageModels.animeDiffusionV45Full,
+        qualityToggle: true,
+        ucPreset: UcPresets.toApiValue(UcPresetType.heavy),
+      );
+      final builder = NAIImageRequestBuilder(
+        params: params,
+        encodeVibe: _fakeEncodeVibe,
+      );
+
+      final result = await builder.build(sampler: 'k_euler');
+      final parameters = result.requestParameters;
+
+      expect(result.requestData['input'], equals('1girl, sunset'));
+      expect(parameters['negative_prompt'], equals('bad hands'));
+      expect(parameters['qualityToggle'], isTrue);
+      expect(parameters['ucPreset'], equals(0));
+      expect(
+        parameters['v4_prompt']['caption']['base_caption'],
+        equals('1girl, sunset'),
+      );
+      expect(
+        parameters['v4_negative_prompt']['caption']['base_caption'],
+        equals('bad hands'),
+      );
     });
 
     test('should throw ArgumentError when sampler is empty', () async {
@@ -121,6 +154,47 @@ void main() {
       final result = await builder.build(sampler: 'k_euler');
       expect(
         result.requestParameters.containsKey('director_reference_images'),
+        isTrue,
+      );
+    });
+
+    test('should reuse normalized precise reference image without reprocessing',
+        () async {
+      final normalizedBytes =
+          NAIApiUtils.markNormalizedPreciseReferencePng(_validPngBytes());
+      final params = ImageParams(
+        model: 'nai-diffusion-4-5-full',
+        preciseReferences: [
+          PreciseReference(
+            image: normalizedBytes,
+            type: PreciseRefType.character,
+          ),
+        ],
+      );
+
+      final builder = NAIImageRequestBuilder(
+        params: params,
+        encodeVibe: _fakeEncodeVibe,
+      );
+
+      final result = await builder.build(sampler: 'k_euler');
+      final encodedImages =
+          result.requestParameters['director_reference_images'] as List;
+
+      expect(base64Decode(encodedImages.single as String), normalizedBytes);
+    });
+
+    test('should normalize precise reference images off the caller isolate',
+        () async {
+      final normalizedBytes = await NAIApiUtils.ensurePngFormatAsync(
+        _validPngBytes(width: 8, height: 4),
+      );
+      final decoded = img.decodeImage(normalizedBytes);
+
+      expect(decoded, isNotNull);
+      expect('${decoded!.width}x${decoded.height}', '1024x1536');
+      expect(
+        NAIApiUtils.isKnownNormalizedPreciseReferencePng(normalizedBytes),
         isTrue,
       );
     });
@@ -308,6 +382,10 @@ Future<String> _fakeEncodeVibe(
   return 'encoded-vibe';
 }
 
-Uint8List _validPngBytes() => Uint8List.fromList(
-      img.encodePng(img.Image(width: 2, height: 2)),
+Uint8List _validPngBytes({
+  int width = 2,
+  int height = 2,
+}) =>
+    Uint8List.fromList(
+      img.encodePng(img.Image(width: width, height: height)),
     );

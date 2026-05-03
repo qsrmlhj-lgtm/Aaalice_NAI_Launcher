@@ -8,15 +8,19 @@ import 'package:crypto/crypto.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/constants/api_constants.dart';
 import '../../../core/enums/precise_ref_type.dart';
 import '../../../core/storage/local_storage_service.dart';
 import '../../../core/utils/app_logger.dart';
+import '../../../core/utils/nai_api_utils.dart';
 import '../../../core/utils/vibe_performance_diagnostics.dart';
 import '../../../data/datasources/remote/nai_image_enhancement_api_service.dart';
 import '../../../data/models/image/image_params.dart';
 import '../../../data/models/vibe/vibe_library_entry.dart';
 import '../../../data/models/vibe/vibe_reference.dart';
 import '../../../data/services/vibe_library_storage_service.dart';
+import '../quality_preset_provider.dart';
+import '../uc_preset_provider.dart';
 
 part 'generation_params_notifier.g.dart';
 
@@ -382,7 +386,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         );
 
         // 更新 vibe 使用缓存的编码
-        vibeToAdd = vibe.copyWith(vibeEncoding: cachedEncoding);
+        vibeToAdd = vibe.withEncodedVibe(cachedEncoding);
 
         // 显示缓存命中通知
         _showCacheHitNotification(vibe.displayName);
@@ -601,7 +605,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         informationExtracted: vibe.infoExtracted,
       );
       if (cachedEncoding != null && cachedEncoding.isNotEmpty) {
-        encodedVibes.add(vibe.copyWith(vibeEncoding: cachedEncoding));
+        encodedVibes.add(vibe.withEncodedVibe(cachedEncoding));
         changed = true;
         continue;
       }
@@ -613,7 +617,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         vibeName: vibe.displayName,
       );
       if (encoding != null && encoding.isNotEmpty) {
-        encodedVibes.add(vibe.copyWith(vibeEncoding: encoding));
+        encodedVibes.add(vibe.withEncodedVibe(encoding));
         changed = true;
       } else {
         encodedVibes.add(vibe);
@@ -655,7 +659,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         (nextVibe.vibeEncoding.isEmpty ||
             nextInfoExtracted != vibe.infoExtracted);
     if (!shouldEncode) {
-      return nextVibe;
+      return nextVibe.normalizedForLibraryStorage();
     }
 
     final rawImageData = nextVibe.rawImageData;
@@ -679,10 +683,7 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       return null;
     }
 
-    return nextVibe.copyWith(
-      vibeEncoding: encoding,
-      sourceType: VibeSourceType.naiv4vibe,
-    );
+    return nextVibe.withEncodedVibe(encoding);
   }
 
   /// 清空编码缓存
@@ -847,11 +848,15 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     } else {
       nextEncoding = current.vibeEncoding;
     }
-    newList[index] = current.copyWith(
+    var nextVibe = current.copyWith(
       strength: nextStrength,
       infoExtracted: nextInfoExtracted,
       vibeEncoding: nextEncoding,
     );
+    if (nextEncoding.isNotEmpty) {
+      nextVibe = nextVibe.normalizedForLibraryStorage();
+    }
+    newList[index] = nextVibe;
     state = state.copyWith(vibeReferencesV4: newList);
     _scheduleGenerationStateSave();
   }
@@ -905,11 +910,21 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
       final savedIds = <String>[];
 
       for (final vibe in state.vibeReferencesV4) {
+        final preparedVibe = await prepareVibeForLibraryParamSave(
+          vibe,
+          strength: vibe.strength,
+          infoExtracted: vibe.infoExtracted,
+          model: state.model,
+        );
+        if (preparedVibe == null) {
+          return null;
+        }
+
         final entry = VibeLibraryEntry.fromVibeReference(
           name: state.vibeReferencesV4.length == 1
               ? name
               : '$name (${vibe.displayName})',
-          vibeData: vibe,
+          vibeData: preparedVibe.normalizedForLibraryStorage(),
         );
         await storageService.saveEntry(entry);
         savedIds.add(entry.id);
@@ -1022,7 +1037,11 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
     required PreciseRefType type,
     double strength = 1.0,
     double fidelity = 1.0,
+    bool isNormalizedPng = false,
   }) {
+    if (isNormalizedPng) {
+      NAIApiUtils.markNormalizedPreciseReferencePng(image);
+    }
     state = state.copyWith(
       preciseReferences: [
         ...state.preciseReferences,
@@ -1034,6 +1053,54 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
         ),
       ],
     );
+    _scheduleGenerationStateSave(immediate: true);
+  }
+
+  /// 添加原始图片形式的 Precise Reference，并在后台完成 Director PNG 规范化。
+  ///
+  /// 原图会先进入状态，保证用户快速点击生成时请求构建器仍能读取到参考图；
+  /// 规范化完成后再替换为可直接提交的 PNG，避免后续生成重复处理。
+  Future<void> addPreciseReferenceFromImage(
+    Uint8List image, {
+    required PreciseRefType type,
+    double strength = 1.0,
+    double fidelity = 1.0,
+  }) async {
+    final index = state.preciseReferences.length;
+    addPreciseReference(
+      image,
+      type: type,
+      strength: strength,
+      fidelity: fidelity,
+    );
+
+    final Uint8List normalizedImage;
+    try {
+      normalizedImage = await NAIApiUtils.ensurePngFormatAsync(image);
+    } catch (e, stackTrace) {
+      AppLogger.e(
+        'Failed to normalize precise reference image',
+        e,
+        stackTrace,
+        'GenerationParams',
+      );
+      return;
+    }
+    if (_isDisposed || index >= state.preciseReferences.length) {
+      return;
+    }
+
+    final current = state.preciseReferences[index];
+    if (!identical(current.image, image)) {
+      return;
+    }
+
+    final newList = [...state.preciseReferences];
+    NAIApiUtils.markNormalizedPreciseReferencePng(normalizedImage);
+    newList[index] = current.copyWith(
+      image: normalizedImage,
+    );
+    state = state.copyWith(preciseReferences: newList);
     _scheduleGenerationStateSave(immediate: true);
   }
 
@@ -1267,9 +1334,14 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
           orElse: () => PreciseRefType.character,
         );
 
+        final isNormalizedPng = refData['isNormalizedPng'] as bool? ?? false;
+        final referenceImage = isNormalizedPng
+            ? NAIApiUtils.markNormalizedPreciseReferencePng(imageBytes)
+            : imageBytes;
+
         preciseRefs.add(
           PreciseReference(
-            image: imageBytes,
+            image: referenceImage,
             type: type,
             strength: (refData['strength'] as num?)?.toDouble() ?? 1.0,
             fidelity: (refData['fidelity'] as num?)?.toDouble() ?? 1.0,
@@ -1356,12 +1428,20 @@ class GenerationParamsNotifier extends _$GenerationParamsNotifier {
 
   /// 更新 UC 预设
   void updateUcPreset(int ucPreset) {
-    state = state.copyWith(ucPreset: ucPreset.clamp(0, 7));
+    final presetType = UcPresets.getPresetTypeFromInt(ucPreset);
+    state = state.copyWith(ucPreset: UcPresets.toApiValue(presetType));
+    ref.read(ucPresetNotifierProvider.notifier).setPresetType(presetType);
   }
 
   /// 更新质量标签开关
   void updateQualityToggle(bool qualityToggle) {
     state = state.copyWith(qualityToggle: qualityToggle);
+    final qualityPreset = ref.read(qualityPresetNotifierProvider.notifier);
+    if (qualityToggle) {
+      qualityPreset.setNaiDefault();
+    } else {
+      qualityPreset.setNone();
+    }
   }
 
   /// 更新多样性增强 (V4+)
@@ -1452,6 +1532,8 @@ Map<String, Object?> _buildGenerationStateSaveInput({
         'strength': reference.strength,
         'fidelity': reference.fidelity,
         'image': reference.image,
+        'isNormalizedPng':
+            NAIApiUtils.isKnownNormalizedPreciseReferencePng(reference.image),
       };
     }).toList(growable: false),
     'normalizeVibeStrength': normalizeVibeStrength,
@@ -1492,6 +1574,7 @@ String _encodeGenerationStateJson(Map<String, Object?> input) {
       'strength': raw['strength'],
       'fidelity': raw['fidelity'],
       'imageBase64': image != null ? base64Encode(image) : null,
+      'isNormalizedPng': raw['isNormalizedPng'] as bool? ?? false,
     };
   }).toList(growable: false);
 
@@ -1578,7 +1661,10 @@ Map<String, Object?> _decodeGenerationStateJson(String jsonString) {
               PreciseRefType.character.toApiString(),
           'strength': (refData['strength'] as num?)?.toDouble() ?? 1.0,
           'fidelity': (refData['fidelity'] as num?)?.toDouble() ?? 1.0,
-          'image': imageBytes,
+          'image': (refData['isNormalizedPng'] as bool? ?? false)
+              ? NAIApiUtils.markNormalizedPreciseReferencePng(imageBytes)
+              : imageBytes,
+          'isNormalizedPng': refData['isNormalizedPng'] as bool? ?? false,
         },
       );
     }

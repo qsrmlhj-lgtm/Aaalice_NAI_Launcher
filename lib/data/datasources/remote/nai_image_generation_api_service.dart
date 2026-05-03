@@ -194,12 +194,15 @@ class NAIImageGenerationApiService {
         );
         AppLogger.d('isV4Model: ${effectiveParams.isV4Model}', 'ImgGen');
 
-        // 调试：验证 base64 编码和 PNG 转换
+        final directorReferenceImages =
+            requestParameters['director_reference_images'] as List? ?? const [];
         for (int i = 0; i < effectivePreciseRefs.length; i++) {
           final ref = effectivePreciseRefs[i];
-          final pngBytes = NAIApiUtils.ensurePngFormat(ref.image);
+          final encodedImageChars = i < directorReferenceImages.length
+              ? (directorReferenceImages[i] as String).length
+              : 0;
           AppLogger.d(
-            'CharRef[$i] image: ${ref.image.length} bytes -> PNG: ${pngBytes.length} bytes, type: ${ref.type}, strength: ${ref.strength}, fidelity: ${ref.fidelity}',
+            'CharRef[$i] image: ${ref.image.length} bytes -> request base64: $encodedImageChars chars, type: ${ref.type}, strength: ${ref.strength}, fidelity: ${ref.fidelity}',
             'ImgGen',
           );
         }
@@ -377,12 +380,15 @@ class NAIImageGenerationApiService {
         );
         AppLogger.d('isV4Model: ${effectiveParams.isV4Model}', 'ImgGen');
 
-        // 调试：验证 base64 编码和 PNG 转换
+        final directorReferenceImages =
+            requestParameters['director_reference_images'] as List? ?? const [];
         for (int i = 0; i < effectivePreciseRefs.length; i++) {
           final ref = effectivePreciseRefs[i];
-          final pngBytes = NAIApiUtils.ensurePngFormat(ref.image);
+          final encodedImageChars = i < directorReferenceImages.length
+              ? (directorReferenceImages[i] as String).length
+              : 0;
           AppLogger.d(
-            'CharRef[$i] image: ${ref.image.length} bytes -> PNG: ${pngBytes.length} bytes, type: ${ref.type}, strength: ${ref.strength}, fidelity: ${ref.fidelity}',
+            'CharRef[$i] image: ${ref.image.length} bytes -> request base64: $encodedImageChars chars, type: ${ref.type}, strength: ${ref.strength}, fidelity: ${ref.fidelity}',
             'ImgGen',
           );
         }
@@ -393,7 +399,7 @@ class NAIImageGenerationApiService {
 
       // ========== 详细调试日志 ==========
       AppLogger.d('========== STREAM REQUEST DEBUG ==========', 'ImgGen');
-      AppLogger.d('input (正面提示词+质量标签): $effectivePrompt', 'ImgGen');
+      AppLogger.d('input (请求正面提示词): $effectivePrompt', 'ImgGen');
       AppLogger.d('model: ${effectiveParams.model}', 'ImgGen');
       AppLogger.d('action: ${effectiveParams.action.value}', 'ImgGen');
       AppLogger.d('seed: $seed', 'ImgGen');

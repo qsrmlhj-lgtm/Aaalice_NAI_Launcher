@@ -309,6 +309,11 @@ enum UcPresetType {
 class UcPresets {
   UcPresets._();
 
+  static const int heavyApiValue = 0;
+  static const int lightApiValue = 1;
+  static const int humanFocusApiValue = 2;
+  static const int noneApiValue = 3;
+
   /// V4.5 Full 预设
   static const Map<UcPresetType, String> v45FullPresets = {
     UcPresetType.heavy:
@@ -412,6 +417,20 @@ class UcPresets {
     return presets[type] ?? '';
   }
 
+  static bool hasNativeApiValue(UcPresetType type) {
+    return type != UcPresetType.furryFocus;
+  }
+
+  static int toApiValue(UcPresetType type) {
+    return switch (type) {
+      UcPresetType.heavy => heavyApiValue,
+      UcPresetType.light => lightApiValue,
+      UcPresetType.humanFocus => humanFocusApiValue,
+      UcPresetType.none => noneApiValue,
+      UcPresetType.furryFocus => noneApiValue,
+    };
+  }
+
   /// 将预设应用到负面提示词
   static String applyPreset(
     String negativePrompt,
@@ -438,13 +457,18 @@ class UcPresets {
   /// - 3 = None
   static UcPresetType getPresetTypeFromInt(int ucPreset) {
     switch (ucPreset) {
-      case 0:
+      case heavyApiValue:
+      case UCPresets.heavy:
         return UcPresetType.heavy;
-      case 1:
+      case lightApiValue:
+      case UCPresets.light:
         return UcPresetType.light;
-      case 2:
+      case humanFocusApiValue:
+      case UCPresets.humanFocus:
         return UcPresetType.humanFocus;
-      case 3:
+      case UCPresets.furryFocus:
+        return UcPresetType.furryFocus;
+      case noneApiValue:
       default:
         return UcPresetType.none;
     }

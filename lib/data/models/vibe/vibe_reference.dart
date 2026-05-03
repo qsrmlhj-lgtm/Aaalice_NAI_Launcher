@@ -95,4 +95,25 @@ class VibeReference with _$VibeReference {
 
   bool get canReencodeFromRawSource =>
       rawImageData != null && rawImageData!.isNotEmpty;
+
+  bool get hasVibeEncoding => vibeEncoding.isNotEmpty;
+
+  VibeReference withEncodedVibe(String encoding) {
+    if (encoding.isEmpty) {
+      return copyWith(vibeEncoding: encoding);
+    }
+
+    return copyWith(
+      vibeEncoding: encoding,
+      sourceType: VibeSourceType.naiv4vibe,
+    );
+  }
+
+  VibeReference normalizedForLibraryStorage() {
+    if (!hasVibeEncoding || sourceType != VibeSourceType.rawImage) {
+      return this;
+    }
+
+    return copyWith(sourceType: VibeSourceType.naiv4vibe);
+  }
 }

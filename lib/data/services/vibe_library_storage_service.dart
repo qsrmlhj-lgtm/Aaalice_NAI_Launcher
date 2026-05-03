@@ -793,7 +793,7 @@ class VibeLibraryStorageService {
   /// 保存条目（新增或更新）
   Future<VibeLibraryEntry> saveEntry(VibeLibraryEntry entry) async {
     try {
-      var entryToSave = entry;
+      var entryToSave = entry.normalizedForLibraryStorage();
       final filePath = entryToSave.filePath;
       if (filePath == null || filePath.isEmpty) {
         entryToSave = await _saveEntryFile(entryToSave);
@@ -924,12 +924,17 @@ class VibeLibraryStorageService {
 
       // 旧库里存在“文件只保存编码，原图仍只留在 Hive 条目里”的情况。
       // 回读文件时要保住这份原图来源，否则条目会意外失去重新编码能力。
+      // 也兼容曾经错误写成 type=image、但 Hive 条目里仍有 encoding 的文件。
       final effectiveThumbnail =
           vibeData.thumbnail ?? entry.vibeThumbnail ?? entry.thumbnail;
       final effectiveRawImageData = vibeData.rawImageData ?? entry.rawImageData;
+      final effectiveVibeEncoding = vibeData.vibeEncoding.isNotEmpty
+          ? vibeData.vibeEncoding
+          : entry.vibeEncoding;
       var mergedEntry = entry
           .updateVibeData(
             vibeData.copyWith(
+              vibeEncoding: effectiveVibeEncoding,
               thumbnail: effectiveThumbnail,
               rawImageData: effectiveRawImageData,
             ),

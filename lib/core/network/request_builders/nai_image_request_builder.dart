@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import '../../constants/api_constants.dart';
 import '../../enums/precise_ref_type.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/inpaint_mask_utils.dart';
@@ -331,15 +330,25 @@ class NAIImageRequestBuilder {
     return vibeEncodingMap;
   }
 
-  void buildPreciseReferenceParameters(Map<String, dynamic> requestParameters) {
+  Future<void> buildPreciseReferenceParameters(
+    Map<String, dynamic> requestParameters,
+  ) async {
     if (_preciseReferences.isEmpty) {
       return;
     }
 
+    final referenceImages = <String>[];
+    for (final reference in _preciseReferences) {
+      final imageBytes = NAIApiUtils.isKnownNormalizedPreciseReferencePng(
+        reference.image,
+      )
+          ? reference.image
+          : await NAIApiUtils.ensurePngFormatAsync(reference.image);
+      referenceImages.add(base64Encode(imageBytes));
+    }
+
     requestParameters['normalize_reference_strength_multiple'] = true;
-    requestParameters['director_reference_images'] = _preciseReferences
-        .map((r) => base64Encode(NAIApiUtils.ensurePngFormat(r.image)))
-        .toList();
+    requestParameters['director_reference_images'] = referenceImages;
     requestParameters['director_reference_descriptions'] = _preciseReferences
         .map(
           (r) => {
@@ -369,16 +378,8 @@ class NAIImageRequestBuilder {
 
     final seed = params.seed == -1 ? Random().nextInt(4294967295) : params.seed;
 
-    final effectivePrompt = params.qualityToggle
-        ? QualityTags.applyQualityTags(params.prompt, params.model)
-        : params.prompt;
-
-    final effectiveNegativePrompt = UcPresets.applyPresetWithNsfwCheck(
-      params.negativePrompt,
-      params.prompt,
-      params.model,
-      params.ucPreset,
-    );
+    final effectivePrompt = params.prompt;
+    final effectiveNegativePrompt = params.negativePrompt;
 
     final requestParameters = buildBaseParameters(
       sampler: sampler,
@@ -422,7 +423,7 @@ class NAIImageRequestBuilder {
       isStream: isStream,
     );
 
-    buildPreciseReferenceParameters(requestParameters);
+    await buildPreciseReferenceParameters(requestParameters);
 
     final requestData = <String, dynamic>{
       'input': effectivePrompt,
