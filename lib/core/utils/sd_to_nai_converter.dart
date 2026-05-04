@@ -277,8 +277,8 @@ class SdToNaiConverter {
       return _buildNaiV4(parsed);
     }
 
-    // 其他情况直接返回原文，不做任何处理
-    return text;
+    // 其他情况不转换权重，但仍处理 SD 里用于表示字面括号的转义。
+    return _processEscapedParentheses(text);
   }
 
   /// 解析SD权重语法
@@ -432,6 +432,28 @@ class SdToNaiConverter {
             nextChar == '[' ||
             nextChar == ']' ||
             nextChar == r'\') {
+          buffer.write(nextChar);
+          i += 2;
+          continue;
+        }
+      }
+      buffer.write(text[i]);
+      i++;
+    }
+    return buffer.toString();
+  }
+
+  /// 处理不进入权重转换路径时的字面括号转义。
+  ///
+  /// 只解开用户明确要求的 `\(` 和 `\)`，避免在普通提示词早退路径中
+  /// 顺带改写 `\[`、`\]` 或 `\\` 等其它内容。
+  static String _processEscapedParentheses(String text) {
+    final buffer = StringBuffer();
+    var i = 0;
+    while (i < text.length) {
+      if (text[i] == r'\' && i + 1 < text.length) {
+        final nextChar = text[i + 1];
+        if (nextChar == '(' || nextChar == ')') {
           buffer.write(nextChar);
           i += 2;
           continue;

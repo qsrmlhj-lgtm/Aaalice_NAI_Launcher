@@ -54,5 +54,20 @@ void main() {
         equals('1.3::cinematic lighting::'),
       );
     });
+
+    test('should unescape SD escaped parentheses in prompts', () {
+      expect(
+        SdToNaiConverter.convert(r'\(literal parentheses\)'),
+        equals('(literal parentheses)'),
+      );
+      expect(
+        SdToNaiConverter.convert(r'\(literal\), (cinematic lighting)'),
+        equals('(literal), 1.1::cinematic lighting::'),
+      );
+      expect(
+        SdToNaiConverter.convert(r'1.2::tag::, \(literal\)'),
+        equals('1.2::tag::, (literal)'),
+      );
+    });
   });
 }
