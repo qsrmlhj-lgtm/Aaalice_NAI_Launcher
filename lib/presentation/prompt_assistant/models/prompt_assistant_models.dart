@@ -624,23 +624,50 @@ class TaskRoutingConfig {
       };
 
   factory TaskRoutingConfig.fromJson(Map<String, dynamic> json) {
-    final llmProviderId = json['llmProviderId'] as String? ?? '';
-    final llmModel = json['llmModel'] as String? ?? '';
+    final llmProviderId = _routingString(json, 'llmProviderId');
+    final llmModel = _routingString(json, 'llmModel');
     return TaskRoutingConfig(
       llmProviderId: llmProviderId,
       llmModel: llmModel,
-      translateProviderId: json['translateProviderId'] as String? ?? '',
-      translateModel: json['translateModel'] as String? ?? '',
-      reverseProviderId: json['reverseProviderId'] as String? ?? llmProviderId,
-      reverseModel: json['reverseModel'] as String? ?? llmModel,
-      characterReplaceProviderId:
-          json['characterReplaceProviderId'] as String? ?? llmProviderId,
-      characterReplaceModel:
-          json['characterReplaceModel'] as String? ?? llmModel,
-      customProviderId: json['customProviderId'] as String? ?? llmProviderId,
-      customModel: json['customModel'] as String? ?? llmModel,
+      translateProviderId: _routingString(json, 'translateProviderId'),
+      translateModel: _routingString(json, 'translateModel'),
+      reverseProviderId: _routingString(
+        json,
+        'reverseProviderId',
+        fallback: llmProviderId,
+      ),
+      reverseModel: _routingString(json, 'reverseModel', fallback: llmModel),
+      characterReplaceProviderId: _routingString(
+        json,
+        'characterReplaceProviderId',
+        fallback: llmProviderId,
+      ),
+      characterReplaceModel: _routingString(
+        json,
+        'characterReplaceModel',
+        fallback: llmModel,
+      ),
+      customProviderId: _routingString(
+        json,
+        'customProviderId',
+        fallback: llmProviderId,
+      ),
+      customModel: _routingString(json, 'customModel', fallback: llmModel),
     );
   }
+}
+
+String _routingString(
+  Map<String, dynamic> json,
+  String key, {
+  String fallback = '',
+}) {
+  final value = json[key] as String?;
+  if (value == null) {
+    return fallback;
+  }
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? fallback : trimmed;
 }
 
 class PromptRuleTemplate {
