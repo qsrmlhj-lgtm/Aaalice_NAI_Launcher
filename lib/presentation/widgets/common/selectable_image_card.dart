@@ -89,6 +89,12 @@ class SelectableImageCard extends ConsumerStatefulWidget {
   /// 保存到词库的回调（传入图像字节和合并后的提示词）
   final void Function(Uint8List imageBytes, String prompt)? onSaveToLibrary;
 
+  /// 是否已被本地画廊收藏。
+  final bool isFavorite;
+
+  /// 切换本地画廊收藏状态。
+  final VoidCallback? onFavoriteToggle;
+
   // ========== 生成中状态相关参数 ==========
 
   /// 是否处于生成中状态
@@ -139,6 +145,8 @@ class SelectableImageCard extends ConsumerStatefulWidget {
     this.onOpenInExplorer,
     this.sourceFilePath,
     this.onSaveToLibrary,
+    this.isFavorite = false,
+    this.onFavoriteToggle,
     // 生成中状态参数
     this.isGenerating = false,
     this.progress,
@@ -907,6 +915,14 @@ class _SelectableImageCardState extends ConsumerState<SelectableImageCard>
                     child: _buildCheckbox(theme),
                   ),
 
+                // 5.5 右上角：本地画廊收藏按钮
+                if (widget.onFavoriteToggle != null)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: _buildFavoriteButton(context),
+                  ),
+
                 // 6. 操作按钮（悬浮时显示）
                 if (_isHovering)
                   Positioned(
@@ -960,6 +976,48 @@ class _SelectableImageCardState extends ConsumerState<SelectableImageCard>
                     ),
                   ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFavoriteButton(BuildContext context) {
+    return Tooltip(
+      message: widget.isFavorite
+          ? context.l10n.common_unfavorite
+          : context.l10n.common_favorite,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: widget.onFavoriteToggle,
+          borderRadius: BorderRadius.circular(14),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: widget.isFavorite
+                    ? Colors.redAccent.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.65),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(
+              widget.isFavorite ? Icons.favorite : Icons.favorite_border,
+              color: widget.isFavorite ? Colors.redAccent : Colors.white,
+              size: 17,
             ),
           ),
         ),
