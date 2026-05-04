@@ -10,6 +10,7 @@ import 'package:nai_launcher/l10n/app_localizations.dart';
 import '../../../../core/utils/app_logger.dart';
 import '../../../../core/utils/image_save_utils.dart';
 import '../../../../core/utils/localization_extension.dart';
+import '../../../../core/utils/prompt_preset_resolution.dart';
 import '../../../../data/models/character/character_prompt.dart';
 import '../../../../data/repositories/gallery_folder_repository.dart';
 import '../../../../data/services/alias_resolver_service.dart';
@@ -20,7 +21,9 @@ import '../../../providers/character_prompt_provider.dart';
 import '../../../providers/fixed_tags_provider.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../providers/local_gallery_provider.dart';
+import '../../../providers/quality_preset_provider.dart';
 import '../../../providers/tag_library_page_provider.dart';
+import '../../../providers/uc_preset_provider.dart';
 import '../../../services/image_workflow_launcher.dart';
 import '../../../widgets/character/character_card_grid.dart';
 import '../../../widgets/character/character_edit_dialog.dart';
@@ -655,76 +658,96 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
       final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
       final filePath = '${saveDir.path}/$fileName';
 
-      final params = ref.read(generationParamsNotifierProvider);
-      final characterConfig = ref.read(characterPromptNotifierProvider);
-      final fixedTagsState = ref.read(fixedTagsNotifierProvider);
-      final qualityToggle = ref.read(qualityTagsSettingsProvider);
-      final ucPreset = ref.read(ucPresetSettingsProvider);
+      if (ImageSaveUtils.hasEmbeddedNovelAiMetadata(imageBytes)) {
+        await File(filePath).writeAsBytes(imageBytes);
+      } else {
+        final params = ref.read(generationParamsNotifierProvider);
+        final characterConfig = ref.read(characterPromptNotifierProvider);
+        final fixedTagsState = ref.read(fixedTagsNotifierProvider);
 
-      // 解析别名
-      final aliasResolver = ref.read(aliasResolverServiceProvider.notifier);
-      final resolvedPrompt = aliasResolver.resolveAliases(params.prompt);
-      final resolvedNegative =
-          aliasResolver.resolveAliases(params.negativePrompt);
-      final promptWithFixedTags = fixedTagsState.applyToPrompt(resolvedPrompt);
+        // 解析别名
+        final aliasResolver = ref.read(aliasResolverServiceProvider.notifier);
+        final resolvedPrompt = aliasResolver.resolveAliases(params.prompt);
+        final resolvedNegative =
+            aliasResolver.resolveAliases(params.negativePrompt);
+        final promptWithFixedTags =
+            fixedTagsState.applyToPrompt(resolvedPrompt);
+        final qualityState = ref.read(qualityPresetNotifierProvider);
+        final qualityContent = ref
+            .read(qualityPresetNotifierProvider.notifier)
+            .getEffectiveContent(params.model);
+        final ucState = ref.read(ucPresetNotifierProvider);
+        final ucPresetContent = ref
+            .read(ucPresetNotifierProvider.notifier)
+            .getEffectiveContent(params.model);
+        final presetResolution = resolvePromptPresetSettings(
+          prompt: promptWithFixedTags,
+          negativePrompt: resolvedNegative,
+          qualityMode: qualityState.mode,
+          qualityContent: qualityContent,
+          ucPresetType: ucState.presetType,
+          ucPresetContent: ucPresetContent,
+          useCustomUcPreset: ucState.isCustom,
+        );
 
-      // 尝试从图片元数据中提取实际的 seed
-      int actualSeed = params.seed;
-      if (actualSeed == -1) {
-        final extractedMeta =
-            await ImageMetadataService().getMetadataFromBytes(imageBytes);
-        if (extractedMeta != null &&
-            extractedMeta.seed != null &&
-            extractedMeta.seed! > 0) {
-          actualSeed = extractedMeta.seed!;
-        } else {
-          actualSeed = Random().nextInt(4294967295);
+        // 尝试从图片元数据中提取实际的 seed
+        int actualSeed = params.seed;
+        if (actualSeed == -1) {
+          final extractedMeta =
+              await ImageMetadataService().getMetadataFromBytes(imageBytes);
+          if (extractedMeta != null &&
+              extractedMeta.seed != null &&
+              extractedMeta.seed! > 0) {
+            actualSeed = extractedMeta.seed!;
+          } else {
+            actualSeed = Random().nextInt(4294967295);
+          }
         }
+
+        // 构建 V4 多角色提示词结构（解析别名）
+        final charCaptions = <Map<String, dynamic>>[];
+        final charNegCaptions = <Map<String, dynamic>>[];
+
+        for (final char in characterConfig.characters
+            .where((c) => c.enabled && c.prompt.isNotEmpty)) {
+          charCaptions.add({
+            'char_caption': aliasResolver.resolveAliases(char.prompt),
+            'centers': [
+              {'x': 0.5, 'y': 0.5},
+            ],
+          });
+          charNegCaptions.add({
+            'char_caption': aliasResolver.resolveAliases(char.negativePrompt),
+            'centers': [
+              {'x': 0.5, 'y': 0.5},
+            ],
+          });
+        }
+
+        final paramsForSave = params.copyWith(
+          prompt: presetResolution.prompt,
+          negativePrompt: presetResolution.negativePrompt,
+          qualityToggle: presetResolution.qualityToggle,
+          ucPreset: presetResolution.ucPreset,
+        );
+        await ImageSaveUtils.saveImageWithMetadata(
+          imageBytes: imageBytes,
+          filePath: filePath,
+          params: paramsForSave,
+          actualSeed: actualSeed,
+          fixedPrefixTags: fixedTagsState.enabledPrefixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          fixedSuffixTags: fixedTagsState.enabledSuffixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          charCaptions: charCaptions,
+          charNegCaptions: charNegCaptions,
+          useCoords: !characterConfig.globalAiChoice,
+        );
       }
-
-      // 构建 V4 多角色提示词结构（解析别名）
-      final charCaptions = <Map<String, dynamic>>[];
-      final charNegCaptions = <Map<String, dynamic>>[];
-
-      for (final char in characterConfig.characters
-          .where((c) => c.enabled && c.prompt.isNotEmpty)) {
-        charCaptions.add({
-          'char_caption': aliasResolver.resolveAliases(char.prompt),
-          'centers': [
-            {'x': 0.5, 'y': 0.5},
-          ],
-        });
-        charNegCaptions.add({
-          'char_caption': aliasResolver.resolveAliases(char.negativePrompt),
-          'centers': [
-            {'x': 0.5, 'y': 0.5},
-          ],
-        });
-      }
-
-      final paramsForSave = params.copyWith(
-        prompt: promptWithFixedTags,
-        negativePrompt: resolvedNegative,
-        qualityToggle: qualityToggle,
-        ucPreset: ucPreset.index,
-      );
-      await ImageSaveUtils.saveImageWithMetadata(
-        imageBytes: imageBytes,
-        filePath: filePath,
-        params: paramsForSave,
-        actualSeed: actualSeed,
-        fixedPrefixTags: fixedTagsState.enabledPrefixes
-            .map((entry) => entry.weightedContent)
-            .where((content) => content.isNotEmpty)
-            .toList(growable: false),
-        fixedSuffixTags: fixedTagsState.enabledSuffixes
-            .map((entry) => entry.weightedContent)
-            .where((content) => content.isNotEmpty)
-            .toList(growable: false),
-        charCaptions: charCaptions,
-        charNegCaptions: charNegCaptions,
-        useCoords: !characterConfig.globalAiChoice,
-      );
 
       // 立即解析并缓存刚保存图像的元数据
       unawaited(

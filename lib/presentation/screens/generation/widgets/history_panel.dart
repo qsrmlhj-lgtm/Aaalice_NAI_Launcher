@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../../core/utils/localization_extension.dart';
 import '../../../../core/utils/file_explorer_utils.dart';
@@ -64,6 +65,10 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
   String? _lastSharePreparationMaintenanceKey;
   Uint8List? _lastStreamPreviewBytes;
   final Map<String, Uint8List> _completionPreviewPlaceholders = {};
+  final Map<String, bool> _favoriteStates = {};
+  final Map<String, String?> _favoriteStatePaths = {};
+  final Set<String> _favoriteStatusLoadingIds = {};
+  final Set<String> _favoriteToggleLoadingIds = {};
 
   @override
   void initState() {
@@ -500,6 +505,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
           // 历史图像（已去重）- 使用图像自己的宽高比
           final historyIndex = index - currentGenerationCount;
           final historyImage = deduplicatedHistory[historyIndex];
+          final isFavorite = _favoriteStateFor(historyImage);
           // 计算在原始 history 中的真实索引（用于选择操作）
           final actualHistoryIndex = history.indexOf(historyImage);
           return Padding(
@@ -519,7 +525,10 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
                   index: actualHistoryIndex,
                   showIndex: false,
                   isSelected: _selectedIds.contains(historyImage.id),
+                  isFavorite: isFavorite,
                   dragPreparationReady: dragPreparationReady,
+                  onFavoriteToggle: () =>
+                      _toggleHistoryFavorite(context, historyImage),
                   onSelectionChanged: (selected) {
                     setState(() {
                       if (selected) {
@@ -638,6 +647,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
     if (index < completedImages.length) {
       final image = completedImages[index];
       final imageBytes = image.bytes;
+      final isFavorite = _favoriteStateFor(image);
       return _buildPreparedHistoryItem(
         context: context,
         image: image,
@@ -648,10 +658,12 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
           index: index,
           showIndex: true,
           isSelected: _selectedIds.contains(image.id),
+          isFavorite: isFavorite,
           dragPreparationReady: dragPreparationReady,
           completionPlaceholderBytes: _completionPreviewPlaceholders[image.id],
           onCompletionPlaceholderSettled: () =>
               _clearCompletionPreviewPlaceholder(image.id),
+          onFavoriteToggle: () => _toggleHistoryFavorite(context, image),
           onSelectionChanged: (selected) {
             setState(() {
               if (selected) {
@@ -691,6 +703,121 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
     }
 
     return const SizedBox.shrink();
+  }
+
+  bool _favoriteStateFor(GeneratedImage image) {
+    _ensureFavoriteStateLoaded(image);
+    return _favoriteStates[image.id] ?? false;
+  }
+
+  void _ensureFavoriteStateLoaded(GeneratedImage image) {
+    final filePath = image.filePath;
+    if (filePath == null || filePath.isEmpty) {
+      if (_favoriteStatePaths[image.id] != null ||
+          _favoriteStates[image.id] == true) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _favoriteStatePaths[image.id] = null;
+            _favoriteStates[image.id] = false;
+          });
+        });
+      }
+      return;
+    }
+
+    if (_favoriteStatePaths[image.id] == filePath &&
+        (_favoriteStates.containsKey(image.id) ||
+            _favoriteStatusLoadingIds.contains(image.id))) {
+      return;
+    }
+
+    _favoriteStatePaths[image.id] = filePath;
+    _favoriteStatusLoadingIds.add(image.id);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        () async {
+          final isFavorite = await ref
+              .read(localGalleryNotifierProvider.notifier)
+              .isFavorite(filePath);
+          if (!mounted || _favoriteStatePaths[image.id] != filePath) return;
+          setState(() {
+            _favoriteStates[image.id] = isFavorite;
+            _favoriteStatusLoadingIds.remove(image.id);
+          });
+        }()
+            .catchError((Object error, StackTrace stack) {
+          if (!mounted) return;
+          setState(() {
+            _favoriteStatusLoadingIds.remove(image.id);
+          });
+        }),
+      );
+    });
+  }
+
+  Future<void> _toggleHistoryFavorite(
+    BuildContext context,
+    GeneratedImage image,
+  ) async {
+    if (!_favoriteToggleLoadingIds.add(image.id)) return;
+
+    try {
+      final filePath = await _ensureHistoryImageSaved(image);
+      final isFavorite = await ref
+          .read(localGalleryNotifierProvider.notifier)
+          .toggleFavorite(filePath);
+
+      if (!mounted) return;
+      setState(() {
+        _favoriteStatePaths[image.id] = filePath;
+        _favoriteStates[image.id] = isFavorite;
+      });
+
+      if (context.mounted) {
+        AppToast.success(context, isFavorite ? '已收藏' : '已取消收藏');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        AppToast.error(context, '收藏状态更新失败: $e');
+      }
+    } finally {
+      _favoriteToggleLoadingIds.remove(image.id);
+    }
+  }
+
+  Future<String> _ensureHistoryImageSaved(GeneratedImage image) async {
+    final existingPath = image.filePath;
+    if (existingPath != null &&
+        existingPath.isNotEmpty &&
+        await File(existingPath).exists()) {
+      return existingPath;
+    }
+
+    final saveDirPath = await GalleryFolderRepository.instance.getRootPath();
+    if (saveDirPath == null || saveDirPath.isEmpty) {
+      throw StateError('未设置保存目录');
+    }
+
+    final saveDir = Directory(saveDirPath);
+    if (!await saveDir.exists()) {
+      await saveDir.create(recursive: true);
+    }
+
+    final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
+    final file = File(p.join(saveDir.path, fileName));
+    await file.writeAsBytes(image.bytes);
+
+    ref
+        .read(imageGenerationNotifierProvider.notifier)
+        .updateImageFilePath(image.id, file.path);
+    await ref
+        .read(localGalleryNotifierProvider.notifier)
+        .addNewlySavedImages([file.path]);
+
+    return file.path;
   }
 
   Widget _buildBottomActions(
@@ -762,7 +889,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
 
       for (int i = 0; i < selectedImages.length; i++) {
         final fileName = 'NAI_${timestamp}_${i + 1}.png';
-        final file = File('$saveDirPath/$fileName');
+        final file = File(p.join(saveDirPath, fileName));
         await file.writeAsBytes(selectedImages[i].bytes);
       }
 
@@ -872,7 +999,7 @@ class _HistoryPanelState extends ConsumerState<HistoryPanel> {
 
       // 保存图片
       final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
-      final file = File('$saveDirPath/$fileName');
+      final file = File(p.join(saveDirPath, fileName));
       await file.writeAsBytes(image.bytes);
 
       ref.read(localGalleryNotifierProvider.notifier).refresh();

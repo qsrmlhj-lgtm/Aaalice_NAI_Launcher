@@ -18,6 +18,7 @@ import '../../../../data/services/vibe_library_storage_service.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../widgets/common/app_toast.dart';
 import '../../vibe_library/widgets/vibe_selector_dialog.dart';
+import '../handlers/vibe_import_handler.dart';
 import 'empty_state_card.dart';
 import 'library_actions_row.dart';
 import 'vibe_card.dart';
@@ -465,146 +466,12 @@ class DragTargetWrapper extends ConsumerWidget {
 
   Future<void> _saveToLibrary(BuildContext context, WidgetRef ref) async {
     final params = ref.read(generationParamsNotifierProvider);
-    final panelNotifier = ref.read(referencePanelNotifierProvider.notifier);
     final currentVibes = params.vibeReferencesV4;
 
     if (currentVibes.isEmpty) return;
 
-    final firstVibe = currentVibes.first;
-    final nameController = TextEditingController(
-      text: currentVibes.length == 1 ? firstVibe.displayName : '',
-    );
-
-    final result = await showDialog<
-        (bool confirmed, double strength, double infoExtracted)?>(
-      context: context,
-      builder: (context) =>
-          _buildSaveToLibraryDialog(context, nameController, firstVibe),
-    );
-
-    if (result != null && result.$1 && context.mounted) {
-      final saveResult = await panelNotifier.saveCurrentVibesToLibrary(
-        currentVibes,
-        nameController.text.trim(),
-        strength: result.$2,
-        infoExtracted: result.$3,
-      );
-
-      if (context.mounted) {
-        String message;
-        if (saveResult.savedCount > 0 && saveResult.reusedCount > 0) {
-          message =
-              '新增 ${saveResult.savedCount} 个，复用 ${saveResult.reusedCount} 个';
-        } else if (saveResult.savedCount > 0) {
-          message = '已保存到 Vibe 库';
-        } else {
-          message = '库中已存在，已更新使用记录';
-        }
-        AppToast.success(context, message);
-      }
-    }
-
-    nameController.dispose();
-  }
-
-  Widget _buildSaveToLibraryDialog(
-    BuildContext context,
-    TextEditingController nameController,
-    VibeReference firstVibe,
-  ) {
-    var strengthValue = firstVibe.strength;
-    var infoExtractedValue = firstVibe.infoExtracted;
-
-    return StatefulBuilder(
-      builder: (context, setState) {
-        return AlertDialog(
-          title: const Text('保存到 Vibe 库'),
-          content: SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('保存 ${vibes.length} 个 Vibe 到库中'),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: '名称',
-                    hintText: '输入保存名称',
-                    border: OutlineInputBorder(),
-                  ),
-                  autofocus: true,
-                ),
-                const SizedBox(height: 24),
-                _buildDialogSlider(
-                  label: 'Reference Strength',
-                  value: strengthValue,
-                  onChanged: (value) => setState(() => strengthValue = value),
-                ),
-                const SizedBox(height: 16),
-                _buildDialogSlider(
-                  label: 'Information Extracted',
-                  value: infoExtractedValue,
-                  onChanged: (value) =>
-                      setState(() => infoExtractedValue = value),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(null),
-              child: Text(context.l10n.common_cancel),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (nameController.text.trim().isNotEmpty) {
-                  Navigator.of(context)
-                      .pop((true, strengthValue, infoExtractedValue));
-                }
-              },
-              child: Text(context.l10n.common_save),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildDialogSlider({
-    required String label,
-    required double value,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ),
-            Text(
-              value.toStringAsFixed(2),
-              style: const TextStyle(
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ),
-        Slider(
-          value: value,
-          min: 0.0,
-          max: 1.0,
-          divisions: 100,
-          onChanged: onChanged,
-        ),
-      ],
-    );
+    final handler = VibeImportHandler(ref: ref, context: context);
+    await handler.saveToLibrary(currentVibes);
   }
 
   Future<void> _importFromLibrary(BuildContext context, WidgetRef ref) async {

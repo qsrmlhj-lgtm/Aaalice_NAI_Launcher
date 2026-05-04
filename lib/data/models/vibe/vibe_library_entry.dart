@@ -96,16 +96,17 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
     bool isFavorite = false,
   }) {
     final now = DateTime.now();
+    final normalizedVibeData = vibeData.normalizedForLibraryStorage();
     return VibeLibraryEntry(
       id: const Uuid().v4(),
       name: name.trim(),
-      vibeDisplayName: vibeData.displayName,
-      vibeEncoding: vibeData.vibeEncoding,
-      vibeThumbnail: vibeData.thumbnail,
-      rawImageData: vibeData.rawImageData,
-      strength: vibeData.strength,
-      infoExtracted: vibeData.infoExtracted,
-      sourceTypeIndex: vibeData.sourceType.index,
+      vibeDisplayName: normalizedVibeData.displayName,
+      vibeEncoding: normalizedVibeData.vibeEncoding,
+      vibeThumbnail: normalizedVibeData.thumbnail,
+      rawImageData: normalizedVibeData.rawImageData,
+      strength: normalizedVibeData.strength,
+      infoExtracted: normalizedVibeData.infoExtracted,
+      sourceTypeIndex: normalizedVibeData.sourceType.index,
       categoryId: categoryId,
       tags: tags ?? [],
       isFavorite: isFavorite,
@@ -130,6 +131,10 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
     VibeSourceType sourceType = VibeSourceType.rawImage,
   }) {
     final now = DateTime.now();
+    final normalizedSourceType =
+        vibeEncoding.isNotEmpty && sourceType == VibeSourceType.rawImage
+            ? VibeSourceType.naiv4vibe
+            : sourceType;
     return VibeLibraryEntry(
       id: const Uuid().v4(),
       name: name.trim(),
@@ -143,7 +148,7 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
       createdAt: now,
       thumbnail: thumbnail,
       filePath: filePath,
-      sourceTypeIndex: sourceType.index,
+      sourceTypeIndex: normalizedSourceType.index,
     );
   }
 
@@ -242,15 +247,20 @@ class VibeLibraryEntry with _$VibeLibraryEntry {
 
   /// 从 VibeReference 更新 vibe 数据
   VibeLibraryEntry updateVibeData(VibeReference vibeData) {
+    final normalizedVibeData = vibeData.normalizedForLibraryStorage();
     return copyWith(
-      vibeDisplayName: vibeData.displayName,
-      vibeEncoding: vibeData.vibeEncoding,
-      vibeThumbnail: vibeData.thumbnail,
-      rawImageData: vibeData.rawImageData,
-      strength: vibeData.strength,
-      infoExtracted: vibeData.infoExtracted,
-      sourceTypeIndex: vibeData.sourceType.index,
+      vibeDisplayName: normalizedVibeData.displayName,
+      vibeEncoding: normalizedVibeData.vibeEncoding,
+      vibeThumbnail: normalizedVibeData.thumbnail,
+      rawImageData: normalizedVibeData.rawImageData,
+      strength: normalizedVibeData.strength,
+      infoExtracted: normalizedVibeData.infoExtracted,
+      sourceTypeIndex: normalizedVibeData.sourceType.index,
     );
+  }
+
+  VibeLibraryEntry normalizedForLibraryStorage() {
+    return updateVibeData(toVibeReference());
   }
 
   /// 记录使用

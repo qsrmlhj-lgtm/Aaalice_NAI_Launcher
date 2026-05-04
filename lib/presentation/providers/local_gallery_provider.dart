@@ -792,14 +792,15 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
   // 收藏
   // ============================================================
 
-  Future<void> toggleFavorite(String filePath) async {
+  Future<bool> toggleFavorite(String filePath) async {
     try {
       final service = await getService();
       final isFav = await service.toggleFavorite(filePath);
+      final targetKey = galleryFilePathKey(filePath);
 
       // 更新当前页显示
       final updatedImages = state.currentImages.map((record) {
-        if (record.path == filePath) {
+        if (galleryFilePathKey(record.path) == targetKey) {
           return record.copyWith(isFavorite: isFav);
         }
         return record;
@@ -807,10 +808,12 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
 
       _setState(state.copyWith(currentImages: updatedImages));
 
-      // 如果启用了收藏过滤，重新应用过滤
-      if (state.filterCriteria.showFavoritesOnly && !isFav) {
+      // 如果启用了收藏过滤，收藏/取消收藏都要重新应用，保证收藏栏即时增删。
+      if (state.filterCriteria.showFavoritesOnly) {
         await _applyFilters();
       }
+
+      return isFav;
     } on GalleryDatabaseException catch (e) {
       AppLogger.e('Toggle favorite failed', e, null, 'LocalGalleryNotifier');
       _setState(
@@ -818,8 +821,10 @@ class LocalGalleryNotifier extends _$LocalGalleryNotifier {
           error: '切换收藏状态失败: ${e.message}',
         ),
       );
+      return false;
     } catch (e) {
       AppLogger.e('Toggle favorite failed', e, null, 'LocalGalleryNotifier');
+      return false;
     }
   }
 

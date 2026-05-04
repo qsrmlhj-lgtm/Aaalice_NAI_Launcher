@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +6,7 @@ import 'package:dio/dio.dart';
 import '../../../core/utils/app_logger.dart';
 import '../models/prompt_assistant_models.dart';
 import '../providers/prompt_assistant_config_provider.dart';
+import 'provider_adapters/prompt_assistant_adapter.dart';
 import 'prompt_assistant_api_client.dart';
 
 final promptAssistantDioProvider = Provider<Dio>((ref) {
@@ -101,13 +101,42 @@ class PromptAssistantService {
       sessionId: sessionId,
       taskType: AssistantTaskType.reverse,
       userContent: [
-        {'type': 'text', 'text': text.toString()},
-        {
-          'type': 'image_url',
-          'image_url': {'url': _imageDataUri(imageBytes)},
-        },
+        PromptAssistantContentPart.text(text.toString()),
+        PromptAssistantContentPart.image(
+          bytes: imageBytes,
+          mimeType: _detectImageMime(imageBytes),
+        ),
       ],
       userInstruction: '请严格输出单行英文提示词，不要 Markdown，不要解释。优先保留可见元素，避免编造不可见角色信息。',
+    );
+  }
+
+  Stream<StreamingChunk> customPrompt(
+    String currentPrompt, {
+    required String sessionId,
+    required String userRequest,
+    List<PromptAssistantImageInput> images = const [],
+  }) async* {
+    final text = [
+      '当前提示词：',
+      currentPrompt.trim(),
+      '',
+      '用户需求：',
+      userRequest.trim(),
+    ].join('\n');
+
+    yield* _runTask(
+      sessionId: sessionId,
+      taskType: AssistantTaskType.custom,
+      userContent: [
+        PromptAssistantContentPart.text(text),
+        for (final image in images)
+          PromptAssistantContentPart.image(
+            bytes: image.bytes,
+            mimeType: image.mimeType,
+          ),
+      ],
+      userInstruction: '请根据用户需求修改当前图像生成提示词，只输出最终可直接使用的单行提示词。',
     );
   }
 
@@ -176,12 +205,16 @@ class PromptAssistantService {
     final routingProviderId = config.routing.providerIdFor(taskType);
     final routingModel = config.routing.modelFor(taskType);
 
-    final provider = config.providers.firstWhere(
-      (p) => p.id == routingProviderId && p.enabled,
-      orElse: () => config.providers.firstWhere(
-        (p) => p.enabled,
-        orElse: () => throw StateError('没有可用的已启用服务商'),
-      ),
+    final enabledProviders = config.providers.where((p) => p.enabled).toList();
+    if (enabledProviders.isEmpty) {
+      throw StateError(
+        '没有可用的提示词助手服务商，请先在设置中添加并启用 OpenAI、Anthropic、Gemini、DeepSeek、LM Studio 或其他兼容服务商。',
+      );
+    }
+
+    final provider = enabledProviders.firstWhere(
+      (p) => p.id == routingProviderId,
+      orElse: () => enabledProviders.first,
     );
 
     final taskModels = config.modelsForProviderTask(
@@ -198,12 +231,10 @@ class PromptAssistantService {
             (m) => m.name == routingModel,
             orElse: () => taskModels.isNotEmpty
                 ? taskModels.first
-                : ModelConfig(
-                    providerId: provider.id,
-                    name: routingModel,
-                    displayName: routingModel,
-                    forTask: taskType,
-                    isDefault: true,
+                : _fallbackModelForProvider(
+                    provider: provider,
+                    routingModel: routingModel,
+                    taskType: taskType,
                   ),
           );
 
@@ -221,26 +252,94 @@ class PromptAssistantService {
       userInstruction,
     ].join('\n\n');
 
-    final messages = <Map<String, dynamic>>[
-      {'role': 'system', 'content': systemPrompt},
-      {'role': 'user', 'content': userContent},
-    ];
-
-    yield* _apiClient.streamChat(
-      sessionId: sessionId,
-      provider: provider,
-      model: model.name,
-      messages: messages,
-      apiKey: apiKey,
+    yield* _apiClient.complete(
+      request: PromptAssistantRequest(
+        sessionId: sessionId,
+        provider: provider,
+        model: model.name,
+        systemPrompt: systemPrompt,
+        userParts: _toContentParts(userContent),
+        apiKey: apiKey,
+      ),
     );
   }
 
-  String _imageDataUri(Uint8List imageBytes) {
-    final mime = _detectImageMime(imageBytes);
-    return 'data:$mime;base64,${base64Encode(imageBytes)}';
+  ModelConfig _fallbackModelForProvider({
+    required ProviderConfig provider,
+    required String routingModel,
+    required AssistantTaskType taskType,
+  }) {
+    final trimmed = routingModel.trim();
+    if (trimmed.isNotEmpty) {
+      return ModelConfig(
+        providerId: provider.id,
+        name: trimmed,
+        displayName: trimmed,
+        forTask: taskType,
+        isDefault: true,
+      );
+    }
+    final presetModels = provider.preset?.defaultModelNames ?? const [];
+    if (presetModels.isNotEmpty) {
+      return ModelConfig(
+        providerId: provider.id,
+        name: presetModels.first,
+        displayName: presetModels.first,
+        forTask: taskType,
+        isDefault: true,
+      );
+    }
+    throw StateError(
+      '服务商 ${provider.name} 尚未配置模型，请先拉取模型列表或手动添加模型。',
+    );
+  }
+
+  List<PromptAssistantContentPart> _toContentParts(Object userContent) {
+    if (userContent is String) {
+      return [PromptAssistantContentPart.text(userContent)];
+    }
+    if (userContent is List<PromptAssistantContentPart>) {
+      return userContent;
+    }
+    if (userContent is List) {
+      final parts = <PromptAssistantContentPart>[];
+      for (final item in userContent) {
+        if (item is PromptAssistantContentPart) {
+          parts.add(item);
+        } else if (item is Map<String, dynamic>) {
+          final type = item['type'];
+          if (type == 'text') {
+            parts.add(PromptAssistantContentPart.text('${item['text'] ?? ''}'));
+          } else if (type == 'image_url') {
+            final imageUrl = item['image_url'];
+            final url = imageUrl is Map ? imageUrl['url'] : null;
+            if (url is String) {
+              final parsed = parseDataUriImage(url);
+              if (parsed != null) {
+                parts.add(
+                  PromptAssistantContentPart.image(
+                    bytes: parsed.bytes,
+                    mimeType: parsed.mimeType,
+                  ),
+                );
+              }
+            }
+          }
+        } else {
+          final text = item.toString();
+          if (text.trim().isNotEmpty) {
+            parts.add(PromptAssistantContentPart.text(text));
+          }
+        }
+      }
+      return parts;
+    }
+    return [PromptAssistantContentPart.text(userContent.toString())];
   }
 
   String _detectImageMime(Uint8List bytes) {
+    final detected = detectImageMime(bytes);
+    if (detected != null) return detected;
     if (bytes.length >= 8 &&
         bytes[0] == 0x89 &&
         bytes[1] == 0x50 &&

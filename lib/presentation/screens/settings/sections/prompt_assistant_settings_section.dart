@@ -140,7 +140,9 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
     return _buildTaskRouteCard(
       context: context,
       title: taskType.label,
-      providerValue: providerId,
+      providerValue: providerItems.any((item) => item.value == providerId)
+          ? providerId
+          : null,
       providerItems: providerItems,
       onProviderChanged: (value) {
         if (value == null) return;
@@ -189,7 +191,7 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
   Widget _buildTaskRouteCard({
     required BuildContext context,
     required String title,
-    required String providerValue,
+    required String? providerValue,
     required List<DropdownMenuItem<String>> providerItems,
     required ValueChanged<String?> onProviderChanged,
     required String? modelValue,
@@ -247,7 +249,9 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
       children: [
         ListTile(
           title: const Text('服务商管理'),
-          subtitle: const Text('支持 pollinations / OpenAI-compatible / Ollama'),
+          subtitle: const Text(
+            '支持 OpenAI Chat / Responses、Anthropic、Gemini、DeepSeek、LM Studio、Ollama、Pollinations 和自定义兼容端点',
+          ),
           trailing: IconButton(
             icon: const Icon(Icons.add),
             onPressed: () => _showProviderDialog(context, notifier, state),
@@ -278,14 +282,17 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${provider.type.name}  ${provider.baseUrl}',
+                        '${provider.protocol.label}  ${provider.baseUrl}',
                         style: Theme.of(context).textTheme.bodyMedium,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        hasApiKey ? 'API Key: 已配置' : 'API Key: 未配置',
+                        [
+                          hasApiKey ? 'API Key: 已配置' : 'API Key: 未配置',
+                          provider.allowImageInput ? '支持图片输入' : '仅文本',
+                        ].join(' · '),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -336,13 +343,11 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
                             provider: provider,
                           ),
                         ),
-                        if (provider.id != 'pollinations')
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: '删除服务商',
-                            onPressed: () =>
-                                notifier.deleteProvider(provider.id),
-                          ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          tooltip: '删除服务商',
+                          onPressed: () => notifier.deleteProvider(provider.id),
+                        ),
                       ],
                     ),
                   ),
@@ -476,11 +481,41 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
     PromptAssistantConfigState state, {
     ProviderConfig? provider,
   }) async {
-    final idController = TextEditingController(text: provider?.id ?? '');
     final nameController = TextEditingController(text: provider?.name ?? '');
     final baseController = TextEditingController(text: provider?.baseUrl ?? '');
     final keyController = TextEditingController();
-    var type = provider?.type ?? ProviderType.openaiCompatible;
+    var preset = provider?.preset ??
+        (provider == null
+            ? ProviderPreset.openaiChat
+            : provider.protocol == ProviderProtocol.openaiResponses
+                ? ProviderPreset.openaiCompatibleResponses
+                : ProviderPreset.openaiCompatibleChat);
+    var allowImageInput =
+        provider?.allowImageInput ?? preset.defaultAllowImageInput;
+
+    void applyProtocol(ProviderPreset value) {
+      final previousPreset = preset;
+      final currentName = nameController.text.trim();
+      final currentBaseUrl = baseController.text.trim();
+      preset = value;
+      allowImageInput = value.defaultAllowImageInput;
+      if (provider == null) {
+        nameController.text = value.defaultName;
+        baseController.text = value.defaultBaseUrl;
+        return;
+      }
+      if (currentName.isEmpty || currentName == previousPreset.defaultName) {
+        nameController.text = value.defaultName;
+      }
+      if (currentBaseUrl.isEmpty ||
+          currentBaseUrl == previousPreset.defaultBaseUrl) {
+        baseController.text = value.defaultBaseUrl;
+      }
+    }
+
+    if (provider == null) {
+      applyProtocol(preset);
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -494,32 +529,38 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextField(
-                      controller: idController,
-                      decoration: const InputDecoration(labelText: 'ID'),
-                      enabled: provider == null,
-                    ),
-                    TextField(
                       controller: nameController,
                       decoration: const InputDecoration(labelText: '名称'),
                     ),
-                    DropdownButtonFormField<ProviderType>(
-                      initialValue: type,
-                      items: ProviderType.values
+                    DropdownButtonFormField<ProviderPreset>(
+                      initialValue: preset,
+                      items: ProviderPreset.values
                           .map(
                             (e) => DropdownMenuItem(
                               value: e,
-                              child: Text(e.name),
+                              child: Text(e.label),
                             ),
                           )
                           .toList(),
                       onChanged: (value) {
-                        if (value != null) setState(() => type = value);
+                        if (value != null) {
+                          setState(() => applyProtocol(value));
+                        }
                       },
-                      decoration: const InputDecoration(labelText: '类型'),
+                      decoration: const InputDecoration(labelText: '协议'),
                     ),
                     TextField(
                       controller: baseController,
                       decoration: const InputDecoration(labelText: 'Base URL'),
+                    ),
+                    SwitchListTile(
+                      value: allowImageInput,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('允许发送图片输入'),
+                      subtitle: const Text('仅在模型和服务商实际支持视觉输入时启用'),
+                      onChanged: (value) {
+                        setState(() => allowImageInput = value);
+                      },
                     ),
                     TextField(
                       controller: keyController,
@@ -548,15 +589,23 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
 
     if (confirmed != true) return;
 
-    final resolvedId = (provider?.id ?? idController.text.trim());
+    final resolvedName = nameController.text.trim().isEmpty
+        ? preset.defaultName
+        : nameController.text.trim();
+    final resolvedId = provider?.id ??
+        _uniqueProviderId(
+          state,
+          _providerIdFromName(resolvedName, fallback: preset.defaultId),
+        );
     final next = ProviderConfig(
       id: resolvedId,
-      name: nameController.text.trim().isEmpty
-          ? resolvedId
-          : nameController.text.trim(),
-      type: type,
+      name: resolvedName,
+      type: preset.legacyType,
+      protocol: preset.defaultProtocol,
+      preset: preset,
       baseUrl: baseController.text.trim(),
       enabled: provider?.enabled ?? true,
+      allowImageInput: allowImageInput,
     );
 
     await notifier.upsertProvider(next);
@@ -570,17 +619,42 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
         (m) => m.providerId == resolvedId && m.forTask == taskType,
       );
       if (!hasModel) {
+        final defaultModels = next.preset?.defaultModelNames ?? const [];
+        final modelName =
+            defaultModels.isNotEmpty ? defaultModels.first : 'default-model';
         await notifier.upsertModel(
           ModelConfig(
             providerId: resolvedId,
-            name: 'default-model',
-            displayName: 'default-model',
+            name: modelName,
+            displayName: modelName,
             forTask: taskType,
             isDefault: true,
           ),
         );
       }
     }
+  }
+
+  String _uniqueProviderId(PromptAssistantConfigState state, String baseId) {
+    if (!state.providers.any((provider) => provider.id == baseId)) {
+      return baseId;
+    }
+    var index = 2;
+    while (
+        state.providers.any((provider) => provider.id == '${baseId}_$index')) {
+      index++;
+    }
+    return '${baseId}_$index';
+  }
+
+  String _providerIdFromName(String name, {required String fallback}) {
+    final normalized = name
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return normalized.isEmpty ? fallback : normalized;
   }
 
   Future<void> _showConnectionDialog(
@@ -591,6 +665,7 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
     final baseController = TextEditingController(text: provider.baseUrl);
     final keyController = TextEditingController();
     var clearApiKey = false;
+    var allowImageInput = provider.allowImageInput;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -627,6 +702,19 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
                         setState(() => clearApiKey = value ?? false);
                       },
                     ),
+                    SwitchListTile(
+                      value: allowImageInput,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('允许发送图片输入'),
+                      subtitle: Text(
+                        provider.protocol.supportsImagePayload
+                            ? '当前协议支持图片载荷，仍需模型本身支持视觉输入'
+                            : '当前协议默认仅文本，开启后也可能被服务端拒绝',
+                      ),
+                      onChanged: (value) {
+                        setState(() => allowImageInput = value);
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -649,7 +737,10 @@ class PromptAssistantSettingsSection extends ConsumerWidget {
     if (confirmed != true) return;
 
     await notifier.upsertProvider(
-      provider.copyWith(baseUrl: baseController.text.trim()),
+      provider.copyWith(
+        baseUrl: baseController.text.trim(),
+        allowImageInput: allowImageInput,
+      ),
     );
 
     if (clearApiKey) {

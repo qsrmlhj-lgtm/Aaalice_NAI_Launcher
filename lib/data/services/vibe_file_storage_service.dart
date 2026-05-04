@@ -107,8 +107,10 @@ class VibeFileStorageService {
           const <String, dynamic>{},
     );
     importInfo['model'] = defaultModel;
-    importInfo['information_extracted'] = vibe.infoExtracted;
-    importInfo['strength'] = vibe.strength;
+    final vibeForFile = vibe.normalizedForLibraryStorage();
+
+    importInfo['information_extracted'] = vibeForFile.infoExtracted;
+    importInfo['strength'] = vibeForFile.strength;
 
     final encodings = Map<String, dynamic>.from(
       (jsonData['encodings'] as Map?)?.cast<String, dynamic>() ??
@@ -116,7 +118,7 @@ class VibeFileStorageService {
     );
     encodings[defaultModel] = <String, dynamic>{
       'vibe': <String, dynamic>{
-        'encoding': vibe.vibeEncoding,
+        'encoding': vibeForFile.vibeEncoding,
       },
     };
 
@@ -128,11 +130,12 @@ class VibeFileStorageService {
       ..['importInfo'] = importInfo
       ..['encodings'] = encodings;
 
-    if (vibe.rawImageData != null && vibe.rawImageData!.isNotEmpty) {
-      jsonData['image'] = base64Encode(vibe.rawImageData!);
+    if (vibeForFile.rawImageData != null &&
+        vibeForFile.rawImageData!.isNotEmpty) {
+      jsonData['image'] = base64Encode(vibeForFile.rawImageData!);
     }
-    if (vibe.thumbnail != null && vibe.thumbnail!.isNotEmpty) {
-      jsonData['thumbnail'] = base64Encode(vibe.thumbnail!);
+    if (vibeForFile.thumbnail != null && vibeForFile.thumbnail!.isNotEmpty) {
+      jsonData['thumbnail'] = base64Encode(vibeForFile.thumbnail!);
     }
 
     await file
@@ -746,15 +749,18 @@ class VibeFileStorageService {
     required String displayName,
     required String defaultModel,
   }) {
+    final vibeForFile = vibe.normalizedForLibraryStorage();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final idSource = vibe.vibeEncoding.isNotEmpty
-        ? vibe.vibeEncoding
-        : base64Encode(vibe.rawImageData ?? vibe.thumbnail ?? Uint8List(0));
+    final idSource = vibeForFile.vibeEncoding.isNotEmpty
+        ? vibeForFile.vibeEncoding
+        : base64Encode(
+            vibeForFile.rawImageData ?? vibeForFile.thumbnail ?? Uint8List(0),
+          );
     final id =
         base64Url.encode(utf8.encode('$idSource|$timestamp')).substring(0, 32);
 
     final isRawImage =
-        vibe.sourceType == VibeSourceType.rawImage && vibe.rawImageData != null;
+        !vibeForFile.hasVibeEncoding && vibeForFile.rawImageData != null;
     final type = isRawImage ? 'image' : 'encoding';
 
     final data = <String, dynamic>{
@@ -768,30 +774,30 @@ class VibeFileStorageService {
           ? {
               defaultModel: {
                 'vibe': {
-                  'encoding': vibe.vibeEncoding,
+                  'encoding': vibeForFile.vibeEncoding,
                 },
               },
             }
           : <String, dynamic>{},
       'importInfo': {
         'model': defaultModel,
-        'information_extracted': vibe.infoExtracted,
-        'strength': vibe.strength,
+        'information_extracted': vibeForFile.infoExtracted,
+        'strength': vibeForFile.strength,
       },
     };
 
     if (isRawImage) {
-      data['image'] = base64Encode(vibe.rawImageData!);
+      data['image'] = base64Encode(vibeForFile.rawImageData!);
     }
 
     if (!isRawImage &&
-        vibe.rawImageData != null &&
-        vibe.rawImageData!.isNotEmpty) {
-      data['image'] = base64Encode(vibe.rawImageData!);
+        vibeForFile.rawImageData != null &&
+        vibeForFile.rawImageData!.isNotEmpty) {
+      data['image'] = base64Encode(vibeForFile.rawImageData!);
     }
 
-    if (vibe.thumbnail != null && vibe.thumbnail!.isNotEmpty) {
-      data['thumbnail'] = base64Encode(vibe.thumbnail!);
+    if (vibeForFile.thumbnail != null && vibeForFile.thumbnail!.isNotEmpty) {
+      data['thumbnail'] = base64Encode(vibeForFile.thumbnail!);
     }
 
     return const JsonEncoder.withIndent('  ').convert(data);

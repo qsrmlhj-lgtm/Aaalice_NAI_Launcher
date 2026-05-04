@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -10,6 +11,20 @@ import 'app_logger.dart';
 /// NAI API 工具类
 /// 提供 NovelAI API 相关的共享静态方法
 class NAIApiUtils {
+  static final Expando<bool> _normalizedPreciseReferencePngCache =
+      Expando<bool>('normalizedPreciseReferencePng');
+
+  /// 标记该字节对象已经是 Director Reference 可直接提交的 PNG。
+  static Uint8List markNormalizedPreciseReferencePng(Uint8List imageBytes) {
+    _normalizedPreciseReferencePngCache[imageBytes] = true;
+    return imageBytes;
+  }
+
+  /// 当前会话中是否已确认该字节对象是规范化后的 Director Reference PNG。
+  static bool isKnownNormalizedPreciseReferencePng(Uint8List imageBytes) {
+    return _normalizedPreciseReferencePngCache[imageBytes] == true;
+  }
+
   /// 将 double 转换为 JSON 数值（整数或浮点数）
   /// 如果是整数值（如 5.0），返回 int；否则返回 double
   static num toJsonNumber(double value) {
@@ -116,7 +131,14 @@ class NAIApiUtils {
       'Utils',
     );
 
-    return pngBytes;
+    return markNormalizedPreciseReferencePng(pngBytes);
+  }
+
+  /// 在后台 isolate 中执行 Director Reference 图片规范化，避免阻塞 UI isolate。
+  static Future<Uint8List> ensurePngFormatAsync(Uint8List imageBytes) async {
+    final normalizedBytes =
+        await Isolate.run(() => ensurePngFormat(imageBytes));
+    return markNormalizedPreciseReferencePng(normalizedBytes);
   }
 
   /// 格式化 DioException 为错误代码（供 UI 层本地化显示）

@@ -12,10 +12,12 @@ import '../../providers/fixed_tags_provider.dart';
 import '../../providers/reverse_prompt_provider.dart';
 import '../../providers/tag_library_page_provider.dart';
 import '../../widgets/tag_library/tag_library_picker_dialog.dart';
+import '../models/prompt_assistant_models.dart';
 import '../providers/prompt_assistant_config_provider.dart';
 import '../providers/prompt_assistant_history_provider.dart';
 import '../providers/prompt_assistant_state_provider.dart';
 import '../services/prompt_assistant_service.dart';
+import 'prompt_assistant_custom_dialog.dart';
 
 class PromptAssistantOverlay extends ConsumerStatefulWidget {
   const PromptAssistantOverlay({
@@ -90,6 +92,39 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
         sessionId: widget.sessionId,
       ),
     );
+  }
+
+  Future<void> _runCustom() async {
+    final inputText = _assistantInputText();
+    final provider = _activeProviderForTask(AssistantTaskType.custom);
+    final result = await showDialog<PromptAssistantCustomDialogResult>(
+      context: context,
+      builder: (context) => PromptAssistantCustomDialog(
+        currentPrompt: inputText,
+        allowImages: provider?.allowImageInput ?? false,
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    if (result.images.isNotEmpty && provider?.allowImageInput != true) {
+      if (mounted) {
+        AppToast.warning(context, '当前自定义任务服务商未启用图片输入');
+      }
+      return;
+    }
+    await _runCustomAction(inputText, result);
+  }
+
+  ProviderConfig? _activeProviderForTask(AssistantTaskType taskType) {
+    final config = ref.read(promptAssistantConfigProvider);
+    final providerId = config.routing.providerIdFor(taskType);
+    final enabledProviders = config.providers.where((p) => p.enabled).toList();
+    if (enabledProviders.isEmpty) return null;
+    return enabledProviders.cast<ProviderConfig?>().firstWhere(
+          (provider) => provider?.id == providerId,
+          orElse: () => enabledProviders.first,
+        );
   }
 
   Future<void> _runCharacterReplace() async {
@@ -169,6 +204,63 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
 
     await _streamSub?.cancel();
     _streamSub = builder(service, text).listen(
+      (chunk) {
+        if (chunk.done == true) return;
+        final delta = chunk.delta as String? ?? '';
+        if (delta.isEmpty) return;
+        buffer.write(delta);
+      },
+      onError: (e) {
+        stateNotifier.setError(widget.sessionId, e.toString());
+        if (mounted) AppToast.error(context, '助手请求失败: $e');
+      },
+      onDone: () {
+        if (buffer.isNotEmpty) {
+          final finalText = buffer.toString();
+          widget.controller.text = finalText;
+          widget.controller.selection =
+              TextSelection.collapsed(offset: widget.controller.text.length);
+        }
+        stateNotifier.finishProcessing(widget.sessionId);
+        final afterText = widget.controller.text;
+        ref.read(promptAssistantHistoryProvider.notifier).recordExternalChange(
+              widget.sessionId,
+              before: beforeText,
+              after: afterText,
+            );
+        ref.read(promptAssistantHistoryProvider.notifier).push(
+              widget.sessionId,
+              afterText,
+            );
+      },
+      cancelOnError: true,
+    );
+  }
+
+  Future<void> _runCustomAction(
+    String inputText,
+    PromptAssistantCustomDialogResult result,
+  ) async {
+    final beforeText = widget.controller.text;
+    ref
+        .read(promptAssistantHistoryProvider.notifier)
+        .push(widget.sessionId, beforeText);
+
+    final stateNotifier = ref.read(promptAssistantStateProvider.notifier);
+    stateNotifier.startProcessing(widget.sessionId, '自定义处理中');
+
+    final service = ref.read(promptAssistantServiceProvider);
+    final buffer = StringBuffer();
+
+    await _streamSub?.cancel();
+    _streamSub = service
+        .customPrompt(
+      inputText,
+      sessionId: widget.sessionId,
+      userRequest: result.userRequest,
+      images: result.images,
+    )
+        .listen(
       (chunk) {
         if (chunk.done == true) return;
         final delta = chunk.delta as String? ?? '';
@@ -475,6 +567,11 @@ class _PromptAssistantOverlayState extends ConsumerState<PromptAssistantOverlay>
                     icon: Icons.auto_fix_high,
                     tooltip: '优化',
                     onPressed: isProcessing ? null : _runOptimize,
+                  ),
+                  _miniButton(
+                    icon: Icons.tune_rounded,
+                    tooltip: '自定义',
+                    onPressed: isProcessing ? null : _runCustom,
                   ),
                   _miniButton(
                     icon: Icons.manage_accounts_rounded,

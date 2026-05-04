@@ -8,7 +8,6 @@ import 'package:file_picker/file_picker.dart';
 import '../../../../../core/enums/precise_ref_type.dart';
 import '../../../../../core/extensions/precise_ref_type_extensions.dart';
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../core/utils/nai_api_utils.dart';
 import '../../../../data/models/image/image_params.dart';
 import '../../../providers/image_generation_provider.dart';
 import '../../../widgets/common/app_toast.dart';
@@ -251,14 +250,10 @@ class _PreciseReferencePanelState extends ConsumerState<PreciseReferencePanel> {
         }
 
         if (bytes != null) {
-          // 转换为 PNG 格式
-          final pngBytes = NAIApiUtils.ensurePngFormat(bytes);
-
-          // 添加 Precise Reference，使用用户选择的类型
-          ref
+          await ref
               .read(generationParamsNotifierProvider.notifier)
-              .addPreciseReference(
-                pngBytes,
+              .addPreciseReferenceFromImage(
+                bytes,
                 type: selectedType,
                 strength: 0.8,
                 fidelity: 1.0,

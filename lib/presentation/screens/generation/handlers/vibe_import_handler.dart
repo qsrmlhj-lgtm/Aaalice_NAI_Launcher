@@ -413,11 +413,7 @@ class VibeImportHandler {
 
           if (encoding != null) {
             encodedVibes.add(
-              vibe.copyWith(
-                vibeEncoding: encoding,
-                sourceType: VibeSourceType.naiv4vibe,
-                rawImageData: null, // 编码后不需要原始图片数据
-              ),
+              buildEncodedImportVibe(vibe, encoding),
             );
             encodedCount++;
           } else {
@@ -732,12 +728,7 @@ class VibeImportHandler {
     final l10n = context.l10n;
 
     // 检查是否有未编码的原始图片
-    final unencodedVibes = vibes
-        .where(
-          (v) =>
-              v.sourceType == VibeSourceType.rawImage && v.vibeEncoding.isEmpty,
-        )
-        .toList();
+    final unencodedVibes = vibes.where((v) => v.vibeEncoding.isEmpty).toList();
 
     if (unencodedVibes.isNotEmpty) {
       AppToast.warning(
@@ -872,13 +863,24 @@ class VibeImportHandler {
       try {
         var savedCount = 0;
         var reusedCount = 0;
+        final generationParams = ref.read(generationParamsNotifierProvider);
+        final paramsNotifier =
+            ref.read(generationParamsNotifierProvider.notifier);
 
         for (final vibe in vibes) {
-          // 使用用户设置的参数创建新的 vibe
-          final vibeWithParams = vibe.copyWith(
+          final preparedVibe =
+              await paramsNotifier.prepareVibeForLibraryParamSave(
+            vibe,
             strength: strength,
             infoExtracted: infoExtracted,
+            model: generationParams.model,
           );
+          if (preparedVibe == null) {
+            throw StateError('Vibe 重新编码失败: ${vibe.displayName}');
+          }
+
+          // 使用用户设置的参数创建新的 vibe
+          final vibeWithParams = preparedVibe.normalizedForLibraryStorage();
 
           final existingEntry = await storageService.findEntryByName(name);
 
@@ -1002,4 +1004,11 @@ bool shouldShowInfoExtractedForLibrarySave(List<VibeReference> vibes) {
     return false;
   }
   return vibes.every((vibe) => vibe.canReencodeFromRawSource);
+}
+
+VibeReference buildEncodedImportVibe(
+  VibeReference vibe,
+  String encoding,
+) {
+  return vibe.withEncodedVibe(encoding);
 }

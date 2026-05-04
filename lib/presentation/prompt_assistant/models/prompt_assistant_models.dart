@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-enum AssistantTaskType { llm, translate, reverse, characterReplace }
+enum AssistantTaskType { llm, translate, reverse, characterReplace, custom }
 
 extension AssistantTaskTypeLabel on AssistantTaskType {
   String get label {
@@ -13,39 +13,330 @@ extension AssistantTaskTypeLabel on AssistantTaskType {
         return '反推';
       case AssistantTaskType.characterReplace:
         return '角色替换';
+      case AssistantTaskType.custom:
+        return '自定义';
     }
   }
 }
 
+// Legacy storage/UI type. New code should prefer ProviderProtocol and
+// ProviderPreset, but this remains to decode existing saved configs.
 enum ProviderType { pollinations, openaiCompatible, ollama }
+
+enum ProviderProtocol {
+  openaiChatCompletions,
+  openaiResponses,
+  anthropicMessages,
+  geminiGenerateContent,
+  ollamaChatCompletions,
+}
+
+extension ProviderProtocolLabel on ProviderProtocol {
+  String get label {
+    switch (this) {
+      case ProviderProtocol.openaiChatCompletions:
+        return 'OpenAI Chat Completions';
+      case ProviderProtocol.openaiResponses:
+        return 'OpenAI Responses';
+      case ProviderProtocol.anthropicMessages:
+        return 'Anthropic Messages';
+      case ProviderProtocol.geminiGenerateContent:
+        return 'Gemini generateContent';
+      case ProviderProtocol.ollamaChatCompletions:
+        return 'Ollama Chat Completions';
+    }
+  }
+
+  bool get supportsModelList => true;
+
+  bool get supportsImagePayload {
+    switch (this) {
+      case ProviderProtocol.openaiChatCompletions:
+      case ProviderProtocol.openaiResponses:
+      case ProviderProtocol.anthropicMessages:
+      case ProviderProtocol.geminiGenerateContent:
+        return true;
+      case ProviderProtocol.ollamaChatCompletions:
+        return false;
+    }
+  }
+}
+
+enum ProviderPreset {
+  openaiChat,
+  openaiResponses,
+  openaiCompatibleChat,
+  openaiCompatibleResponses,
+  anthropic,
+  gemini,
+  deepseek,
+  lmStudioChat,
+  lmStudioResponses,
+  ollama,
+  pollinations,
+}
+
+extension ProviderPresetDefaults on ProviderPreset {
+  String get label {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+        return 'OpenAI Chat Completions';
+      case ProviderPreset.openaiResponses:
+        return 'OpenAI Responses';
+      case ProviderPreset.openaiCompatibleChat:
+        return 'OpenAI-compatible Chat';
+      case ProviderPreset.openaiCompatibleResponses:
+        return 'OpenAI-compatible Responses';
+      case ProviderPreset.anthropic:
+        return 'Anthropic';
+      case ProviderPreset.gemini:
+        return 'Gemini';
+      case ProviderPreset.deepseek:
+        return 'DeepSeek';
+      case ProviderPreset.lmStudioChat:
+        return 'LM Studio Chat';
+      case ProviderPreset.lmStudioResponses:
+        return 'LM Studio Responses';
+      case ProviderPreset.ollama:
+        return 'Ollama';
+      case ProviderPreset.pollinations:
+        return 'Pollinations';
+    }
+  }
+
+  String get defaultId {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+        return 'openai_chat';
+      case ProviderPreset.openaiResponses:
+        return 'openai_responses';
+      case ProviderPreset.openaiCompatibleChat:
+        return 'openai_compatible_chat';
+      case ProviderPreset.openaiCompatibleResponses:
+        return 'openai_compatible_responses';
+      case ProviderPreset.anthropic:
+        return 'anthropic';
+      case ProviderPreset.gemini:
+        return 'gemini';
+      case ProviderPreset.deepseek:
+        return 'deepseek';
+      case ProviderPreset.lmStudioChat:
+        return 'lmstudio_chat';
+      case ProviderPreset.lmStudioResponses:
+        return 'lmstudio_responses';
+      case ProviderPreset.ollama:
+        return 'ollama';
+      case ProviderPreset.pollinations:
+        return 'pollinations';
+    }
+  }
+
+  String get defaultName {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+        return 'OpenAI Chat';
+      case ProviderPreset.openaiResponses:
+        return 'OpenAI Responses';
+      case ProviderPreset.openaiCompatibleChat:
+        return 'OpenAI Compatible Chat';
+      case ProviderPreset.openaiCompatibleResponses:
+        return 'OpenAI Compatible Responses';
+      case ProviderPreset.anthropic:
+        return 'Anthropic';
+      case ProviderPreset.gemini:
+        return 'Gemini';
+      case ProviderPreset.deepseek:
+        return 'DeepSeek';
+      case ProviderPreset.lmStudioChat:
+        return 'LM Studio Chat';
+      case ProviderPreset.lmStudioResponses:
+        return 'LM Studio Responses';
+      case ProviderPreset.ollama:
+        return 'Ollama';
+      case ProviderPreset.pollinations:
+        return 'pollinations.ai';
+    }
+  }
+
+  String get defaultBaseUrl {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiResponses:
+        return 'https://api.openai.com/v1';
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.openaiCompatibleResponses:
+        return '';
+      case ProviderPreset.anthropic:
+        return 'https://api.anthropic.com';
+      case ProviderPreset.gemini:
+        return 'https://generativelanguage.googleapis.com';
+      case ProviderPreset.deepseek:
+        return 'https://api.deepseek.com';
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.lmStudioResponses:
+        return 'http://localhost:1234/v1';
+      case ProviderPreset.ollama:
+        return 'http://127.0.0.1:11434/v1';
+      case ProviderPreset.pollinations:
+        return 'https://gen.pollinations.ai';
+    }
+  }
+
+  ProviderProtocol get defaultProtocol {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.deepseek:
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.pollinations:
+        return ProviderProtocol.openaiChatCompletions;
+      case ProviderPreset.openaiResponses:
+      case ProviderPreset.openaiCompatibleResponses:
+      case ProviderPreset.lmStudioResponses:
+        return ProviderProtocol.openaiResponses;
+      case ProviderPreset.anthropic:
+        return ProviderProtocol.anthropicMessages;
+      case ProviderPreset.gemini:
+        return ProviderProtocol.geminiGenerateContent;
+      case ProviderPreset.ollama:
+        return ProviderProtocol.ollamaChatCompletions;
+    }
+  }
+
+  List<String> get defaultModelNames {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiResponses:
+        return const ['gpt-4.1-mini'];
+      case ProviderPreset.anthropic:
+        return const ['claude-sonnet-4-20250514'];
+      case ProviderPreset.gemini:
+        return const ['gemini-2.5-flash'];
+      case ProviderPreset.deepseek:
+        return const ['deepseek-v4-flash', 'deepseek-v4-pro'];
+      case ProviderPreset.pollinations:
+        return const ['openai-large'];
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.openaiCompatibleResponses:
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.lmStudioResponses:
+      case ProviderPreset.ollama:
+        return const [];
+    }
+  }
+
+  bool get requiresApiKey {
+    switch (this) {
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.lmStudioResponses:
+      case ProviderPreset.ollama:
+      case ProviderPreset.pollinations:
+        return false;
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiResponses:
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.openaiCompatibleResponses:
+      case ProviderPreset.anthropic:
+      case ProviderPreset.gemini:
+      case ProviderPreset.deepseek:
+        return true;
+    }
+  }
+
+  bool get defaultAllowImageInput {
+    switch (this) {
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiResponses:
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.openaiCompatibleResponses:
+      case ProviderPreset.anthropic:
+      case ProviderPreset.gemini:
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.lmStudioResponses:
+        return true;
+      case ProviderPreset.deepseek:
+      case ProviderPreset.ollama:
+      case ProviderPreset.pollinations:
+        return false;
+    }
+  }
+
+  ProviderConfig createConfig({String? id}) {
+    final resolvedId =
+        (id == null || id.trim().isEmpty) ? defaultId : id.trim();
+    return ProviderConfig(
+      id: resolvedId,
+      name: defaultName,
+      type: legacyType,
+      protocol: defaultProtocol,
+      preset: this,
+      baseUrl: defaultBaseUrl,
+      allowImageInput: defaultAllowImageInput,
+      enabled: true,
+    );
+  }
+
+  ProviderType get legacyType {
+    switch (this) {
+      case ProviderPreset.pollinations:
+        return ProviderType.pollinations;
+      case ProviderPreset.ollama:
+        return ProviderType.ollama;
+      case ProviderPreset.openaiChat:
+      case ProviderPreset.openaiResponses:
+      case ProviderPreset.openaiCompatibleChat:
+      case ProviderPreset.openaiCompatibleResponses:
+      case ProviderPreset.anthropic:
+      case ProviderPreset.gemini:
+      case ProviderPreset.deepseek:
+      case ProviderPreset.lmStudioChat:
+      case ProviderPreset.lmStudioResponses:
+        return ProviderType.openaiCompatible;
+    }
+  }
+}
 
 class ProviderConfig {
   final String id;
   final String name;
   final ProviderType type;
+  final ProviderProtocol protocol;
+  final ProviderPreset? preset;
   final String baseUrl;
   final bool enabled;
+  final bool allowImageInput;
+
   const ProviderConfig({
     required this.id,
     required this.name,
-    required this.type,
+    this.type = ProviderType.openaiCompatible,
+    this.protocol = ProviderProtocol.openaiChatCompletions,
+    this.preset,
     required this.baseUrl,
     this.enabled = true,
+    this.allowImageInput = false,
   });
 
   ProviderConfig copyWith({
     String? id,
     String? name,
     ProviderType? type,
+    ProviderProtocol? protocol,
+    ProviderPreset? preset,
+    bool clearPreset = false,
     String? baseUrl,
     bool? enabled,
+    bool? allowImageInput,
   }) {
     return ProviderConfig(
       id: id ?? this.id,
       name: name ?? this.name,
       type: type ?? this.type,
+      protocol: protocol ?? this.protocol,
+      preset: clearPreset ? null : preset ?? this.preset,
       baseUrl: baseUrl ?? this.baseUrl,
       enabled: enabled ?? this.enabled,
+      allowImageInput: allowImageInput ?? this.allowImageInput,
     );
   }
 
@@ -53,21 +344,105 @@ class ProviderConfig {
         'id': id,
         'name': name,
         'type': type.name,
+        'protocol': protocol.name,
+        'preset': preset?.name,
         'baseUrl': baseUrl,
         'enabled': enabled,
+        'allowImageInput': allowImageInput,
       };
 
   factory ProviderConfig.fromJson(Map<String, dynamic> json) {
+    final type = ProviderType.values.firstWhere(
+      (t) => t.name == json['type'],
+      orElse: () => ProviderType.openaiCompatible,
+    );
+    final preset = _decodePreset(json['preset'] as String?);
+    final protocol = _decodeProtocol(
+      json['protocol'] as String?,
+      legacyType: type,
+      preset: preset,
+    );
     return ProviderConfig(
       id: json['id'] as String,
       name: json['name'] as String,
-      type: ProviderType.values.firstWhere(
-        (t) => t.name == json['type'],
-        orElse: () => ProviderType.openaiCompatible,
-      ),
+      type: type,
+      protocol: protocol,
+      preset: preset ?? _inferPreset(type, json['id'] as String?, protocol),
       baseUrl: json['baseUrl'] as String? ?? '',
       enabled: json['enabled'] as bool? ?? true,
+      allowImageInput: json['allowImageInput'] as bool? ??
+          (preset?.defaultAllowImageInput ?? protocol.supportsImagePayload),
     );
+  }
+
+  static ProviderPreset? _decodePreset(String? value) {
+    if (value == null || value.isEmpty) return null;
+    return ProviderPreset.values.cast<ProviderPreset?>().firstWhere(
+          (preset) => preset?.name == value,
+          orElse: () => null,
+        );
+  }
+
+  static ProviderProtocol _decodeProtocol(
+    String? value, {
+    required ProviderType legacyType,
+    required ProviderPreset? preset,
+  }) {
+    if (value != null && value.isNotEmpty) {
+      return ProviderProtocol.values.firstWhere(
+        (protocol) => protocol.name == value,
+        orElse: () => preset?.defaultProtocol ?? _protocolForLegacy(legacyType),
+      );
+    }
+    return preset?.defaultProtocol ?? _protocolForLegacy(legacyType);
+  }
+
+  static ProviderProtocol _protocolForLegacy(ProviderType type) {
+    switch (type) {
+      case ProviderType.pollinations:
+      case ProviderType.openaiCompatible:
+        return ProviderProtocol.openaiChatCompletions;
+      case ProviderType.ollama:
+        return ProviderProtocol.ollamaChatCompletions;
+    }
+  }
+
+  static ProviderPreset? _inferPreset(
+    ProviderType type,
+    String? id,
+    ProviderProtocol protocol,
+  ) {
+    if (type == ProviderType.pollinations || id == 'pollinations') {
+      return ProviderPreset.pollinations;
+    }
+    if (type == ProviderType.ollama || id == 'ollama') {
+      return ProviderPreset.ollama;
+    }
+    if (id == 'lmstudio' || id == 'lmstudio_chat') {
+      return ProviderPreset.lmStudioChat;
+    }
+    if (id == 'lmstudio_responses') {
+      return ProviderPreset.lmStudioResponses;
+    }
+    if (id == 'deepseek') {
+      return ProviderPreset.deepseek;
+    }
+    if (id == 'anthropic') {
+      return ProviderPreset.anthropic;
+    }
+    if (id == 'gemini') {
+      return ProviderPreset.gemini;
+    }
+    if (id == 'openai_responses') {
+      return ProviderPreset.openaiResponses;
+    }
+    if (id == 'openai' || id == 'openai_chat') {
+      return ProviderPreset.openaiChat;
+    }
+    if (protocol == ProviderProtocol.openaiResponses) {
+      return ProviderPreset.openaiCompatibleResponses;
+    }
+    return ProviderPreset.openaiCompatibleChat;
   }
 }
 
@@ -136,6 +511,8 @@ class TaskRoutingConfig {
   final String reverseModel;
   final String characterReplaceProviderId;
   final String characterReplaceModel;
+  final String customProviderId;
+  final String customModel;
 
   const TaskRoutingConfig({
     required this.llmProviderId,
@@ -146,6 +523,8 @@ class TaskRoutingConfig {
     required this.reverseModel,
     required this.characterReplaceProviderId,
     required this.characterReplaceModel,
+    this.customProviderId = '',
+    this.customModel = '',
   });
 
   TaskRoutingConfig copyWith({
@@ -157,6 +536,8 @@ class TaskRoutingConfig {
     String? reverseModel,
     String? characterReplaceProviderId,
     String? characterReplaceModel,
+    String? customProviderId,
+    String? customModel,
   }) {
     return TaskRoutingConfig(
       llmProviderId: llmProviderId ?? this.llmProviderId,
@@ -169,6 +550,8 @@ class TaskRoutingConfig {
           characterReplaceProviderId ?? this.characterReplaceProviderId,
       characterReplaceModel:
           characterReplaceModel ?? this.characterReplaceModel,
+      customProviderId: customProviderId ?? this.customProviderId,
+      customModel: customModel ?? this.customModel,
     );
   }
 
@@ -182,6 +565,8 @@ class TaskRoutingConfig {
         return reverseProviderId;
       case AssistantTaskType.characterReplace:
         return characterReplaceProviderId;
+      case AssistantTaskType.custom:
+        return customProviderId;
     }
   }
 
@@ -195,6 +580,8 @@ class TaskRoutingConfig {
         return reverseModel;
       case AssistantTaskType.characterReplace:
         return characterReplaceModel;
+      case AssistantTaskType.custom:
+        return customModel;
     }
   }
 
@@ -218,6 +605,8 @@ class TaskRoutingConfig {
           characterReplaceProviderId: providerId,
           characterReplaceModel: model,
         );
+      case AssistantTaskType.custom:
+        return copyWith(customProviderId: providerId, customModel: model);
     }
   }
 
@@ -230,30 +619,55 @@ class TaskRoutingConfig {
         'reverseModel': reverseModel,
         'characterReplaceProviderId': characterReplaceProviderId,
         'characterReplaceModel': characterReplaceModel,
+        'customProviderId': customProviderId,
+        'customModel': customModel,
       };
 
   factory TaskRoutingConfig.fromJson(Map<String, dynamic> json) {
+    final llmProviderId = _routingString(json, 'llmProviderId');
+    final llmModel = _routingString(json, 'llmModel');
     return TaskRoutingConfig(
-      llmProviderId: json['llmProviderId'] as String? ?? 'pollinations',
-      llmModel: json['llmModel'] as String? ?? 'openai-large',
-      translateProviderId:
-          json['translateProviderId'] as String? ?? 'pollinations',
-      translateModel: json['translateModel'] as String? ?? 'openai-large',
-      reverseProviderId: json['reverseProviderId'] as String? ??
-          json['llmProviderId'] as String? ??
-          'pollinations',
-      reverseModel: json['reverseModel'] as String? ??
-          json['llmModel'] as String? ??
-          'openai-large',
-      characterReplaceProviderId:
-          json['characterReplaceProviderId'] as String? ??
-              json['llmProviderId'] as String? ??
-              'pollinations',
-      characterReplaceModel: json['characterReplaceModel'] as String? ??
-          json['llmModel'] as String? ??
-          'openai-large',
+      llmProviderId: llmProviderId,
+      llmModel: llmModel,
+      translateProviderId: _routingString(json, 'translateProviderId'),
+      translateModel: _routingString(json, 'translateModel'),
+      reverseProviderId: _routingString(
+        json,
+        'reverseProviderId',
+        fallback: llmProviderId,
+      ),
+      reverseModel: _routingString(json, 'reverseModel', fallback: llmModel),
+      characterReplaceProviderId: _routingString(
+        json,
+        'characterReplaceProviderId',
+        fallback: llmProviderId,
+      ),
+      characterReplaceModel: _routingString(
+        json,
+        'characterReplaceModel',
+        fallback: llmModel,
+      ),
+      customProviderId: _routingString(
+        json,
+        'customProviderId',
+        fallback: llmProviderId,
+      ),
+      customModel: _routingString(json, 'customModel', fallback: llmModel),
     );
   }
+}
+
+String _routingString(
+  Map<String, dynamic> json,
+  String key, {
+  String fallback = '',
+}) {
+  final value = json[key] as String?;
+  if (value == null) {
+    return fallback;
+  }
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? fallback : trimmed;
 }
 
 class PromptRuleTemplate {
@@ -366,68 +780,19 @@ class PromptAssistantConfigState {
       enabled: true,
       desktopOverlayEnabled: true,
       streamOutput: false,
-      providers: [
-        ProviderConfig(
-          id: 'pollinations',
-          name: 'pollinations.ai',
-          type: ProviderType.pollinations,
-          baseUrl: 'https://gen.pollinations.ai',
-          enabled: true,
-        ),
-        ProviderConfig(
-          id: 'openai_custom',
-          name: 'OpenAI Compatible',
-          type: ProviderType.openaiCompatible,
-          baseUrl: 'https://api.openai.com/v1',
-          enabled: false,
-        ),
-        ProviderConfig(
-          id: 'ollama',
-          name: 'Ollama',
-          type: ProviderType.ollama,
-          baseUrl: 'http://127.0.0.1:11434/v1',
-          enabled: false,
-        ),
-      ],
-      models: [
-        ModelConfig(
-          providerId: 'pollinations',
-          name: 'openai-large',
-          displayName: 'openai-large',
-          forTask: AssistantTaskType.llm,
-          isDefault: true,
-        ),
-        ModelConfig(
-          providerId: 'pollinations',
-          name: 'openai-large',
-          displayName: 'openai-large',
-          forTask: AssistantTaskType.translate,
-          isDefault: true,
-        ),
-        ModelConfig(
-          providerId: 'pollinations',
-          name: 'openai-large',
-          displayName: 'openai-large',
-          forTask: AssistantTaskType.reverse,
-          isDefault: true,
-        ),
-        ModelConfig(
-          providerId: 'pollinations',
-          name: 'openai-large',
-          displayName: 'openai-large',
-          forTask: AssistantTaskType.characterReplace,
-          isDefault: true,
-        ),
-      ],
+      providers: [],
+      models: [],
       routing: TaskRoutingConfig(
-        llmProviderId: 'pollinations',
-        llmModel: 'openai-large',
-        translateProviderId: 'pollinations',
-        translateModel: 'openai-large',
-        reverseProviderId: 'pollinations',
-        reverseModel: 'openai-large',
-        characterReplaceProviderId: 'pollinations',
-        characterReplaceModel: 'openai-large',
+        llmProviderId: '',
+        llmModel: '',
+        translateProviderId: '',
+        translateModel: '',
+        reverseProviderId: '',
+        reverseModel: '',
+        characterReplaceProviderId: '',
+        characterReplaceModel: '',
+        customProviderId: '',
+        customModel: '',
       ),
       rules: [
         PromptRuleTemplate(
@@ -460,6 +825,14 @@ class PromptAssistantConfigState {
               '你是角色替换助手。将输入提示词中的原角色身份、发型、服装、外观替换为指定角色；保留动作、构图、背景、画风、镜头和质量词。仅输出替换后的单行提示词。',
           isDefault: true,
         ),
+        PromptRuleTemplate(
+          id: 'custom_default',
+          name: '默认自定义规则',
+          taskType: AssistantTaskType.custom,
+          content:
+              '你是提示词改写助手。根据当前提示词、用户的自由需求和可选参考图片修改提示词。只输出最终可直接使用的单行提示词，不要解释。',
+          isDefault: true,
+        ),
       ],
       providerHasApiKey: {},
     );
@@ -489,6 +862,7 @@ class PromptAssistantConfigState {
   }
 
   Map<String, dynamic> toJson() => {
+        'schemaVersion': 2,
         'enabled': enabled,
         'desktopOverlayEnabled': desktopOverlayEnabled,
         'streamOutput': false,
@@ -516,49 +890,49 @@ class PromptAssistantConfigState {
     final defaults = PromptAssistantConfigState.defaults();
 
     final providersRaw = json['providers'];
-    final providers = providersRaw is List && providersRaw.isNotEmpty
+    var providers = providersRaw is List && providersRaw.isNotEmpty
         ? providersRaw
             .map((e) => ProviderConfig.fromJson(e as Map<String, dynamic>))
             .toList()
         : defaults.providers;
 
     final modelsRaw = json['models'];
-    final decodedModels = modelsRaw is List && modelsRaw.isNotEmpty
+    var decodedModels = modelsRaw is List && modelsRaw.isNotEmpty
         ? modelsRaw
             .map((e) => ModelConfig.fromJson(e as Map<String, dynamic>))
             .toList()
         : defaults.models;
-    final models = _expandProviderModelsToAllTasks(
-      _mergeDefaultModels(decodedModels, defaults.models),
-    );
 
     var routing = TaskRoutingConfig.fromJson(
       (json['routing'] as Map?)?.cast<String, dynamic>() ??
           defaults.routing.toJson(),
     );
-    if (!providers.any((p) => p.id == routing.llmProviderId)) {
-      routing = routing.copyWith(
-        llmProviderId: defaults.routing.llmProviderId,
-        llmModel: defaults.routing.llmModel,
-      );
+
+    if (_isUntouchedLegacyPollinationsDefault(
+      providers: providers,
+      models: decodedModels,
+      routing: routing,
+      schemaVersion: json['schemaVersion'] as int?,
+    )) {
+      providers = const [];
+      decodedModels = const [];
+      routing = defaults.routing;
     }
-    if (!providers.any((p) => p.id == routing.translateProviderId)) {
-      routing = routing.copyWith(
-        translateProviderId: defaults.routing.translateProviderId,
-        translateModel: defaults.routing.translateModel,
-      );
-    }
-    if (!providers.any((p) => p.id == routing.reverseProviderId)) {
-      routing = routing.copyWith(
-        reverseProviderId: defaults.routing.reverseProviderId,
-        reverseModel: defaults.routing.reverseModel,
-      );
-    }
-    if (!providers.any((p) => p.id == routing.characterReplaceProviderId)) {
-      routing = routing.copyWith(
-        characterReplaceProviderId: defaults.routing.characterReplaceProviderId,
-        characterReplaceModel: defaults.routing.characterReplaceModel,
-      );
+
+    final models = _expandProviderModelsToAllTasks(
+      _mergeDefaultModels(decodedModels, defaults.models),
+    );
+
+    for (final taskType in AssistantTaskType.values) {
+      final providerId = routing.providerIdFor(taskType);
+      if (providerId.isNotEmpty &&
+          !providers.any((provider) => provider.id == providerId)) {
+        routing = routing.copyWithTask(
+          taskType: taskType,
+          providerId: '',
+          model: '',
+        );
+      }
     }
     routing = _normalizeRoutingModels(
       routing: routing,
@@ -583,6 +957,62 @@ class PromptAssistantConfigState {
       routing: routing,
       rules: rules,
       providerHasApiKey: const {},
+    );
+  }
+
+  static bool _isUntouchedLegacyPollinationsDefault({
+    required List<ProviderConfig> providers,
+    required List<ModelConfig> models,
+    required TaskRoutingConfig routing,
+    required int? schemaVersion,
+  }) {
+    if (schemaVersion != null) return false;
+    final providerIds = providers.map((provider) => provider.id).toSet();
+    final isSinglePollinationsDefault =
+        providerIds.length == 1 && providerIds.contains('pollinations');
+    final isOldThreeProviderDefault = providerIds.length == 3 &&
+        providerIds.contains('pollinations') &&
+        providerIds.contains('openai_custom') &&
+        providerIds.contains('ollama');
+    if (!isSinglePollinationsDefault && !isOldThreeProviderDefault) {
+      return false;
+    }
+    final pollinations = providers.firstWhere(
+      (provider) => provider.id == 'pollinations',
+    );
+    if (pollinations.enabled != true ||
+        pollinations.baseUrl != 'https://gen.pollinations.ai') {
+      return false;
+    }
+    if (isOldThreeProviderDefault) {
+      final openai = providers.firstWhere(
+        (provider) => provider.id == 'openai_custom',
+      );
+      final ollama = providers.firstWhere(
+        (provider) => provider.id == 'ollama',
+      );
+      if (openai.enabled ||
+          openai.baseUrl != 'https://api.openai.com/v1' ||
+          ollama.enabled ||
+          ollama.baseUrl != 'http://127.0.0.1:11434/v1') {
+        return false;
+      }
+    }
+    if (models.isEmpty) {
+      return false;
+    }
+    for (final taskType in AssistantTaskType.values) {
+      if (taskType == AssistantTaskType.custom) continue;
+      if (routing.providerIdFor(taskType) != 'pollinations' ||
+          routing.modelFor(taskType) != 'openai-large') {
+        return false;
+      }
+    }
+    return models.every(
+      (model) =>
+          model.providerId == 'pollinations' &&
+          model.name == 'openai-large' &&
+          model.isDefault,
     );
   }
 
@@ -644,7 +1074,8 @@ class PromptAssistantConfigState {
 
     for (final taskType in AssistantTaskType.values) {
       final providerId = next.providerIdFor(taskType);
-      if (!providers.any((provider) => provider.id == providerId)) {
+      if (providerId.isEmpty ||
+          !providers.any((provider) => provider.id == providerId)) {
         continue;
       }
 

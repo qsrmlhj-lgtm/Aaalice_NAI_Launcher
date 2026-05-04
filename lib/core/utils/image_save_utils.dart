@@ -10,7 +10,6 @@ import '../../data/services/metadata/unified_metadata_parser.dart';
 import '../constants/api_constants.dart';
 import '../enums/precise_ref_type.dart';
 import 'app_logger.dart';
-import 'prompt_semantics_utils.dart';
 
 /// 统一图像保存工具类
 ///
@@ -37,17 +36,9 @@ class ImageSaveUtils {
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
   }) {
-    final promptSemantics = buildPromptSemanticsSnapshot(
-      prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
-      model: params.model,
-      qualityToggle: params.qualityToggle,
-      ucPreset: params.ucPreset,
-    );
-
     final commentJson = <String, dynamic>{
-      'prompt': promptSemantics.effectivePrompt,
-      'uc': promptSemantics.effectiveNegativePrompt,
+      'prompt': params.prompt,
+      'uc': params.negativePrompt,
       'seed': actualSeed,
       'steps': params.steps,
       'width': params.width,
@@ -60,6 +51,9 @@ class ImageSaveUtils {
       'sampler': params.sampler,
       'sm': params.smea,
       'sm_dyn': params.smeaDyn,
+      'model': params.model,
+      'quality_toggle': params.qualityToggle,
+      'uc_preset': params.ucPreset,
       // NAI官方格式字段
       'version': params.isV4Model ? 1 : 'v3',
       'legacy_v3_extend': false,
@@ -74,7 +68,7 @@ class ImageSaveUtils {
     if (params.isV4Model) {
       commentJson['v4_prompt'] = {
         'caption': {
-          'base_caption': promptSemantics.effectivePrompt,
+          'base_caption': params.prompt,
           'char_captions': charCaptions ?? const [],
         },
         'use_coords': useCoords,
@@ -83,7 +77,7 @@ class ImageSaveUtils {
       };
       commentJson['v4_negative_prompt'] = {
         'caption': {
-          'base_caption': promptSemantics.effectiveNegativePrompt,
+          'base_caption': params.negativePrompt,
           'char_captions': charNegCaptions ?? const [],
         },
         'use_coords': false,
@@ -133,15 +127,8 @@ class ImageSaveUtils {
     required Map<String, dynamic> commentJson,
     required ImageParams params,
   }) {
-    final promptSemantics = buildPromptSemanticsSnapshot(
-      prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
-      model: params.model,
-      qualityToggle: params.qualityToggle,
-      ucPreset: params.ucPreset,
-    );
     return {
-      'Description': promptSemantics.effectivePrompt,
+      'Description': params.prompt,
       'Software': 'NovelAI',
       'Source': _getModelSourceName(params.model),
       'Comment': jsonEncode(commentJson),
@@ -171,26 +158,21 @@ class ImageSaveUtils {
             : embeddedSeed is num
                 ? embeddedSeed.toInt()
                 : params.seed);
+    final commentJson = existingMetadata?.commentJson ??
+        buildCommentJson(
+          params: params,
+          actualSeed: normalizedSeed,
+          fixedPrefixTags: fixedPrefixTags,
+          fixedSuffixTags: fixedSuffixTags,
+          charCaptions: charCaptions,
+          charNegCaptions: charNegCaptions,
+          useCoords: useCoords,
+        );
 
     return _embedNaiAlignedMetadata(
       imageBytes: imageBytes,
-      commentJson: buildCommentJson(
-        params: params,
-        actualSeed: normalizedSeed,
-        fixedPrefixTags: fixedPrefixTags,
-        fixedSuffixTags: fixedSuffixTags,
-        charCaptions: charCaptions,
-        charNegCaptions: charNegCaptions,
-        useCoords: useCoords,
-      ),
-      description: existingMetadata?.description ??
-          buildPromptSemanticsSnapshot(
-            prompt: params.prompt,
-            negativePrompt: params.negativePrompt,
-            model: params.model,
-            qualityToggle: params.qualityToggle,
-            ucPreset: params.ucPreset,
-          ).effectivePrompt,
+      commentJson: commentJson,
+      description: existingMetadata?.description ?? params.prompt,
       source: existingMetadata?.source ?? _getModelSourceName(params.model),
       software: existingMetadata?.software ?? 'NovelAI',
       useStealth: useStealth,

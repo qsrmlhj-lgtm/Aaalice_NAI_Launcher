@@ -20,6 +20,27 @@ import 'scan_config.dart' show ScanConfig;
 
 part 'unified_gallery_service.g.dart';
 
+String normalizeGalleryFilePath(String filePath) {
+  final trimmed = filePath.trim();
+  if (!Platform.isWindows) return trimmed;
+
+  var normalized = trimmed.replaceAll('/', r'\');
+  if (normalized.startsWith(r'\\?\UNC\')) {
+    normalized = r'\\' + normalized.substring(r'\\?\UNC\'.length);
+  } else if (normalized.startsWith(r'\\?\')) {
+    normalized = normalized.substring(r'\\?\'.length);
+  }
+  return normalized;
+}
+
+String galleryFilePathKey(String filePath) {
+  final normalized = normalizeGalleryFilePath(filePath);
+  return Platform.isWindows ? normalized.toLowerCase() : normalized;
+}
+
+bool galleryFilePathsEqual(String left, String right) =>
+    galleryFilePathKey(left) == galleryFilePathKey(right);
+
 /// 画廊服务接口
 ///
 /// 定义了本地画廊模块的核心操作，包括：
@@ -108,8 +129,10 @@ abstract class LocalGalleryService {
   /// [metadata] 可选的图像元数据
   ///
   /// 返回是否成功添加
-  Future<bool> addNewImageImmediately(String filePath,
-      {NaiImageMetadata? metadata});
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  });
 
   /// 获取当前过滤后的文件总数
   int get filteredCount;
@@ -180,6 +203,36 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
 
   @override
   FilterCriteria get currentFilter => _currentFilter;
+
+  String _resolveTrackedFilePath(String filePath) {
+    final normalizedPath = normalizeGalleryFilePath(filePath);
+    final targetKey = galleryFilePathKey(normalizedPath);
+    for (final file in _allFiles) {
+      if (galleryFilePathKey(file.path) == targetKey) {
+        return file.path;
+      }
+    }
+    return normalizedPath;
+  }
+
+  bool _isTrackedFilePath(String filePath) {
+    final targetKey = galleryFilePathKey(filePath);
+    return _allFiles.any((file) => galleryFilePathKey(file.path) == targetKey);
+  }
+
+  void _trackFileIfMissing(File file) {
+    if (_isTrackedFilePath(file.path)) return;
+    _allFiles.insert(0, file);
+  }
+
+  Future<void> _syncFileListsAfterFavoriteChange(File file) async {
+    _trackFileIfMissing(file);
+    if (_currentFilter.hasFilters) {
+      await applyFilter(_currentFilter);
+    } else {
+      _filteredFiles = _allFiles;
+    }
+  }
 
   // ============================================================
   // 初始化
@@ -381,16 +434,19 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   Future<void> _performIncrementalScan() async {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
-      AppLogger.w('[UGS] _performIncrementalScan: rootPath is null',
-          'LocalGalleryService');
+      AppLogger.w(
+        '[UGS] _performIncrementalScan: rootPath is null',
+        'LocalGalleryService',
+      );
       return;
     }
 
     // 检查是否已有扫描在进行中
     final scanManager = ScanStateManager.instance;
     AppLogger.i(
-        '[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath',
-        'LocalGalleryService');
+      '[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath',
+      'LocalGalleryService',
+    );
 
     if (scanManager.isScanning) {
       AppLogger.w('[UGS] 增量扫描请求被忽略：已有扫描在进行中', 'LocalGalleryService');
@@ -428,7 +484,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
       AppLogger.w(
-          '[UGS] _performFullScan: rootPath is null', 'LocalGalleryService');
+        '[UGS] _performFullScan: rootPath is null',
+        'LocalGalleryService',
+      );
       return;
     }
 
@@ -607,7 +665,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
 
   /// 从数据库记录构建元数据
   NaiImageMetadata _buildMetadataFromRecord(GalleryMetadataRecord record) {
-    return NaiImageMetadata(
+    final metadata = NaiImageMetadata(
       prompt: record.prompt,
       negativePrompt: record.negativePrompt,
       seed: record.seed,
@@ -631,6 +689,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       version: record.version,
       rawJson: record.rawJson,
     );
+    return metadata.upgradeFromRawJsonIfNeeded();
   }
 
   @override
@@ -642,7 +701,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     // 过滤出存在的文件
     final existingFiles = <File>[];
     for (final path in paths) {
-      final file = File(path);
+      final file = File(_resolveTrackedFilePath(path));
       if (await file.exists()) {
         existingFiles.add(file);
       }
@@ -802,27 +861,30 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     _ensureInitialized();
 
     try {
-      final imageId = await _dataSource.getImageIdByPath(filePath);
+      final resolvedPath = _resolveTrackedFilePath(filePath);
+      final file = File(resolvedPath);
+      final imageId = await _dataSource.getImageIdByPath(resolvedPath);
 
       if (imageId != null) {
-        await _dataSource.toggleFavorite(imageId);
-        return await _dataSource.isFavorite(imageId);
-      } else {
-        // 图片不在数据库中，先索引
-        final file = File(filePath);
-        if (await file.exists()) {
-          final stat = await file.stat();
-          final fileName = filePath.split(Platform.pathSeparator).last;
-          final newId = await _dataSource.upsertImage(
-            filePath: filePath,
-            fileName: fileName,
-            fileSize: stat.size,
-            createdAt: stat.changed,
-            modifiedAt: stat.modified,
-          );
-          await _dataSource.toggleFavorite(newId);
-          return true;
-        }
+        final isFavorite = await _dataSource.toggleFavorite(imageId);
+        await _syncFileListsAfterFavoriteChange(file);
+        return isFavorite;
+      }
+
+      // 图片不在数据库中，先按画廊可见路径索引，避免历史路径和扫描路径分裂。
+      if (await file.exists()) {
+        final stat = await file.stat();
+        final fileName = p.basename(resolvedPath);
+        final newId = await _dataSource.upsertImage(
+          filePath: resolvedPath,
+          fileName: fileName,
+          fileSize: stat.size,
+          createdAt: stat.changed,
+          modifiedAt: stat.modified,
+        );
+        final isFavorite = await _dataSource.toggleFavorite(newId);
+        await _syncFileListsAfterFavoriteChange(file);
+        return isFavorite;
       }
 
       return false;
@@ -840,7 +902,8 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     _ensureInitialized();
 
     try {
-      final imageId = await _dataSource.getImageIdByPath(filePath);
+      final imageId =
+          await _dataSource.getImageIdByPath(_resolveTrackedFilePath(filePath));
       if (imageId != null) {
         return await _dataSource.isFavorite(imageId);
       }
@@ -883,28 +946,36 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   ///
   /// 返回是否成功添加
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-      {NaiImageMetadata? metadata}) async {
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) async {
     _ensureInitialized();
 
     try {
-      final file = File(filePath);
+      final normalizedPath = normalizeGalleryFilePath(filePath);
+      final file = File(normalizedPath);
       if (!await file.exists()) {
-        AppLogger.w('[AddNewImage] File does not exist: $filePath',
-            'LocalGalleryService');
+        AppLogger.w(
+          '[AddNewImage] File does not exist: $filePath',
+          'LocalGalleryService',
+        );
         return false;
       }
 
       // 检查是否已存在
-      final existingIndex = _allFiles.indexWhere((f) => f.path == filePath);
+      final existingIndex =
+          _allFiles.indexWhere((f) => galleryFilePathsEqual(f.path, file.path));
       if (existingIndex != -1) {
-        AppLogger.d('[AddNewImage] File already exists in gallery: $filePath',
-            'LocalGalleryService');
+        AppLogger.d(
+          '[AddNewImage] File already exists in gallery: $filePath',
+          'LocalGalleryService',
+        );
         return false;
       }
 
       final stat = await file.stat();
-      final fileName = filePath.split(Platform.pathSeparator).last;
+      final fileName = p.basename(file.path);
 
       // 1. 插入/更新数据库（使用 upsert）
       final metadataStatus = metadata != null && metadata.hasData
@@ -912,7 +983,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
           : MetadataStatus.none;
 
       final imageId = await _dataSource.upsertImage(
-        filePath: filePath,
+        filePath: file.path,
         fileName: fileName,
         fileSize: stat.size,
         width: metadata?.width,
@@ -930,7 +1001,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       // 2. 如果有元数据，保存到数据库
       if (metadata != null && metadata.hasData) {
         await _dataSource.upsertMetadata(imageId, metadata);
-        ImageMetadataService().cacheMetadata(filePath, metadata);
+        ImageMetadataService().cacheMetadata(file.path, metadata);
       }
 
       // 3. 添加到 _allFiles 列表开头（因为是新文件，修改时间最新）
@@ -944,12 +1015,17 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       }
 
       AppLogger.i(
-          '[AddNewImage] Added new image immediately: $fileName (ID: $imageId)',
-          'LocalGalleryService');
+        '[AddNewImage] Added new image immediately: $fileName (ID: $imageId)',
+        'LocalGalleryService',
+      );
       return true;
     } catch (e, stack) {
-      AppLogger.e('[AddNewImage] Failed to add new image: $filePath', e, stack,
-          'LocalGalleryService');
+      AppLogger.e(
+        '[AddNewImage] Failed to add new image: $filePath',
+        e,
+        stack,
+        'LocalGalleryService',
+      );
       return false;
     }
   }
@@ -1155,8 +1231,10 @@ class ErrorGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwError();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-          {NaiImageMetadata? metadata}) =>
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) =>
       _throwError();
 
   @override
@@ -1228,8 +1306,10 @@ class _PlaceholderGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwNotInitialized();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-          {NaiImageMetadata? metadata}) =>
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) =>
       _throwNotInitialized();
 
   @override

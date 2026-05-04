@@ -172,7 +172,7 @@ void main() {
     final initialCallCount = _FakePromptTokenEncoder.callCount;
 
     container.read(generationParamsNotifierProvider.notifier).addVibeReference(
-          VibeReference(
+          const VibeReference(
             displayName: 'vibe',
             vibeEncoding: 'encoded',
             strength: 0.6,

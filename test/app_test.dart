@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -300,12 +301,30 @@ void main() {
   });
 
   group('File explorer helpers', () {
-    test('uses a separate Explorer select switch for paths with spaces', () {
+    test('keeps a split Explorer select fallback for paths with spaces', () {
       const filePath = r'C:\Users\alice\NAI Launcher\history image.png';
 
       expect(
         FileExplorerUtils.windowsRevealFileArguments(filePath),
         ['/select,', filePath],
+      );
+    });
+
+    test('normalizes extended-length drive paths for Windows Explorer', () {
+      expect(
+        FileExplorerUtils.normalizeWindowsExplorerPath(
+          r'\\?\C:\Users\alice\NAI Launcher\history image.png',
+        ),
+        r'C:\Users\alice\NAI Launcher\history image.png',
+      );
+    });
+
+    test('normalizes extended-length UNC paths for Windows Explorer', () {
+      expect(
+        FileExplorerUtils.normalizeWindowsExplorerPath(
+          r'\\?\UNC\nas\gallery\history image.png',
+        ),
+        r'\\nas\gallery\history image.png',
       );
     });
   });
@@ -721,53 +740,139 @@ void main() {
     test('contains immutable defaults for all assistant task types', () {
       final defaults = PromptAssistantConfigState.defaults();
       expect(defaults.streamOutput, isFalse);
+      expect(defaults.providers, isEmpty);
+      expect(defaults.models, isEmpty);
 
       for (final taskType in AssistantTaskType.values) {
-        expect(
-          defaults.models.any(
-            (model) => model.forTask == taskType && model.isDefault,
-          ),
-          isTrue,
-        );
         expect(
           defaults.rules.any(
             (rule) => rule.taskType == taskType && rule.isDefault,
           ),
           isTrue,
         );
-        expect(defaults.routing.providerIdFor(taskType), isNotEmpty);
-        expect(defaults.routing.modelFor(taskType), isNotEmpty);
+        expect(defaults.routing.providerIdFor(taskType), isEmpty);
+        expect(defaults.routing.modelFor(taskType), isEmpty);
+      }
+    });
+
+    test('pollinations is available as a normal provider preset', () {
+      final preset = ProviderPreset.pollinations;
+
+      expect(preset.defaultName, 'pollinations.ai');
+      expect(preset.defaultProtocol, ProviderProtocol.openaiChatCompletions);
+      expect(preset.defaultBaseUrl, 'https://gen.pollinations.ai');
+    });
+
+    test('migrates old untouched pollinations defaults out of providers', () {
+      final oldJson = <String, dynamic>{
+        'enabled': true,
+        'desktopOverlayEnabled': true,
+        'streamOutput': false,
+        'providers': [
+          {
+            'id': 'pollinations',
+            'name': 'pollinations.ai',
+            'type': 'pollinations',
+            'baseUrl': 'https://gen.pollinations.ai',
+            'enabled': true,
+          },
+          {
+            'id': 'openai_custom',
+            'name': 'OpenAI Compatible',
+            'type': 'openaiCompatible',
+            'baseUrl': 'https://api.openai.com/v1',
+            'enabled': false,
+          },
+          {
+            'id': 'ollama',
+            'name': 'Ollama',
+            'type': 'ollama',
+            'baseUrl': 'http://127.0.0.1:11434/v1',
+            'enabled': false,
+          },
+        ],
+        'models': [
+          for (final taskType in [
+            AssistantTaskType.llm,
+            AssistantTaskType.translate,
+            AssistantTaskType.reverse,
+            AssistantTaskType.characterReplace,
+          ])
+            {
+              'providerId': 'pollinations',
+              'name': 'openai-large',
+              'displayName': 'openai-large',
+              'forTask': taskType.name,
+              'isDefault': true,
+            },
+        ],
+        'routing': const TaskRoutingConfig(
+          llmProviderId: 'pollinations',
+          llmModel: 'openai-large',
+          translateProviderId: 'pollinations',
+          translateModel: 'openai-large',
+          reverseProviderId: 'pollinations',
+          reverseModel: 'openai-large',
+          characterReplaceProviderId: 'pollinations',
+          characterReplaceModel: 'openai-large',
+        ).toJson(),
+        'rules': PromptAssistantConfigState.defaults()
+            .rules
+            .map((rule) => rule.toJson())
+            .toList(),
+      };
+
+      final decoded = PromptAssistantConfigState.decode(jsonEncode(oldJson));
+
+      expect(decoded.providers.any((provider) => provider.id == 'pollinations'),
+          isFalse);
+      for (final taskType in AssistantTaskType.values) {
+        expect(decoded.routing.providerIdFor(taskType), isEmpty);
+        expect(decoded.routing.modelFor(taskType), isEmpty);
       }
     });
 
     test(
       'hydrates reverse and character replacement routing from old config',
       () {
-        final oldConfig = PromptAssistantConfigState.defaults()
-            .copyWith(
-              models: PromptAssistantConfigState.defaults()
-                  .models
-                  .where(
-                    (model) =>
-                        model.forTask == AssistantTaskType.llm ||
-                        model.forTask == AssistantTaskType.translate,
-                  )
-                  .toList(),
-              rules: PromptAssistantConfigState.defaults()
-                  .rules
-                  .where(
-                    (rule) =>
-                        rule.taskType == AssistantTaskType.llm ||
-                        rule.taskType == AssistantTaskType.translate,
-                  )
-                  .toList(),
-            )
-            .toJson()
+        final oldConfig = PromptAssistantConfigState.defaults().copyWith(
+          providers: const [
+            ProviderConfig(
+              id: 'openai_custom',
+              name: 'OpenAI Compatible',
+              type: ProviderType.openaiCompatible,
+              baseUrl: 'https://example.invalid/v1',
+              enabled: true,
+            ),
+          ],
+          models: const [
+            ModelConfig(
+              providerId: 'openai_custom',
+              name: 'model-a',
+              displayName: 'model-a',
+              forTask: AssistantTaskType.llm,
+            ),
+            ModelConfig(
+              providerId: 'openai_custom',
+              name: 'model-a',
+              displayName: 'model-a',
+              forTask: AssistantTaskType.translate,
+            ),
+          ],
+          rules: PromptAssistantConfigState.defaults()
+              .rules
+              .where(
+                (rule) =>
+                    rule.taskType == AssistantTaskType.llm ||
+                    rule.taskType == AssistantTaskType.translate,
+              )
+              .toList(),
+        ).toJson()
           ..['routing'] = const TaskRoutingConfig(
-            llmProviderId: 'pollinations',
-            llmModel: 'openai-large',
-            translateProviderId: 'pollinations',
-            translateModel: 'openai-large',
+            llmProviderId: 'openai_custom',
+            llmModel: 'model-a',
+            translateProviderId: 'openai_custom',
+            translateModel: 'model-a',
             reverseProviderId: '',
             reverseModel: '',
             characterReplaceProviderId: '',
@@ -825,11 +930,11 @@ void main() {
         );
         expect(
           decoded.routing.providerIdFor(AssistantTaskType.reverse),
-          isNotEmpty,
+          'openai_custom',
         );
         expect(
           decoded.routing.providerIdFor(AssistantTaskType.characterReplace),
-          isNotEmpty,
+          'openai_custom',
         );
       },
     );
@@ -838,58 +943,57 @@ void main() {
       const providerId = 'openai_custom';
       const modelName = '[PAY]gemini-3.1-pro-preview';
       final defaults = PromptAssistantConfigState.defaults();
-      final providers = defaults.providers
-          .map(
-            (provider) => provider.id == providerId
-                ? provider.copyWith(enabled: true)
-                : provider,
-          )
-          .toList();
 
       final decoded = PromptAssistantConfigState.decode(
-        defaults
-            .copyWith(
-              providers: providers,
-              models: const [
-                ModelConfig(
-                  providerId: providerId,
-                  name: modelName,
-                  displayName: modelName,
-                  forTask: AssistantTaskType.llm,
-                ),
-                ModelConfig(
-                  providerId: providerId,
-                  name: modelName,
-                  displayName: modelName,
-                  forTask: AssistantTaskType.translate,
-                ),
-                ModelConfig(
-                  providerId: providerId,
-                  name: 'default-model',
-                  displayName: 'default-model',
-                  forTask: AssistantTaskType.reverse,
-                  isDefault: true,
-                ),
-                ModelConfig(
-                  providerId: providerId,
-                  name: 'default-model',
-                  displayName: 'default-model',
-                  forTask: AssistantTaskType.characterReplace,
-                  isDefault: true,
-                ),
-              ],
-              routing: const TaskRoutingConfig(
-                llmProviderId: providerId,
-                llmModel: modelName,
-                translateProviderId: providerId,
-                translateModel: modelName,
-                reverseProviderId: providerId,
-                reverseModel: 'default-model',
-                characterReplaceProviderId: providerId,
-                characterReplaceModel: 'default-model',
-              ),
-            )
-            .encode(),
+        defaults.copyWith(
+          providers: const [
+            ProviderConfig(
+              id: providerId,
+              name: 'OpenAI Compatible',
+              type: ProviderType.openaiCompatible,
+              baseUrl: 'https://example.invalid/v1',
+              enabled: true,
+            ),
+          ],
+          models: const [
+            ModelConfig(
+              providerId: providerId,
+              name: modelName,
+              displayName: modelName,
+              forTask: AssistantTaskType.llm,
+            ),
+            ModelConfig(
+              providerId: providerId,
+              name: modelName,
+              displayName: modelName,
+              forTask: AssistantTaskType.translate,
+            ),
+            ModelConfig(
+              providerId: providerId,
+              name: 'default-model',
+              displayName: 'default-model',
+              forTask: AssistantTaskType.reverse,
+              isDefault: true,
+            ),
+            ModelConfig(
+              providerId: providerId,
+              name: 'default-model',
+              displayName: 'default-model',
+              forTask: AssistantTaskType.characterReplace,
+              isDefault: true,
+            ),
+          ],
+          routing: const TaskRoutingConfig(
+            llmProviderId: providerId,
+            llmModel: modelName,
+            translateProviderId: providerId,
+            translateModel: modelName,
+            reverseProviderId: providerId,
+            reverseModel: 'default-model',
+            characterReplaceProviderId: providerId,
+            characterReplaceModel: 'default-model',
+          ),
+        ).encode(),
       );
 
       for (final taskType in [
@@ -1098,6 +1202,224 @@ void main() {
       );
       expect(chunks.last.done, isTrue);
       expect(callCount, 2);
+    });
+
+    test('sends OpenAI Responses payload to responses endpoint', () async {
+      final dio = _MockDio();
+      final client = PromptAssistantApiClient(dio: dio);
+
+      when(
+        () => dio.post<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+        ),
+      ).thenAnswer((invocation) async {
+        final endpoint = invocation.positionalArguments.first as String;
+        final payload =
+            Map<String, dynamic>.from(invocation.namedArguments[#data] as Map);
+        expect(endpoint, 'https://api.openai.com/v1/responses');
+        expect(payload['instructions'], isEmpty);
+        expect(payload['input'], isA<List>());
+        final input = (payload['input'] as List).first as Map;
+        final content = input['content'] as List;
+        expect((content.first as Map)['type'], 'input_text');
+        return Response<dynamic>(
+          data: const {'output_text': 'response result'},
+          requestOptions: RequestOptions(path: '/v1/responses'),
+          statusCode: 200,
+        );
+      });
+
+      final chunks = await client
+          .streamChat(
+            sessionId: 'test',
+            provider: const ProviderConfig(
+              id: 'openai_responses',
+              name: 'OpenAI Responses',
+              protocol: ProviderProtocol.openaiResponses,
+              preset: ProviderPreset.openaiResponses,
+              baseUrl: 'https://api.openai.com/v1',
+            ),
+            model: 'gpt-4.1-mini',
+            messages: const [
+              {'role': 'user', 'content': 'test'},
+            ],
+            apiKey: 'key',
+          )
+          .toList();
+
+      expect(
+        chunks.where((chunk) => !chunk.done).map((chunk) => chunk.delta).join(),
+        'response result',
+      );
+    });
+
+    test('sends LM Studio Responses to local responses endpoint', () async {
+      final dio = _MockDio();
+      final client = PromptAssistantApiClient(dio: dio);
+
+      when(
+        () => dio.post<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+        ),
+      ).thenAnswer((invocation) async {
+        final endpoint = invocation.positionalArguments.first as String;
+        expect(endpoint, 'http://localhost:1234/v1/responses');
+        return Response<dynamic>(
+          data: const {'output_text': 'local result'},
+          requestOptions: RequestOptions(path: '/v1/responses'),
+          statusCode: 200,
+        );
+      });
+
+      final chunks = await client
+          .streamChat(
+            sessionId: 'test',
+            provider: const ProviderConfig(
+              id: 'lmstudio_responses',
+              name: 'LM Studio Responses',
+              protocol: ProviderProtocol.openaiResponses,
+              preset: ProviderPreset.lmStudioResponses,
+              baseUrl: 'http://localhost:1234/v1',
+            ),
+            model: 'local-model',
+            messages: const [
+              {'role': 'user', 'content': 'test'},
+            ],
+            apiKey: null,
+          )
+          .toList();
+
+      expect(
+        chunks.where((chunk) => !chunk.done).map((chunk) => chunk.delta).join(),
+        'local result',
+      );
+    });
+
+    test('sends Anthropic messages with system and x-api-key headers',
+        () async {
+      final dio = _MockDio();
+      final client = PromptAssistantApiClient(dio: dio);
+
+      when(
+        () => dio.post<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+        ),
+      ).thenAnswer((invocation) async {
+        final endpoint = invocation.positionalArguments.first as String;
+        final payload =
+            Map<String, dynamic>.from(invocation.namedArguments[#data] as Map);
+        final options = invocation.namedArguments[#options] as Options;
+        expect(endpoint, 'https://api.anthropic.com/v1/messages');
+        expect(payload['system'], 'system prompt');
+        expect(options.headers?['x-api-key'], 'key');
+        expect(options.headers?['anthropic-version'], '2023-06-01');
+        return Response<dynamic>(
+          data: const {
+            'content': [
+              {'type': 'text', 'text': 'anthropic result'},
+            ],
+          },
+          requestOptions: RequestOptions(path: '/v1/messages'),
+          statusCode: 200,
+        );
+      });
+
+      final chunks = await client
+          .streamChat(
+            sessionId: 'test',
+            provider: const ProviderConfig(
+              id: 'anthropic',
+              name: 'Anthropic',
+              protocol: ProviderProtocol.anthropicMessages,
+              preset: ProviderPreset.anthropic,
+              baseUrl: 'https://api.anthropic.com',
+            ),
+            model: 'claude-sonnet-4-20250514',
+            messages: const [
+              {'role': 'system', 'content': 'system prompt'},
+              {'role': 'user', 'content': 'test'},
+            ],
+            apiKey: 'key',
+          )
+          .toList();
+
+      expect(
+        chunks.where((chunk) => !chunk.done).map((chunk) => chunk.delta).join(),
+        'anthropic result',
+      );
+    });
+
+    test('sends Gemini generateContent payload', () async {
+      final dio = _MockDio();
+      final client = PromptAssistantApiClient(dio: dio);
+
+      when(
+        () => dio.post<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+        ),
+      ).thenAnswer((invocation) async {
+        final endpoint = invocation.positionalArguments.first as String;
+        final payload =
+            Map<String, dynamic>.from(invocation.namedArguments[#data] as Map);
+        final options = invocation.namedArguments[#options] as Options;
+        expect(
+          endpoint,
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        );
+        expect(options.headers?['x-goog-api-key'], 'key');
+        expect(payload['system_instruction'], isA<Map>());
+        return Response<dynamic>(
+          data: const {
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': 'gemini result'},
+                  ],
+                },
+              },
+            ],
+          },
+          requestOptions: RequestOptions(path: '/generateContent'),
+          statusCode: 200,
+        );
+      });
+
+      final chunks = await client
+          .streamChat(
+            sessionId: 'test',
+            provider: const ProviderConfig(
+              id: 'gemini',
+              name: 'Gemini',
+              protocol: ProviderProtocol.geminiGenerateContent,
+              preset: ProviderPreset.gemini,
+              baseUrl: 'https://generativelanguage.googleapis.com',
+            ),
+            model: 'gemini-2.5-flash',
+            messages: const [
+              {'role': 'system', 'content': 'system prompt'},
+              {'role': 'user', 'content': 'test'},
+            ],
+            apiKey: 'key',
+          )
+          .toList();
+
+      expect(
+        chunks.where((chunk) => !chunk.done).map((chunk) => chunk.delta).join(),
+        'gemini result',
+      );
     });
   });
 
