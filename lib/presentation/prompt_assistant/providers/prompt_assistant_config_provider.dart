@@ -91,29 +91,19 @@ class PromptAssistantConfigNotifier
     final models =
         state.models.where((m) => m.providerId != providerId).toList();
     var routing = state.routing;
-    if (routing.llmProviderId == providerId) {
-      routing = routing.copyWith(
-        llmProviderId: 'pollinations',
-        llmModel: 'openai-large',
-      );
-    }
-    if (routing.translateProviderId == providerId) {
-      routing = routing.copyWith(
-        translateProviderId: 'pollinations',
-        translateModel: 'openai-large',
-      );
-    }
-    if (routing.reverseProviderId == providerId) {
-      routing = routing.copyWith(
-        reverseProviderId: 'pollinations',
-        reverseModel: 'openai-large',
-      );
-    }
-    if (routing.characterReplaceProviderId == providerId) {
-      routing = routing.copyWith(
-        characterReplaceProviderId: 'pollinations',
-        characterReplaceModel: 'openai-large',
-      );
+    for (final taskType in AssistantTaskType.values) {
+      if (routing.providerIdFor(taskType) == providerId) {
+        final fallback = _firstAvailableRoute(
+          providers: providers,
+          models: models,
+          taskType: taskType,
+        );
+        routing = routing.copyWithTask(
+          taskType: taskType,
+          providerId: fallback.providerId,
+          model: fallback.model,
+        );
+      }
     }
     final keys = Map<String, bool>.from(state.providerHasApiKey)
       ..remove(providerId);
@@ -125,6 +115,32 @@ class PromptAssistantConfigNotifier
     );
     await _secure.deletePromptAssistantApiKey(providerId);
     await _save();
+  }
+
+  ({String providerId, String model}) _firstAvailableRoute({
+    required List<ProviderConfig> providers,
+    required List<ModelConfig> models,
+    required AssistantTaskType taskType,
+  }) {
+    for (final provider in providers) {
+      if (!provider.enabled) continue;
+      final providerModels = models
+          .where((m) => m.providerId == provider.id && m.forTask == taskType)
+          .toList();
+      final realModel = providerModels.cast<ModelConfig?>().firstWhere(
+            (model) => model != null && !model.isPlaceholder,
+            orElse: () => null,
+          );
+      if (realModel != null) {
+        return (providerId: provider.id, model: realModel.name);
+      }
+      final presetModels = provider.preset?.defaultModelNames ?? const [];
+      final presetModel = presetModels.isEmpty ? '' : presetModels.first;
+      if (presetModel.isNotEmpty) {
+        return (providerId: provider.id, model: presetModel);
+      }
+    }
+    return (providerId: '', model: '');
   }
 
   Future<void> upsertModel(ModelConfig model) async {
