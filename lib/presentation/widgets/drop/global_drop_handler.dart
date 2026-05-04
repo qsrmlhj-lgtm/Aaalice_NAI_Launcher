@@ -109,7 +109,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     return Positioned.fill(
       child: IgnorePointer(
         child: Container(
-          color: theme.colorScheme.primary.withOpacity(0.1),
+          color: theme.colorScheme.primary.withValues(alpha: 0.1),
           child: Center(
             child: Container(
               padding: const EdgeInsets.symmetric(
@@ -125,7 +125,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
+                    color: Colors.black.withValues(alpha: 0.2),
                     blurRadius: 16,
                   ),
                 ],
@@ -160,7 +160,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
 
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.5),
+        color: Colors.black.withValues(alpha: 0.5),
         child: Center(
           child: Container(
             padding: const EdgeInsets.symmetric(
@@ -172,7 +172,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 20,
                 ),
               ],
@@ -390,7 +390,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         break;
 
       case ImageDestination.characterReference:
-        _handleCharacterReference(bytes, notifier, l10n);
+        await _handleCharacterReference(bytes, notifier, l10n);
         break;
 
       case ImageDestination.extractMetadata:
@@ -603,11 +603,11 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     }
   }
 
-  void _handleCharacterReference(
+  Future<void> _handleCharacterReference(
     Uint8List bytes,
     GenerationParamsNotifier notifier,
     AppLocalizations l10n,
-  ) {
+  ) async {
     final currentState = ref.read(generationParamsNotifierProvider);
     final hasExisting = currentState.preciseReferences.isNotEmpty;
 
@@ -615,7 +615,7 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       notifier.clearPreciseReferences();
     }
 
-    notifier.addPreciseReference(
+    await notifier.addPreciseReferenceFromImage(
       bytes,
       type: PreciseRefType.character,
       strength: 1.0,
@@ -697,6 +697,9 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
       _applyCharacterPrompts(metadata);
       appliedCount++;
     }
+
+    // 应用参考图参数
+    appliedCount += _applyReferenceParams(metadata, options, notifier);
 
     // 应用高级参数
     appliedCount += _applyAdvancedParams(metadata, options, notifier);
@@ -794,6 +797,55 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     ref.read(characterPromptNotifierProvider.notifier).replaceAll(characters);
   }
 
+  int _applyReferenceParams(
+    NaiImageMetadata metadata,
+    MetadataImportOptions options,
+    GenerationParamsNotifier notifier,
+  ) {
+    var count = 0;
+
+    if (options.importVibeReferences && metadata.vibeReferences.isNotEmpty) {
+      final selectedVibes = metadata.vibeReferences
+          .asMap()
+          .entries
+          .where((entry) => options.selectedVibeIndices.contains(entry.key))
+          .map((entry) => entry.value)
+          .toList();
+      if (selectedVibes.isNotEmpty) {
+        notifier.clearVibeReferences();
+        notifier.addVibeReferences(selectedVibes, recordUsage: false);
+        count++;
+      }
+    }
+
+    final preciseReferences = metadata.preciseReferences;
+    if (options.importPreciseReferences && preciseReferences.isNotEmpty) {
+      final selectedReferences = preciseReferences
+          .asMap()
+          .entries
+          .where(
+            (entry) =>
+                options.selectedPreciseReferenceIndices.contains(entry.key),
+          )
+          .map((entry) => entry.value)
+          .toList();
+      if (selectedReferences.isNotEmpty) {
+        notifier.clearPreciseReferences();
+        for (final reference in selectedReferences) {
+          notifier.addPreciseReference(
+            reference.image,
+            type: reference.type,
+            strength: reference.strength,
+            fidelity: reference.fidelity,
+          );
+        }
+        count++;
+      }
+    }
+
+    return count;
+  }
+
   int _applyAdvancedParams(
     dynamic metadata,
     MetadataImportOptions options,
@@ -801,35 +853,58 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
   ) {
     var count = 0;
 
-    final params = [
-      (options.importSampler, metadata.sampler, notifier.updateSampler),
-      (options.importModel, metadata.model, notifier.updateModel),
-      (options.importSmea, metadata.smea, notifier.updateSmea),
-      (options.importSmeaDyn, metadata.smeaDyn, notifier.updateSmeaDyn),
-      (
-        options.importNoiseSchedule,
-        metadata.noiseSchedule,
-        notifier.updateNoiseSchedule
-      ),
-      (
-        options.importCfgRescale,
-        metadata.cfgRescale,
-        notifier.updateCfgRescale
-      ),
-      (
-        options.importQualityToggle,
-        metadata.qualityToggle,
-        notifier.updateQualityToggle
-      ),
-      (options.importUcPreset, metadata.ucPreset, notifier.updateUcPreset),
-    ];
-
-    for (final (shouldImport, value, updateFn) in params) {
+    void applyParam<T>(
+      bool shouldImport,
+      T? value,
+      void Function(T value) updateFn,
+    ) {
       if (shouldImport && value != null) {
         updateFn(value);
         count++;
       }
     }
+
+    applyParam<String>(
+      options.importSampler,
+      metadata.sampler,
+      notifier.updateSampler,
+    );
+    applyParam<String>(
+      options.importModel,
+      metadata.model,
+      notifier.updateModel,
+    );
+    applyParam<bool>(options.importSmea, metadata.smea, notifier.updateSmea);
+    applyParam<bool>(
+      options.importSmeaDyn,
+      metadata.smeaDyn,
+      notifier.updateSmeaDyn,
+    );
+    applyParam<String>(
+      options.importNoiseSchedule,
+      metadata.noiseSchedule,
+      notifier.updateNoiseSchedule,
+    );
+    applyParam<double>(
+      options.importCfgRescale,
+      metadata.cfgRescale,
+      notifier.updateCfgRescale,
+    );
+    applyParam<bool>(
+      options.importQualityToggle,
+      metadata.qualityToggle,
+      notifier.updateQualityToggle,
+    );
+    applyParam<int>(
+      options.importUcPreset,
+      metadata.ucPreset,
+      notifier.updateUcPreset,
+    );
+    applyParam<bool>(
+      options.importVarietyPlus,
+      metadata.varietyPlus,
+      notifier.updateVarietyPlus,
+    );
 
     return count;
   }
@@ -921,6 +996,12 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     AppLocalizations l10n,
   ) {
     final items = <Widget>[];
+    final negativePrompt = metadata is NaiImageMetadata
+        ? _resolveImportedNegativePrompt(
+            metadata,
+            importUcPreset: options.importUcPreset,
+          )
+        : metadata.negativePrompt;
 
     final itemConfigs = [
       (
@@ -930,15 +1011,28 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         3,
       ),
       (
-        options.importNegativePrompt && metadata.negativePrompt.isNotEmpty,
+        options.importNegativePrompt && negativePrompt.isNotEmpty,
         l10n.metadataImport_negativePrompt,
-        metadata.negativePrompt,
+        negativePrompt,
         2,
       ),
       (
         options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty,
         l10n.metadataImport_characterPrompts,
         '${metadata.characterPrompts.length} ${l10n.metadataImport_charactersCount}',
+        1,
+      ),
+      (
+        options.importVibeReferences && metadata.vibeReferences.isNotEmpty,
+        'Vibe Transfer',
+        '${metadata.vibeReferences.length} 个',
+        1,
+      ),
+      (
+        options.importPreciseReferences &&
+            metadata.preciseReferences.isNotEmpty,
+        '精准参考',
+        '${metadata.preciseReferences.length} 个',
         1,
       ),
       (
@@ -999,6 +1093,24 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         options.importCfgRescale && metadata.cfgRescale != null,
         l10n.metadataImport_cfgRescale,
         metadata.cfgRescale?.toString(),
+        1,
+      ),
+      (
+        options.importQualityToggle && metadata.qualityToggle != null,
+        l10n.metadataImport_qualityToggle,
+        metadata.qualityToggle?.toString(),
+        1,
+      ),
+      (
+        options.importUcPreset && metadata.ucPreset != null,
+        l10n.metadataImport_ucPreset,
+        metadata.ucPreset?.toString(),
+        1,
+      ),
+      (
+        options.importVarietyPlus && metadata.varietyPlus != null,
+        'Variety+',
+        metadata.varietyPlus?.toString(),
         1,
       ),
     ];

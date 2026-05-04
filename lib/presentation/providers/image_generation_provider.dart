@@ -4,12 +4,14 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/utils/app_logger.dart';
 import '../../core/utils/image_save_utils.dart';
 import '../../core/utils/image_share_sanitizer.dart';
 import '../../core/utils/nai_prompt_formatter.dart';
+import '../../core/utils/prompt_preset_resolution.dart';
 import '../../data/services/image_metadata_service.dart';
 import '../../data/datasources/remote/nai_image_generation_api_service.dart';
 import '../../data/models/character/character_prompt.dart' as ui_character;
@@ -23,8 +25,10 @@ import 'fixed_tags_provider.dart';
 import 'image_save_settings_provider.dart';
 import 'local_gallery_provider.dart';
 import 'prompt_config_provider.dart';
+import 'quality_preset_provider.dart';
 import 'queue_execution_provider.dart';
 import 'subscription_provider.dart';
+import 'uc_preset_provider.dart';
 
 import 'generation/generation_models.dart';
 import 'generation/generation_params_notifier.dart';
@@ -92,6 +96,27 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     return params.copyWith(vibeReferencesV4: encodedVibes);
   }
 
+  PromptPresetResolution _resolvePromptPresets(ImageParams params) {
+    final qualityState = ref.read(qualityPresetNotifierProvider);
+    final qualityContent = ref
+        .read(qualityPresetNotifierProvider.notifier)
+        .getEffectiveContent(params.model);
+    final ucState = ref.read(ucPresetNotifierProvider);
+    final ucPresetContent = ref
+        .read(ucPresetNotifierProvider.notifier)
+        .getEffectiveContent(params.model);
+
+    return resolvePromptPresetSettings(
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      qualityMode: qualityState.mode,
+      qualityContent: qualityContent,
+      ucPresetType: ucState.presetType,
+      ucPresetContent: ucPresetContent,
+      useCustomUcPreset: ucState.isCustom,
+    );
+  }
+
   Future<void> generate(ImageParams params) async {
     _isCancelled = false;
 
@@ -147,15 +172,6 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     final batchSize = ref.read(imagesPerRequestProvider);
     final totalImages = batchCount * batchSize;
 
-    // 读取 UI 设置，转换为 API 参数
-    // 质量标签：由 API 的 qualityToggle 参数控制，后端自动添加
-    final addQualityTags = ref.read(qualityTagsSettingsProvider);
-
-    // UC 预设：由 API 的 ucPreset 参数控制，后端自动填充负向提示词
-    // UcPresetType.heavy -> 0, light -> 1, humanFocus -> 2, none -> 3
-    final ucPresetType = ref.read(ucPresetSettingsProvider);
-    final ucPresetValue = ucPresetType.index; // enum index 正好对应 API 值
-
     // 解析别名（将 <词库名> 展开为实际内容）
     // 统一在此处解析所有提示词（主提示词、负向提示词）
     final aliasResolver = ref.read(aliasResolverServiceProvider.notifier);
@@ -187,14 +203,20 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
       effectiveParams = effectiveParams.copyWith(prompt: promptWithFixedTags);
     }
 
+    final presetResolution = _resolvePromptPresets(effectiveParams);
+    effectiveParams = effectiveParams.copyWith(
+      prompt: presetResolution.prompt,
+      negativePrompt: presetResolution.negativePrompt,
+    );
+
     // 读取多角色提示词配置并转换为 API 格式
     final characterConfig = ref.read(characterPromptNotifierProvider);
     final apiCharacters = _convertCharactersToApiFormat(characterConfig);
 
-    // 将设置应用到参数（不在客户端修改提示词内容，让后端处理）
+    // 将 UI 预设解析为一次生成实际使用的请求参数。
     final ImageParams baseParams = effectiveParams.copyWith(
-      qualityToggle: addQualityTags,
-      ucPreset: ucPresetValue,
+      qualityToggle: presetResolution.qualityToggle,
+      ucPreset: presetResolution.ucPreset,
       characters: apiCharacters,
       // 如果有角色且使用自定义位置，启用坐标模式
       useCoords: apiCharacters.isNotEmpty && !characterConfig.globalAiChoice,
@@ -482,6 +504,22 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
 
       for (final image in images) {
         try {
+          final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
+          final filePath = p.join(saveDirPath, fileName);
+
+          if (ImageSaveUtils.hasEmbeddedNovelAiMetadata(image.bytes)) {
+            await File(filePath).writeAsBytes(image.bytes);
+            savedCount++;
+            savedFilePaths.add(filePath);
+
+            final updatedImage = image.copyWithFilePath(filePath);
+            _updateImageInState(image.id, updatedImage);
+            savedImages.add(updatedImage);
+
+            await Future.delayed(const Duration(milliseconds: 2));
+            continue;
+          }
+
           // 从图片元数据中提取实际的 seed
           int actualSeed = params.seed;
           if (params.seed == -1) {
@@ -501,8 +539,6 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
             'ImageGeneration',
           );
 
-          final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
-          final filePath = '$saveDirPath/$fileName';
           await ImageSaveUtils.saveImageWithMetadata(
             imageBytes: image.bytes,
             filePath: filePath,
@@ -1144,6 +1180,24 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     state = state.copyWith(
       displayImages: images,
     );
+  }
+
+  /// 更新指定生成图像的本地文件路径。
+  void updateImageFilePath(String imageId, String filePath) {
+    GeneratedImage? image;
+    for (final candidate in [
+      ...state.currentImages,
+      ...state.history,
+      ...state.displayImages,
+    ]) {
+      if (candidate.id == imageId) {
+        image = candidate;
+        break;
+      }
+    }
+
+    if (image == null) return;
+    _updateImageInState(imageId, image.copyWithFilePath(filePath));
   }
 
   /// 更新状态中的单个图像

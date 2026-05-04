@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../../core/utils/image_save_utils.dart';
 import '../../../../data/models/gallery/nai_image_metadata.dart';
@@ -87,7 +88,7 @@ class GenerationSaveService {
       if (saveDirPath == null) return;
 
       final fileName = 'NAI_${DateTime.now().millisecondsSinceEpoch}.png';
-      final filePath = '$saveDirPath/$fileName';
+      final filePath = p.join(saveDirPath, fileName);
 
       // 获取已有元数据（如果图像已包含）
       final existingMetadata = image.metadata;
@@ -97,7 +98,7 @@ class GenerationSaveService {
           final file = File(filePath);
           await file.writeAsBytes(imageBytes);
         } else {
-        // 使用已有元数据重新嵌入（保持完整性）
+          // 使用已有元数据重新嵌入（保持完整性）
           await ImageSaveUtils.saveWithPrebuiltMetadata(
             imageBytes: imageBytes,
             filePath: filePath,
@@ -130,7 +131,8 @@ class GenerationSaveService {
 
   /// 从元数据构建 Comment JSON
   static Map<String, dynamic> buildCommentJsonFromMetadata(
-      NaiImageMetadata metadata,) {
+    NaiImageMetadata metadata,
+  ) {
     final commentJson = <String, dynamic>{
       'prompt': metadata.prompt,
       'uc': metadata.negativePrompt,

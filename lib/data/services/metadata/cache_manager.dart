@@ -12,7 +12,8 @@ import '../../models/gallery/nai_image_metadata.dart';
 /// - L1: 内存缓存 (LRU)
 /// - L2: Hive 持久化缓存
 class MetadataCacheManager {
-  static final MetadataCacheManager _instance = MetadataCacheManager._internal();
+  static final MetadataCacheManager _instance =
+      MetadataCacheManager._internal();
   factory MetadataCacheManager() => _instance;
   MetadataCacheManager._internal();
 
@@ -20,7 +21,8 @@ class MetadataCacheManager {
   static const int _currentCacheVersion = 2;
 
   Box<String>? _persistentBox;
-  final _memoryCache = _LRUCache<String, NaiImageMetadata>(capacity: _memoryCacheCapacity);
+  final _memoryCache =
+      _LRUCache<String, NaiImageMetadata>(capacity: _memoryCacheCapacity);
 
   // 统计计数器
   int _memoryCacheHits = 0;
@@ -44,7 +46,12 @@ class MetadataCacheManager {
         'MetadataCacheManager',
       );
     } catch (e) {
-      AppLogger.e('Failed to initialize MetadataCacheManager', e, null, 'MetadataCacheManager');
+      AppLogger.e(
+        'Failed to initialize MetadataCacheManager',
+        e,
+        null,
+        'MetadataCacheManager',
+      );
       rethrow;
     }
   }
@@ -54,7 +61,11 @@ class MetadataCacheManager {
     final metadata = _memoryCache.get(hash);
     if (metadata != null) {
       _memoryCacheHits++;
-      return metadata;
+      final upgraded = metadata.upgradeFromRawJsonIfNeeded();
+      if (!identical(upgraded, metadata)) {
+        _memoryCache.put(hash, upgraded);
+      }
+      return upgraded;
     }
     _memoryCacheMisses++;
     return null;
@@ -71,7 +82,10 @@ class MetadataCacheManager {
       }
       final json = jsonDecode(jsonString) as Map<String, dynamic>;
       _persistentCacheHits++;
-      return NaiImageMetadata.fromJson(json);
+      final metadata =
+          NaiImageMetadata.fromJson(json).upgradeFromRawJsonIfNeeded();
+      _memoryCache.put(hash, metadata);
+      return metadata;
     } catch (e) {
       _persistentCacheMisses++;
       return null;
@@ -88,7 +102,10 @@ class MetadataCacheManager {
       final box = _getBox();
       await box.put(hash, jsonEncode(metadata.toJson()));
     } catch (e) {
-      AppLogger.w('Failed to save to persistent cache: $e', 'MetadataCacheManager');
+      AppLogger.w(
+        'Failed to save to persistent cache: $e',
+        'MetadataCacheManager',
+      );
     }
   }
 
@@ -103,7 +120,12 @@ class MetadataCacheManager {
         await box.put('_cacheVersion', version);
       }
     } catch (e, stack) {
-      AppLogger.e('Failed to clear persistent cache', e, stack, 'MetadataCacheManager');
+      AppLogger.e(
+        'Failed to clear persistent cache',
+        e,
+        stack,
+        'MetadataCacheManager',
+      );
     }
   }
 
@@ -117,7 +139,12 @@ class MetadataCacheManager {
         await box.put('_cacheVersion', version);
       }
     } catch (e, stack) {
-      AppLogger.e('Failed to clear persistent cache', e, stack, 'MetadataCacheManager');
+      AppLogger.e(
+        'Failed to clear persistent cache',
+        e,
+        stack,
+        'MetadataCacheManager',
+      );
     }
   }
 
@@ -158,21 +185,23 @@ class MetadataCacheManager {
 
   /// 获取详细统计
   Map<String, dynamic> getStatistics() => {
-    'memorySize': memorySize,
-    'memoryHitRate': memoryHitRate,
-    'persistentSize': persistentSize,
-    'persistentHitRate': persistentHitRate,
-    'memoryHits': _memoryCacheHits,
-    'memoryMisses': _memoryCacheMisses,
-    'persistentHits': _persistentCacheHits,
-    'persistentMisses': _persistentCacheMisses,
-  };
+        'memorySize': memorySize,
+        'memoryHitRate': memoryHitRate,
+        'persistentSize': persistentSize,
+        'persistentHitRate': persistentHitRate,
+        'memoryHits': _memoryCacheHits,
+        'memoryMisses': _memoryCacheMisses,
+        'persistentHits': _persistentCacheHits,
+        'persistentMisses': _persistentCacheMisses,
+      };
 
   // ==================== 私有方法 ====================
 
   Box<String> _getBox() {
     if (_persistentBox == null || !_persistentBox!.isOpen) {
-      throw StateError('MetadataCacheManager not initialized. Call initialize() first.');
+      throw StateError(
+        'MetadataCacheManager not initialized. Call initialize() first.',
+      );
     }
     return _persistentBox!;
   }
@@ -189,10 +218,16 @@ class MetadataCacheManager {
         );
         await clear();
         await box.put('_cacheVersion', _currentCacheVersion.toString());
-        AppLogger.i('Cache migrated to version $_currentCacheVersion', 'MetadataCacheManager');
+        AppLogger.i(
+          'Cache migrated to version $_currentCacheVersion',
+          'MetadataCacheManager',
+        );
       }
     } catch (e) {
-      AppLogger.w('Cache version check failed, clearing cache', 'MetadataCacheManager');
+      AppLogger.w(
+        'Cache version check failed, clearing cache',
+        'MetadataCacheManager',
+      );
       await clear();
     }
   }

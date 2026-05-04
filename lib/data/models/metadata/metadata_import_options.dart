@@ -1,5 +1,7 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../gallery/nai_image_metadata.dart';
+
 part 'metadata_import_options.freezed.dart';
 
 /// 元数据导入选项模型
@@ -29,6 +31,10 @@ class MetadataImportOptions with _$MetadataImportOptions {
     @Default(true) bool importVibeReferences, // Vibe数据总开关
     @Default([]) List<int> selectedVibeIndices, // 选择的Vibe索引
 
+    // Precise Reference 数据
+    @Default(true) bool importPreciseReferences, // 精准参考总开关
+    @Default([]) List<int> selectedPreciseReferenceIndices, // 选择的精准参考索引
+
     // ========== 生成参数 ==========
     @Default(false) bool importSeed, // 种子
     @Default(false) bool importSteps, // 步数
@@ -42,47 +48,13 @@ class MetadataImportOptions with _$MetadataImportOptions {
     @Default(false) bool importCfgRescale, // CFG Rescale
     @Default(false) bool importQualityToggle, // 质量标签
     @Default(false) bool importUcPreset, // UC 预设
+    @Default(false) bool importVarietyPlus, // Variety+
   }) = _MetadataImportOptions;
 
   const MetadataImportOptions._();
 
   /// 快速预设：全部选中
-  factory MetadataImportOptions.all() => const MetadataImportOptions();
-
-  /// 快速预设：仅提示词相关
-  factory MetadataImportOptions.promptsOnly() => const MetadataImportOptions(
-        importPrompt: true,
-        importNegativePrompt: true,
-        importFixedTags: true,
-        importFixedPrefix: true,
-        importFixedSuffix: true,
-        importQualityTags: true,
-        importCharacterPrompts: true,
-        importVibeReferences: true,
-        importSeed: false,
-        importSteps: false,
-        importScale: false,
-        importSize: false,
-        importSampler: false,
-        importModel: false,
-        importSmea: false,
-        importSmeaDyn: false,
-        importNoiseSchedule: false,
-        importCfgRescale: false,
-        importQualityToggle: false,
-        importUcPreset: false,
-      );
-
-  /// 快速预设：仅生成参数（不包含提示词）
-  factory MetadataImportOptions.generationOnly() => const MetadataImportOptions(
-        importPrompt: false,
-        importNegativePrompt: false,
-        importFixedTags: false,
-        importFixedPrefix: false,
-        importFixedSuffix: false,
-        importQualityTags: false,
-        importCharacterPrompts: false,
-        importVibeReferences: false,
+  factory MetadataImportOptions.all() => const MetadataImportOptions(
         importSeed: true,
         importSteps: true,
         importScale: true,
@@ -95,18 +67,20 @@ class MetadataImportOptions with _$MetadataImportOptions {
         importCfgRescale: true,
         importQualityToggle: true,
         importUcPreset: true,
+        importVarietyPlus: true,
       );
 
-  /// 全不选
-  factory MetadataImportOptions.none() => const MetadataImportOptions(
-        importPrompt: false,
-        importNegativePrompt: false,
-        importFixedTags: false,
-        importFixedPrefix: false,
-        importFixedSuffix: false,
-        importQualityTags: false,
-        importCharacterPrompts: false,
+  /// 快速预设：仅提示词相关
+  factory MetadataImportOptions.promptsOnly() => const MetadataImportOptions(
+        importPrompt: true,
+        importNegativePrompt: true,
+        importFixedTags: true,
+        importFixedPrefix: true,
+        importFixedSuffix: true,
+        importQualityTags: true,
+        importCharacterPrompts: true,
         importVibeReferences: false,
+        importPreciseReferences: false,
         importSeed: false,
         importSteps: false,
         importScale: false,
@@ -119,7 +93,121 @@ class MetadataImportOptions with _$MetadataImportOptions {
         importCfgRescale: false,
         importQualityToggle: false,
         importUcPreset: false,
+        importVarietyPlus: false,
       );
+
+  /// 快速预设：仅生成参数（不包含提示词）
+  factory MetadataImportOptions.generationOnly() => const MetadataImportOptions(
+        importPrompt: false,
+        importNegativePrompt: false,
+        importFixedTags: false,
+        importFixedPrefix: false,
+        importFixedSuffix: false,
+        importQualityTags: false,
+        importCharacterPrompts: false,
+        importVibeReferences: true,
+        importPreciseReferences: true,
+        importSeed: true,
+        importSteps: true,
+        importScale: true,
+        importSize: true,
+        importSampler: true,
+        importModel: true,
+        importSmea: true,
+        importSmeaDyn: true,
+        importNoiseSchedule: true,
+        importCfgRescale: true,
+        importQualityToggle: true,
+        importUcPreset: true,
+        importVarietyPlus: true,
+      );
+
+  /// 全不选
+  factory MetadataImportOptions.none() => const MetadataImportOptions(
+        importPrompt: false,
+        importNegativePrompt: false,
+        importFixedTags: false,
+        importFixedPrefix: false,
+        importFixedSuffix: false,
+        importQualityTags: false,
+        importCharacterPrompts: false,
+        importVibeReferences: false,
+        importPreciseReferences: false,
+        importSeed: false,
+        importSteps: false,
+        importScale: false,
+        importSize: false,
+        importSampler: false,
+        importModel: false,
+        importSmea: false,
+        importSmeaDyn: false,
+        importNoiseSchedule: false,
+        importCfgRescale: false,
+        importQualityToggle: false,
+        importUcPreset: false,
+        importVarietyPlus: false,
+      );
+
+  /// 获取已选中的可用参数数量。
+  ///
+  /// 与 [selectedCount] 不同，这里只统计当前图片元数据里实际存在的数据，
+  /// 避免“仅提示词”把空的固定词/质量词开关也计入数量。
+  int selectedCountFor(NaiImageMetadata metadata) {
+    var count = 0;
+    if (importPrompt && metadata.prompt.isNotEmpty) count++;
+    if (importNegativePrompt && metadata.negativePrompt.isNotEmpty) count++;
+    if (importFixedTags &&
+        ((importFixedPrefix && metadata.fixedPrefixTags.isNotEmpty) ||
+            (importFixedSuffix && metadata.fixedSuffixTags.isNotEmpty))) {
+      count++;
+    }
+    if (importQualityTags &&
+        selectedQualityTags.any(metadata.qualityTags.contains)) {
+      count++;
+    }
+    if (importCharacterPrompts &&
+        (selectedCharacterIndices.any(
+              (index) => index >= 0 && index < metadata.characterInfos.length,
+            ) ||
+            (metadata.characterInfos.isEmpty &&
+                metadata.characterPrompts.isNotEmpty))) {
+      count++;
+    }
+    if (importVibeReferences &&
+        selectedVibeIndices.any(
+          (index) => index >= 0 && index < metadata.vibeReferences.length,
+        )) {
+      count++;
+    }
+    if (importPreciseReferences &&
+        selectedPreciseReferenceIndices.any(
+          (index) => index >= 0 && index < metadata.preciseReferences.length,
+        )) {
+      count++;
+    }
+    if (importSeed && metadata.seed != null) count++;
+    if (importSteps && metadata.steps != null) count++;
+    if (importScale && metadata.scale != null) count++;
+    if (importSize && metadata.width != null && metadata.height != null) {
+      count++;
+    }
+    if (importSampler && metadata.sampler != null) count++;
+    if (importModel && metadata.model != null) count++;
+    if (importSmea && (metadata.smea == true || metadata.smeaDyn == true)) {
+      count++;
+    }
+    if (importSmeaDyn && metadata.smeaDyn == true) count++;
+    if (importNoiseSchedule && metadata.noiseSchedule != null) count++;
+    if (importCfgRescale &&
+        metadata.cfgRescale != null &&
+        metadata.cfgRescale! > 0) {
+      count++;
+    }
+    if (importQualityToggle && metadata.qualityToggle != null) count++;
+    if (importUcPreset && metadata.ucPreset != null) count++;
+    if (importVarietyPlus && metadata.varietyPlus != null) count++;
+    return count;
+  }
 
   /// 获取已选中的参数数量（按逻辑分组计数）
   int get selectedCount {
@@ -136,6 +224,10 @@ class MetadataImportOptions with _$MetadataImportOptions {
     if (importCharacterPrompts && selectedCharacterIndices.isNotEmpty) count++;
     // Vibe数据
     if (importVibeReferences && selectedVibeIndices.isNotEmpty) count++;
+    // 精准参考
+    if (importPreciseReferences && selectedPreciseReferenceIndices.isNotEmpty) {
+      count++;
+    }
     // 生成参数
     if (importSeed) count++;
     if (importSteps) count++;
@@ -149,11 +241,12 @@ class MetadataImportOptions with _$MetadataImportOptions {
     if (importCfgRescale) count++;
     if (importQualityToggle) count++;
     if (importUcPreset) count++;
+    if (importVarietyPlus) count++;
     return count;
   }
 
   /// 是否全部选中
-  bool get isAllSelected => selectedCount == 16;
+  bool get isAllSelected => selectedCount == 19;
 
   /// 是否全部未选中
   bool get isNoneSelected => selectedCount == 0;
@@ -164,6 +257,5 @@ class MetadataImportOptions with _$MetadataImportOptions {
       importNegativePrompt ||
       (importFixedTags && (importFixedPrefix || importFixedSuffix)) ||
       (importQualityTags && selectedQualityTags.isNotEmpty) ||
-      (importCharacterPrompts && selectedCharacterIndices.isNotEmpty) ||
-      (importVibeReferences && selectedVibeIndices.isNotEmpty);
+      (importCharacterPrompts && selectedCharacterIndices.isNotEmpty);
 }
