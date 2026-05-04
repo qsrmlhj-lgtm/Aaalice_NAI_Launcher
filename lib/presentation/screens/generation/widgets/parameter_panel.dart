@@ -38,17 +38,19 @@ class ParameterPanel extends ConsumerStatefulWidget {
 
 class _ParameterPanelState extends ConsumerState<ParameterPanel> {
   late final TextEditingController _seedController;
-  bool _seedControllerInitialized = false;
+  late final FocusNode _seedFocusNode;
 
   @override
   void initState() {
     super.initState();
     _seedController = TextEditingController();
+    _seedFocusNode = FocusNode();
   }
 
   @override
   void dispose() {
     _seedController.dispose();
+    _seedFocusNode.dispose();
     super.dispose();
   }
 
@@ -61,12 +63,7 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
     final theme = Theme.of(context);
     final isGenerating = generationState.isGenerating;
 
-    // 首次 build 时同步 seed 到输入框
-    if (!_seedControllerInitialized) {
-      _seedControllerInitialized = true;
-      final currentSeed = params.seed;
-      _seedController.text = currentSeed == -1 ? '' : currentSeed.toString();
-    }
+    _syncSeedController(params.seed);
 
     return ListView(
       padding: EdgeInsets.all(widget.inBottomSheet ? 16 : 12),
@@ -301,6 +298,7 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
             Expanded(
               child: ThemedInput(
                 controller: _seedController,
+                focusNode: _seedFocusNode,
                 hintText: context.l10n.generation_seedRandom,
                 keyboardType: TextInputType.number,
                 onChanged: (value) {
@@ -551,6 +549,23 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
       style: theme.textTheme.titleSmall?.copyWith(
         fontWeight: FontWeight.w600,
       ),
+    );
+  }
+
+  void _syncSeedController(int seed) {
+    final nextText = resolveSeedFieldSyncText(
+      currentText: _seedController.text,
+      seed: seed,
+      hasFocus: _seedFocusNode.hasFocus,
+    );
+    if (nextText == null) {
+      return;
+    }
+
+    _seedController.value = _seedController.value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+      composing: TextRange.empty,
     );
   }
 }
@@ -859,6 +874,24 @@ String? resolveManualSizeFieldSyncText({
   }
 
   final nextText = targetValue.toString();
+  if (currentText == nextText) {
+    return null;
+  }
+
+  return nextText;
+}
+
+@visibleForTesting
+String? resolveSeedFieldSyncText({
+  required String currentText,
+  required int seed,
+  required bool hasFocus,
+}) {
+  if (hasFocus) {
+    return null;
+  }
+
+  final nextText = seed == -1 ? '' : seed.toString();
   if (currentText == nextText) {
     return null;
   }

@@ -23,4 +23,36 @@ void main() {
       expect(result, equals('1216'));
     });
   });
+
+  group('resolveSeedFieldSyncText', () {
+    test('keeps focused seed text untouched while user is typing', () {
+      final result = resolveSeedFieldSyncText(
+        currentText: '',
+        seed: 123456,
+        hasFocus: true,
+      );
+
+      expect(result, isNull);
+    });
+
+    test('syncs unfocused field to external seed value', () {
+      final result = resolveSeedFieldSyncText(
+        currentText: '',
+        seed: 123456,
+        hasFocus: false,
+      );
+
+      expect(result, equals('123456'));
+    });
+
+    test('syncs random seed state to empty field text', () {
+      final result = resolveSeedFieldSyncText(
+        currentText: '123456',
+        seed: -1,
+        hasFocus: false,
+      );
+
+      expect(result, equals(''));
+    });
+  });
 }
