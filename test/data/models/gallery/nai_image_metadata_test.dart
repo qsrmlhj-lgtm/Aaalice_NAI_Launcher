@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_launcher/core/constants/api_constants.dart';
 import 'package:nai_launcher/core/enums/precise_ref_type.dart';
+import 'package:nai_launcher/data/models/gallery/local_image_record.dart';
 import 'package:nai_launcher/data/models/gallery/nai_image_metadata.dart';
+import 'package:nai_launcher/presentation/widgets/common/image_detail/image_detail_data.dart';
 import 'dart:convert';
 
 void main() {
@@ -177,6 +179,116 @@ void main() {
         'cached-encoded-vibe',
       );
       expect(upgraded.varietyPlus, isTrue);
+    });
+
+    test('cached rawJson metadata should upgrade V4 character prompts', () {
+      final rawJson = jsonEncode({
+        'prompt': '1girl, 1boy, indoor',
+        'uc': 'bad hands',
+        'v4_prompt': {
+          'caption': {
+            'base_caption': '1girl, 1boy, indoor',
+            'char_captions': [
+              {
+                'char_caption': '1girl, rabbit girl, target#holding hands',
+              },
+              {
+                'char_caption': '1boy, suit, source#holding hands',
+              },
+            ],
+          },
+          'use_coords': false,
+        },
+        'v4_negative_prompt': {
+          'caption': {
+            'base_caption': 'bad hands',
+            'char_captions': [
+              {'char_caption': 'lowres'},
+              {'char_caption': 'bad anatomy'},
+            ],
+          },
+        },
+      });
+      final stale = NaiImageMetadata(
+        prompt: '1girl, 1boy, indoor',
+        negativePrompt: 'bad hands',
+        rawJson: rawJson,
+        software: 'NovelAI',
+        source: 'NovelAI Diffusion V4.5 4BDE2A90',
+      );
+
+      final upgraded = stale.upgradeFromRawJsonIfNeeded();
+
+      expect(
+        upgraded.characterPrompts,
+        equals([
+          '1girl, rabbit girl, target#holding hands',
+          '1boy, suit, source#holding hands',
+        ]),
+      );
+      expect(
+        upgraded.characterNegativePrompts,
+        equals(['lowres', 'bad anatomy']),
+      );
+    });
+
+    test('local gallery detail should upgrade rawJson character prompts',
+        () async {
+      final rawJson = jsonEncode({
+        'prompt': '1girl, 1boy, indoor',
+        'uc': 'bad hands',
+        'v4_prompt': {
+          'caption': {
+            'base_caption': '1girl, 1boy, indoor',
+            'char_captions': [
+              {
+                'char_caption': '1girl, rabbit girl, target#holding hands',
+                'position': 'A',
+              },
+              {
+                'char_caption': '1boy, suit, source#holding hands',
+                'position': 'B',
+              },
+            ],
+          },
+        },
+        'v4_negative_prompt': {
+          'caption': {
+            'base_caption': 'bad hands',
+            'char_captions': [
+              {'char_caption': 'lowres'},
+              {'char_caption': 'bad anatomy'},
+            ],
+          },
+        },
+      });
+      final stale = NaiImageMetadata(
+        prompt: '1girl, 1boy, indoor',
+        negativePrompt: 'bad hands',
+        rawJson: rawJson,
+        software: 'NovelAI',
+        source: 'NovelAI Diffusion V4.5 4BDE2A90',
+      );
+      final record = LocalImageRecord(
+        path: r'G:\test\image.png',
+        size: 1,
+        modifiedAt: DateTime(2026, 5, 4),
+        metadata: stale,
+        metadataStatus: MetadataStatus.success,
+      );
+
+      final metadata = await LocalImageDetailData(record).getMetadataAsync();
+
+      expect(
+        metadata?.characterPrompts,
+        equals([
+          '1girl, rabbit girl, target#holding hands',
+          '1boy, suit, source#holding hands',
+        ]),
+      );
+      expect(metadata?.characterInfos, hasLength(2));
+      expect(metadata?.characterInfos.first.position, 'A');
+      expect(metadata?.characterInfos.last.negativePrompt, 'bad anatomy');
     });
 
     test('fromNaiComment should parse precise reference metadata', () {

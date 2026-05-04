@@ -129,8 +129,10 @@ abstract class LocalGalleryService {
   /// [metadata] 可选的图像元数据
   ///
   /// 返回是否成功添加
-  Future<bool> addNewImageImmediately(String filePath,
-      {NaiImageMetadata? metadata});
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  });
 
   /// 获取当前过滤后的文件总数
   int get filteredCount;
@@ -432,16 +434,19 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   Future<void> _performIncrementalScan() async {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
-      AppLogger.w('[UGS] _performIncrementalScan: rootPath is null',
-          'LocalGalleryService');
+      AppLogger.w(
+        '[UGS] _performIncrementalScan: rootPath is null',
+        'LocalGalleryService',
+      );
       return;
     }
 
     // 检查是否已有扫描在进行中
     final scanManager = ScanStateManager.instance;
     AppLogger.i(
-        '[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath',
-        'LocalGalleryService');
+      '[UGS] _performIncrementalScan: isScanning=${scanManager.isScanning}, rootPath=$rootPath',
+      'LocalGalleryService',
+    );
 
     if (scanManager.isScanning) {
       AppLogger.w('[UGS] 增量扫描请求被忽略：已有扫描在进行中', 'LocalGalleryService');
@@ -479,7 +484,9 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
     final rootPath = await GalleryFolderRepository.instance.getRootPath();
     if (rootPath == null) {
       AppLogger.w(
-          '[UGS] _performFullScan: rootPath is null', 'LocalGalleryService');
+        '[UGS] _performFullScan: rootPath is null',
+        'LocalGalleryService',
+      );
       return;
     }
 
@@ -658,7 +665,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
 
   /// 从数据库记录构建元数据
   NaiImageMetadata _buildMetadataFromRecord(GalleryMetadataRecord record) {
-    return NaiImageMetadata(
+    final metadata = NaiImageMetadata(
       prompt: record.prompt,
       negativePrompt: record.negativePrompt,
       seed: record.seed,
@@ -682,6 +689,7 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       version: record.version,
       rawJson: record.rawJson,
     );
+    return metadata.upgradeFromRawJsonIfNeeded();
   }
 
   @override
@@ -938,16 +946,20 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
   ///
   /// 返回是否成功添加
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-      {NaiImageMetadata? metadata}) async {
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) async {
     _ensureInitialized();
 
     try {
       final normalizedPath = normalizeGalleryFilePath(filePath);
       final file = File(normalizedPath);
       if (!await file.exists()) {
-        AppLogger.w('[AddNewImage] File does not exist: $filePath',
-            'LocalGalleryService');
+        AppLogger.w(
+          '[AddNewImage] File does not exist: $filePath',
+          'LocalGalleryService',
+        );
         return false;
       }
 
@@ -955,8 +967,10 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       final existingIndex =
           _allFiles.indexWhere((f) => galleryFilePathsEqual(f.path, file.path));
       if (existingIndex != -1) {
-        AppLogger.d('[AddNewImage] File already exists in gallery: $filePath',
-            'LocalGalleryService');
+        AppLogger.d(
+          '[AddNewImage] File already exists in gallery: $filePath',
+          'LocalGalleryService',
+        );
         return false;
       }
 
@@ -1001,12 +1015,17 @@ class LocalGalleryServiceImpl implements LocalGalleryService {
       }
 
       AppLogger.i(
-          '[AddNewImage] Added new image immediately: $fileName (ID: $imageId)',
-          'LocalGalleryService');
+        '[AddNewImage] Added new image immediately: $fileName (ID: $imageId)',
+        'LocalGalleryService',
+      );
       return true;
     } catch (e, stack) {
-      AppLogger.e('[AddNewImage] Failed to add new image: $filePath', e, stack,
-          'LocalGalleryService');
+      AppLogger.e(
+        '[AddNewImage] Failed to add new image: $filePath',
+        e,
+        stack,
+        'LocalGalleryService',
+      );
       return false;
     }
   }
@@ -1212,8 +1231,10 @@ class ErrorGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwError();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-          {NaiImageMetadata? metadata}) =>
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) =>
       _throwError();
 
   @override
@@ -1285,8 +1306,10 @@ class _PlaceholderGalleryService implements LocalGalleryService {
   Future<void> refresh() => _throwNotInitialized();
 
   @override
-  Future<bool> addNewImageImmediately(String filePath,
-          {NaiImageMetadata? metadata}) =>
+  Future<bool> addNewImageImmediately(
+    String filePath, {
+    NaiImageMetadata? metadata,
+  }) =>
       _throwNotInitialized();
 
   @override

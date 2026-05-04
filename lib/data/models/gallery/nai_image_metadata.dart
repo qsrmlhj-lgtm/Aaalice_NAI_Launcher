@@ -173,6 +173,14 @@ class NaiImageMetadata with _$NaiImageMetadata {
       if (reparsed == null || !reparsed.hasData) return this;
 
       return copyWith(
+        characterPrompts: characterPrompts.isEmpty
+            ? reparsed.characterPrompts
+            : characterPrompts,
+        characterNegativePrompts: characterNegativePrompts.isEmpty
+            ? reparsed.characterNegativePrompts
+            : characterNegativePrompts,
+        characterInfos:
+            characterInfos.isEmpty ? reparsed.characterInfos : characterInfos,
         vibeReferences:
             vibeReferences.isEmpty ? reparsed.vibeReferences : vibeReferences,
         varietyPlus: varietyPlus ?? reparsed.varietyPlus,
@@ -433,6 +441,8 @@ class NaiImageMetadata with _$NaiImageMetadata {
       'variety_plus',
       'varietyplus',
       'skip_cfg_above_sigma',
+      'v4_prompt',
+      'char_captions',
     ];
     return markers.any(text.contains);
   }
