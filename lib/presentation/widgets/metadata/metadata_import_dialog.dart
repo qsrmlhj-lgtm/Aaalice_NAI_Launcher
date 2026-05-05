@@ -222,7 +222,9 @@ class _MetadataImportDialogState extends State<MetadataImportDialog> {
             title: '固定词',
             value: _options.importFixedTags,
             hasData: metadata.fixedPrefixTags.isNotEmpty ||
-                metadata.fixedSuffixTags.isNotEmpty,
+                metadata.fixedSuffixTags.isNotEmpty ||
+                metadata.fixedNegativePrefixTags.isNotEmpty ||
+                metadata.fixedNegativeSuffixTags.isNotEmpty,
             onChanged: (v) => setState(
               () => _options = _options.copyWith(importFixedTags: v),
             ),
@@ -243,6 +245,30 @@ class _MetadataImportDialogState extends State<MetadataImportDialog> {
                 _buildChildCheckboxTile(
                   title:
                       '后缀: ${_truncateText(metadata.fixedSuffixTags.join(', '), 40)}',
+                  value: _options.importFixedSuffix,
+                  onChanged: _options.importFixedTags
+                      ? (v) => setState(
+                            () => _options =
+                                _options.copyWith(importFixedSuffix: v),
+                          )
+                      : null,
+                ),
+              if (metadata.fixedNegativePrefixTags.isNotEmpty)
+                _buildChildCheckboxTile(
+                  title:
+                      '负向前缀: ${_truncateText(metadata.fixedNegativePrefixTags.join(', '), 40)}',
+                  value: _options.importFixedPrefix,
+                  onChanged: _options.importFixedTags
+                      ? (v) => setState(
+                            () => _options =
+                                _options.copyWith(importFixedPrefix: v),
+                          )
+                      : null,
+                ),
+              if (metadata.fixedNegativeSuffixTags.isNotEmpty)
+                _buildChildCheckboxTile(
+                  title:
+                      '负向后缀: ${_truncateText(metadata.fixedNegativeSuffixTags.join(', '), 40)}',
                   value: _options.importFixedSuffix,
                   onChanged: _options.importFixedTags
                       ? (v) => setState(
@@ -335,7 +361,7 @@ class _MetadataImportDialogState extends State<MetadataImportDialog> {
         // 负向提示词
         _buildCheckboxTile(
           title: '负向提示词',
-          subtitle: _truncateText(metadata.negativePrompt, 50),
+          subtitle: _truncateText(metadata.displayNegativePrompt, 50),
           value: _options.importNegativePrompt,
           hasData: metadata.negativePrompt.isNotEmpty,
           onChanged: (v) => setState(
@@ -433,133 +459,129 @@ class _MetadataImportDialogState extends State<MetadataImportDialog> {
   /// 构建生成参数分组
   Widget _buildGenerationSection() {
     final l10n = context.l10n;
-    final metadata = widget.metadata;
+    final options = _buildGenerationImportOptions();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionTitle('生成参数', Icons.tune),
+        _buildSectionTitle(l10n.metadataImport_generationSection, Icons.tune),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 4,
-          children: [
-            // 基础参数
-            _buildCompactCheckbox(
-              label: l10n.generation_seed,
-              value: _options.importSeed,
-              hasData: metadata.seed != null,
-              onChanged: (v) =>
-                  setState(() => _options = _options.copyWith(importSeed: v)),
-            ),
-            _buildCompactCheckbox(
-              label: '步数',
-              value: _options.importSteps,
-              hasData: metadata.steps != null,
-              onChanged: (v) =>
-                  setState(() => _options = _options.copyWith(importSteps: v)),
-            ),
-            _buildCompactCheckbox(
-              label: l10n.metadataImport_scale,
-              value: _options.importScale,
-              hasData: metadata.scale != null,
-              onChanged: (v) => setState(
-                () => _options = _options.copyWith(importScale: v),
-              ),
-            ),
-            _buildCompactCheckbox(
-              label: l10n.generation_imageSize,
-              value: _options.importSize,
-              hasData: metadata.width != null && metadata.height != null,
-              onChanged: (v) => setState(
-                () => _options = _options.copyWith(importSize: v),
-              ),
-            ),
-            _buildCompactCheckbox(
-              label: l10n.generation_sampler,
-              value: _options.importSampler,
-              hasData: metadata.sampler != null,
-              onChanged: (v) => setState(
-                () => _options = _options.copyWith(importSampler: v),
-              ),
-            ),
-            if (metadata.model != null)
-              _buildCompactCheckbox(
-                label: l10n.generation_model,
-                value: _options.importModel,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importModel: v),
+          children: options
+              .where((option) => option.hasData)
+              .map(
+                (option) => _buildCompactCheckbox(
+                  label: option.label,
+                  value: option.value,
+                  hasData: option.hasData,
+                  onChanged: option.onChanged,
                 ),
-              ),
-            // 高级参数
-            if (metadata.smea == true || metadata.smeaDyn == true)
-              _buildCompactCheckbox(
-                label: 'SMEA',
-                value: _options.importSmea,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importSmea: v),
-                ),
-              ),
-            if (metadata.smeaDyn == true)
-              _buildCompactCheckbox(
-                label: 'SMEA DYN',
-                value: _options.importSmeaDyn,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importSmeaDyn: v),
-                ),
-              ),
-            if (metadata.noiseSchedule != null)
-              _buildCompactCheckbox(
-                label: l10n.generation_noiseSchedule,
-                value: _options.importNoiseSchedule,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importNoiseSchedule: v),
-                ),
-              ),
-            if (metadata.cfgRescale != null && metadata.cfgRescale! > 0)
-              _buildCompactCheckbox(
-                label: 'CFG Rescale',
-                value: _options.importCfgRescale,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importCfgRescale: v),
-                ),
-              ),
-            if (metadata.qualityToggle != null)
-              _buildCompactCheckbox(
-                label: l10n.metadataImport_qualityToggle,
-                value: _options.importQualityToggle,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importQualityToggle: v),
-                ),
-              ),
-            if (metadata.ucPreset != null)
-              _buildCompactCheckbox(
-                label: l10n.metadataImport_ucPreset,
-                value: _options.importUcPreset,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importUcPreset: v),
-                ),
-              ),
-            if (metadata.varietyPlus != null)
-              _buildCompactCheckbox(
-                label: 'Variety+',
-                value: _options.importVarietyPlus,
-                hasData: true,
-                onChanged: (v) => setState(
-                  () => _options = _options.copyWith(importVarietyPlus: v),
-                ),
-              ),
-          ],
+              )
+              .toList(),
         ),
       ],
     );
+  }
+
+  List<_GenerationImportOption> _buildGenerationImportOptions() {
+    final l10n = context.l10n;
+    final metadata = widget.metadata;
+
+    return [
+      _GenerationImportOption(
+        label: l10n.generation_seed,
+        value: _options.importSeed,
+        hasData: metadata.seed != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSeed: v)),
+      ),
+      _GenerationImportOption(
+        label: _labelBeforeColon(l10n.generation_steps('')),
+        value: _options.importSteps,
+        hasData: metadata.steps != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSteps: v)),
+      ),
+      _GenerationImportOption(
+        label: _labelBeforeColon(l10n.generation_cfgScale('')),
+        value: _options.importScale,
+        hasData: metadata.scale != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importScale: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_imageSize,
+        value: _options.importSize,
+        hasData: metadata.width != null && metadata.height != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSize: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_sampler,
+        value: _options.importSampler,
+        hasData: metadata.sampler != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSampler: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_model,
+        value: _options.importModel,
+        hasData: metadata.model != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importModel: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_smea,
+        value: _options.importSmea,
+        hasData: metadata.smea == true || metadata.smeaDyn == true,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSmea: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_smeaDyn,
+        value: _options.importSmeaDyn,
+        hasData: metadata.smeaDyn == true,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importSmeaDyn: v)),
+      ),
+      _GenerationImportOption(
+        label: 'Variety+',
+        value: _options.importVarietyPlus,
+        hasData: metadata.varietyPlus != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importVarietyPlus: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.generation_noiseSchedule,
+        value: _options.importNoiseSchedule,
+        hasData: metadata.noiseSchedule != null,
+        onChanged: (v) => setState(
+            () => _options = _options.copyWith(importNoiseSchedule: v)),
+      ),
+      _GenerationImportOption(
+        label: _labelBeforeColon(l10n.generation_cfgRescale('')),
+        value: _options.importCfgRescale,
+        hasData: metadata.cfgRescale != null && metadata.cfgRescale! > 0,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importCfgRescale: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.qualityTags_label,
+        value: _options.importQualityToggle,
+        hasData: metadata.qualityToggle != null,
+        onChanged: (v) => setState(
+            () => _options = _options.copyWith(importQualityToggle: v)),
+      ),
+      _GenerationImportOption(
+        label: l10n.ucPreset_label,
+        value: _options.importUcPreset,
+        hasData: metadata.ucPreset != null,
+        onChanged: (v) =>
+            setState(() => _options = _options.copyWith(importUcPreset: v)),
+      ),
+    ];
   }
 
   /// 构建分组标题
@@ -729,4 +751,24 @@ class _MetadataImportDialogState extends State<MetadataImportDialog> {
     if (text.length <= maxLength) return text;
     return '${text.substring(0, maxLength)}...';
   }
+
+  String _labelBeforeColon(String text) {
+    final colonIndex = text.indexOf(':');
+    if (colonIndex < 0) return text.trim();
+    return text.substring(0, colonIndex).trim();
+  }
+}
+
+class _GenerationImportOption {
+  const _GenerationImportOption({
+    required this.label,
+    required this.value,
+    required this.hasData,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final bool hasData;
+  final ValueChanged<bool> onChanged;
 }

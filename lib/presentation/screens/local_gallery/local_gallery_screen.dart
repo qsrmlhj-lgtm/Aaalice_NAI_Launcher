@@ -36,6 +36,7 @@ import '../../providers/reverse_prompt_provider.dart';
 import '../../router/app_router.dart';
 import '../../services/image_workflow_launcher.dart';
 import '../../utils/asset_protection_guard.dart';
+import '../../utils/prompt_preset_import_utils.dart';
 import '../../providers/selection_mode_provider.dart';
 import '../../widgets/bulk_metadata_edit_dialog.dart';
 import '../../widgets/collection_select_dialog.dart';
@@ -936,26 +937,37 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
         appliedCount++;
       }
 
-      _applyParam(options.importSeed, metadata.seed, paramsNotifier.updateSeed);
-      _applyParam(
+      appliedCount += _applyParam(
+          options.importSeed, metadata.seed, paramsNotifier.updateSeed);
+      appliedCount += _applyParam(
           options.importSteps, metadata.steps, paramsNotifier.updateSteps);
-      _applyParam(
+      appliedCount += _applyParam(
           options.importScale, metadata.scale, paramsNotifier.updateScale);
-      _applyParam(options.importSampler, metadata.sampler,
+      appliedCount += _applyParam(options.importSampler, metadata.sampler,
           paramsNotifier.updateSampler);
-      _applyParam(
+      appliedCount += _applyParam(
           options.importModel, metadata.model, paramsNotifier.updateModel);
-      _applyParam(options.importSmea, metadata.smea, paramsNotifier.updateSmea);
-      _applyParam(options.importSmeaDyn, metadata.smeaDyn,
+      appliedCount += _applyParam(
+          options.importSmea, metadata.smea, paramsNotifier.updateSmea);
+      appliedCount += _applyParam(options.importSmeaDyn, metadata.smeaDyn,
           paramsNotifier.updateSmeaDyn);
-      _applyParam(options.importNoiseSchedule, metadata.noiseSchedule,
-          paramsNotifier.updateNoiseSchedule);
-      _applyParam(options.importCfgRescale, metadata.cfgRescale,
+      appliedCount += _applyParam(options.importVarietyPlus,
+          metadata.varietyPlus, paramsNotifier.updateVarietyPlus);
+      appliedCount += _applyParam(options.importNoiseSchedule,
+          metadata.noiseSchedule, paramsNotifier.updateNoiseSchedule);
+      appliedCount += _applyParam(options.importCfgRescale, metadata.cfgRescale,
           paramsNotifier.updateCfgRescale);
-      _applyParam(options.importQualityToggle, metadata.qualityToggle,
-          paramsNotifier.updateQualityToggle);
-      _applyParam(options.importUcPreset, metadata.ucPreset,
-          paramsNotifier.updateUcPreset);
+      if (options.importQualityToggle && metadata.qualityToggle != null) {
+        paramsNotifier.updateQualityToggle(metadata.qualityToggle!);
+        applyImportedQualityToggle(ref.read, metadata.qualityToggle!);
+        appliedCount++;
+      }
+
+      if (options.importUcPreset && metadata.ucPreset != null) {
+        paramsNotifier.updateUcPreset(metadata.ucPreset!);
+        applyImportedUcPreset(ref.read, metadata.ucPreset!);
+        appliedCount++;
+      }
 
       if (options.importSize &&
           metadata.width != null &&
@@ -988,21 +1000,26 @@ class _LocalGalleryScreenState extends ConsumerState<LocalGalleryScreen> {
     NaiImageMetadata metadata, {
     required bool importUcPreset,
   }) {
+    final baseNegative = metadata.displayNegativePrompt;
     if (!importUcPreset || metadata.ucPreset == null) {
-      return metadata.negativePrompt;
+      return baseNegative;
     }
 
     final model =
         metadata.model ?? ref.read(generationParamsNotifierProvider).model;
     return UcPresets.stripPresetByInt(
-      metadata.negativePrompt,
+      baseNegative,
       model,
       metadata.ucPreset!,
     );
   }
 
-  void _applyParam<T>(bool shouldApply, T? value, void Function(T) updater) {
-    if (shouldApply && value != null) updater(value);
+  int _applyParam<T>(bool shouldApply, T? value, void Function(T) updater) {
+    if (shouldApply && value != null) {
+      updater(value);
+      return 1;
+    }
+    return 0;
   }
 
   void _applyCharacterPrompts(NaiImageMetadata metadata) {

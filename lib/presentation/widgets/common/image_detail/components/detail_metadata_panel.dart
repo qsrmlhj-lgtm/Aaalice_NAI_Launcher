@@ -495,6 +495,10 @@ class _MetadataContent extends StatelessWidget {
         ...metadata.fixedPrefixTags,
         ...metadata.fixedSuffixTags,
       ];
+      final fixedNegativeTags = [
+        ...metadata.fixedNegativePrefixTags,
+        ...metadata.fixedNegativeSuffixTags,
+      ];
 
       // 主提示词包含角色提示词
       final mainPromptWithChars = _buildMainPromptWithCharacters();
@@ -527,6 +531,20 @@ class _MetadataContent extends StatelessWidget {
               content: fixedTags.join(', '),
               tags: fixedTags,
               initiallyExpanded: false,
+            ),
+          ],
+          // 负向固定词（前缀+后缀合并）
+          if (fixedNegativeTags.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            PromptSection(
+              title: '负向固定词',
+              icon: Icons.push_pin_outlined,
+              content: fixedNegativeTags.join(', '),
+              tags: fixedNegativeTags,
+              initiallyExpanded: false,
+              contentColor:
+                  Theme.of(context).colorScheme.error.withOpacity(0.8),
+              borderColor: Theme.of(context).colorScheme.error,
             ),
           ],
           // 质量词
