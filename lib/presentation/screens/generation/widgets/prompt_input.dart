@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/localization_extension.dart';
-import '../../../../core/constants/api_constants.dart';
 import '../../../../core/utils/comfyui_prompt_parser/pipe_parser.dart';
 import '../../../../core/utils/nai_prompt_formatter.dart';
 import '../../../../core/utils/sd_to_nai_converter.dart';
@@ -571,6 +570,8 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
     final fixedTagsState = ref.watch(fixedTagsNotifierProvider);
     final enabledPrefixes = fixedTagsState.enabledPrefixes;
     final enabledSuffixes = fixedTagsState.enabledSuffixes;
+    final negativeEnabledPrefixes = fixedTagsState.negativeEnabledPrefixes;
+    final negativeEnabledSuffixes = fixedTagsState.negativeEnabledSuffixes;
 
     // 获取质量词数据
     final qualityState = ref.watch(qualityPresetNotifierProvider);
@@ -582,9 +583,11 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
         .getEffectiveContent(model);
 
     // 获取负面词预设数据
-    final ucState = ref.watch(ucPresetNotifierProvider);
-    final ucPresetContent =
-        UcPresets.getPresetContent(model, ucState.presetType);
+    ref.watch(ucPresetNotifierProvider);
+    final ucPresetContent = ref
+            .watch(ucPresetNotifierProvider.notifier)
+            .getEffectiveContent(model) ??
+        '';
 
     // 获取多角色数据
     final characterConfig = ref.watch(characterPromptNotifierProvider);
@@ -628,9 +631,9 @@ class _PromptInputWidgetState extends ConsumerState<PromptInputWidget> {
           tooltipBuilder: (theme) => _NegativePromptTooltip(
             theme: theme,
             userNegativePrompt: _negativeController.text,
-            ucPresetType: ucState.presetType,
+            prefixes: negativeEnabledPrefixes,
+            suffixes: negativeEnabledSuffixes,
             ucPresetContent: ucPresetContent,
-            isCustom: ucState.isCustom,
             l10n: context.l10n,
             aliasResolver: aliasResolver,
           ),
@@ -1328,18 +1331,18 @@ class _PositivePromptTooltip extends StatelessWidget {
 class _NegativePromptTooltip extends StatelessWidget {
   final ThemeData theme;
   final String userNegativePrompt;
-  final UcPresetType ucPresetType;
+  final List<FixedTagEntry> prefixes;
+  final List<FixedTagEntry> suffixes;
   final String ucPresetContent;
-  final bool isCustom;
   final dynamic l10n;
   final AliasResolverService aliasResolver;
 
   const _NegativePromptTooltip({
     required this.theme,
     required this.userNegativePrompt,
-    required this.ucPresetType,
+    required this.prefixes,
+    required this.suffixes,
     required this.ucPresetContent,
-    required this.isCustom,
     required this.l10n,
     required this.aliasResolver,
   });
@@ -1348,6 +1351,8 @@ class _NegativePromptTooltip extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = theme.brightness == Brightness.dark;
     final hasUserInput = userNegativePrompt.trim().isNotEmpty;
+    final hasPrefixes = prefixes.isNotEmpty;
+    final hasSuffixes = suffixes.isNotEmpty;
     final hasPreset = ucPresetContent.isNotEmpty;
 
     // 构建最终生效的完整负面提示词
@@ -1374,6 +1379,20 @@ class _NegativePromptTooltip extends StatelessWidget {
           const SizedBox(height: 8),
         ],
 
+        // 负向固定词（前缀）- 解析别名
+        if (hasPrefixes) ...[
+          _buildSection(
+            icon: Icons.arrow_forward_rounded,
+            label: '负向固定词前缀',
+            color: theme.colorScheme.error,
+            content: prefixes
+                .map((entry) => aliasResolver.resolveAliases(entry.content))
+                .join(', '),
+            isDark: isDark,
+          ),
+          const SizedBox(height: 8),
+        ],
+
         // 用户输入 - 解析别名
         if (hasUserInput) ...[
           _buildSection(
@@ -1381,6 +1400,20 @@ class _NegativePromptTooltip extends StatelessWidget {
             label: l10n.prompt_mainNegative,
             color: theme.colorScheme.tertiary,
             content: aliasResolver.resolveAliases(userNegativePrompt.trim()),
+            isDark: isDark,
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // 负向固定词（后缀）- 解析别名
+        if (hasSuffixes) ...[
+          _buildSection(
+            icon: Icons.arrow_back_rounded,
+            label: '负向固定词后缀',
+            color: theme.colorScheme.tertiary,
+            content: suffixes
+                .map((entry) => aliasResolver.resolveAliases(entry.content))
+                .join(', '),
             isDark: isDark,
           ),
           const SizedBox(height: 8),
@@ -1596,8 +1629,20 @@ class _NegativePromptTooltip extends StatelessWidget {
     }
 
     // 用户输入（解析别名）
+    for (final prefix in prefixes) {
+      if (prefix.content.trim().isNotEmpty) {
+        parts.add(aliasResolver.resolveAliases(prefix.content.trim()));
+      }
+    }
+
     if (userNegativePrompt.trim().isNotEmpty) {
       parts.add(aliasResolver.resolveAliases(userNegativePrompt.trim()));
+    }
+
+    for (final suffix in suffixes) {
+      if (suffix.content.trim().isNotEmpty) {
+        parts.add(aliasResolver.resolveAliases(suffix.content.trim()));
+      }
     }
 
     return parts.join(', ');

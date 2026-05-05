@@ -160,6 +160,9 @@ class StorageKeys {
   // Fixed Tags (固定词相关)
   static const String fixedTagsBox = 'fixed_tags';
   static const String fixedTagsData = 'fixed_tags_data';
+  static const String fixedTagLinksData = 'fixed_tag_links_data';
+  static const String fixedTagsNegativePanelExpanded =
+      'fixed_tags_negative_panel_expanded';
   static const String fixedTagCategoriesData = 'fixed_tag_categories_data';
 
   // Tag Library (词库相关)

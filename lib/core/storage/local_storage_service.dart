@@ -641,6 +641,30 @@ class LocalStorageService {
     await setSetting(StorageKeys.fixedTagsData, json);
   }
 
+  /// 获取固定词联动关系 JSON
+  String? getFixedTagLinksJson() {
+    return getSetting<String>(StorageKeys.fixedTagLinksData);
+  }
+
+  /// 保存固定词联动关系 JSON
+  Future<void> setFixedTagLinksJson(String json) async {
+    await setSetting(StorageKeys.fixedTagLinksData, json);
+  }
+
+  /// 获取负向固定词面板展开状态
+  bool getFixedTagsNegativePanelExpanded() {
+    return getSetting<bool>(
+          StorageKeys.fixedTagsNegativePanelExpanded,
+          defaultValue: true,
+        ) ??
+        true;
+  }
+
+  /// 保存负向固定词面板展开状态
+  Future<void> setFixedTagsNegativePanelExpanded(bool expanded) async {
+    await setSetting(StorageKeys.fixedTagsNegativePanelExpanded, expanded);
+  }
+
   /// 获取固定词分类列表 JSON
   String? getFixedTagCategoriesJson() {
     return getSetting<String>(StorageKeys.fixedTagCategoriesData);

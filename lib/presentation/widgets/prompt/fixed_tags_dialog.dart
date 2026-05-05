@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,8 @@ import 'package:go_router/go_router.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 
 import '../../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../../data/models/fixed_tag/fixed_tag_link.dart';
+import '../../../data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import '../../../data/models/tag_library/tag_library_entry.dart';
 import '../../providers/fixed_tags_provider.dart';
 import '../../providers/tag_library_page_provider.dart';
@@ -17,6 +20,15 @@ import 'fixed_tag_edit_dialog.dart';
 import '../common/app_toast.dart';
 import 'package:nai_launcher/presentation/widgets/common/themed_input.dart';
 
+const double _fixedTagDialogCollapsedWidth = 520;
+const double _fixedTagDialogExpandedWidth = 980;
+const double _fixedTagDialogHorizontalInset = 32;
+const double _fixedTagColumnGap = 28;
+const double _fixedTagLinkAnchorInset = 31;
+const double _fixedTagLinkRowHeight = 64;
+const double _fixedTagLinkTopOffset = 136;
+const double _fixedTagLinkBottomPadding = 16;
+
 /// 固定词管理对话框
 class FixedTagsDialog extends ConsumerStatefulWidget {
   const FixedTagsDialog({super.key});
@@ -26,12 +38,116 @@ class FixedTagsDialog extends ConsumerStatefulWidget {
 }
 
 class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
+  final _positiveSearchController = TextEditingController();
+  final _negativeSearchController = TextEditingController();
+  final _positiveListController = ScrollController();
+  final _negativeListController = ScrollController();
+  final _linkLayerKey = GlobalKey();
+  final _positiveAnchorKeys = <String, GlobalKey>{};
+  final _negativeAnchorKeys = <String, GlobalKey>{};
+  String _positiveSearchQuery = '';
+  String _negativeSearchQuery = '';
+  int? _scheduledLinkGeometryHash;
+  bool _scrollLinkRepaintScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _positiveListController.addListener(_repaintLinkLayer);
+    _negativeListController.addListener(_repaintLinkLayer);
+  }
+
+  @override
+  void dispose() {
+    _positiveListController.removeListener(_repaintLinkLayer);
+    _negativeListController.removeListener(_repaintLinkLayer);
+    _positiveSearchController.dispose();
+    _negativeSearchController.dispose();
+    _positiveListController.dispose();
+    _negativeListController.dispose();
+    super.dispose();
+  }
+
+  void _repaintLinkLayer() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {});
+    if (_scrollLinkRepaintScheduled) {
+      return;
+    }
+    _scrollLinkRepaintScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollLinkRepaintScheduled = false;
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  GlobalKey _anchorKeyFor(FixedTagEntry entry) {
+    final keys = entry.promptType == FixedTagPromptType.positive
+        ? _positiveAnchorKeys
+        : _negativeAnchorKeys;
+    return keys.putIfAbsent(entry.id, GlobalKey.new);
+  }
+
+  void _scheduleLinkGeometryRefresh({
+    required List<FixedTagEntry> positives,
+    required List<FixedTagEntry> negatives,
+  }) {
+    final geometryHash = Object.hashAll([
+      for (final entry in positives) entry.id,
+      '|',
+      for (final entry in negatives) entry.id,
+    ]);
+    if (_scheduledLinkGeometryHash == geometryHash) {
+      return;
+    }
+    _scheduledLinkGeometryHash = geometryHash;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scheduledLinkGeometryHash == geometryHash) {
+        setState(() {});
+      }
+    });
+  }
+
+  Map<String, Offset> _collectAnchorCenters(Map<String, GlobalKey> keys) {
+    final layerRenderObject = _linkLayerKey.currentContext?.findRenderObject();
+    if (layerRenderObject is! RenderBox || !layerRenderObject.hasSize) {
+      return const {};
+    }
+
+    final centers = <String, Offset>{};
+    for (final entry in keys.entries) {
+      final renderObject = entry.value.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) {
+        continue;
+      }
+      final globalCenter = renderObject.localToGlobal(
+        renderObject.size.center(Offset.zero),
+      );
+      centers[entry.key] = layerRenderObject.globalToLocal(globalCenter);
+    }
+    return centers;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final fixedTagsState = ref.watch(fixedTagsNotifierProvider);
     final entries = fixedTagsState.entries;
     final isDark = theme.brightness == Brightness.dark;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final availableWidth = math.max(
+      320.0,
+      screenWidth - _fixedTagDialogHorizontalInset,
+    );
+    final targetWidth = fixedTagsState.negativePanelExpanded
+        ? _fixedTagDialogExpandedWidth
+        : _fixedTagDialogCollapsedWidth;
+    final dialogWidth = math.min(targetWidth, availableWidth);
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -41,11 +157,14 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
         borderRadius: BorderRadius.circular(8),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
-            constraints: const BoxConstraints(
-              maxWidth: 520,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            width: dialogWidth,
+            constraints: BoxConstraints(
+              minWidth: dialogWidth,
+              maxWidth: dialogWidth,
               maxHeight: 620,
-              minWidth: 420,
             ),
             decoration: BoxDecoration(
               color: isDark
@@ -83,7 +202,7 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
                 Flexible(
                   child: entries.isEmpty
                       ? _buildEmptyState(theme, isDark)
-                      : _buildEntryList(theme, entries, isDark),
+                      : _buildListBody(theme, fixedTagsState, isDark),
                 ),
 
                 // 底部操作栏
@@ -97,8 +216,11 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
   }
 
   Widget _buildHeader(ThemeData theme, bool isDark) {
-    final enabledCount = ref.watch(enabledFixedTagsCountProvider);
-    final totalCount = ref.watch(fixedTagsCountProvider);
+    final fixedTagsState = ref.watch(fixedTagsNotifierProvider);
+    final enabledCount =
+        fixedTagsState.entries.where((entry) => entry.enabled).length;
+    final totalCount = fixedTagsState.entries.length;
+    final linkCount = fixedTagsState.links.length;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
@@ -176,10 +298,10 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          context.l10n.fixedTags_enabledCount(
+                          '${context.l10n.fixedTags_enabledCount(
                             enabledCount.toString(),
                             totalCount.toString(),
-                          ),
+                          )} · 关联 $linkCount',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: enabledCount > 0
                                 ? theme.colorScheme.secondary
@@ -194,6 +316,41 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
               ],
             ),
           ),
+          TextButton.icon(
+            onPressed: () {
+              ref
+                  .read(fixedTagsNotifierProvider.notifier)
+                  .setNegativePanelExpanded(
+                    !fixedTagsState.negativePanelExpanded,
+                  );
+            },
+            icon: Icon(
+              fixedTagsState.negativePanelExpanded
+                  ? Icons.keyboard_tab_rounded
+                  : Icons.view_sidebar_rounded,
+              size: 18,
+            ),
+            label: Text(
+              fixedTagsState.negativePanelExpanded ? '收起负向' : '展开负向',
+            ),
+          ),
+          IconButton(
+            tooltip: '撤销固定词操作',
+            onPressed: fixedTagsState.canUndo
+                ? () => ref.read(fixedTagsNotifierProvider.notifier).undo()
+                : null,
+            icon: const Icon(Icons.undo_rounded, size: 18),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            tooltip: '重做固定词操作',
+            onPressed: fixedTagsState.canRedo
+                ? () => ref.read(fixedTagsNotifierProvider.notifier).redo()
+                : null,
+            icon: const Icon(Icons.redo_rounded, size: 18),
+            visualDensity: VisualDensity.compact,
+          ),
+          const SizedBox(width: 8),
           // 全开/全关切换按钮
           if (totalCount > 0) ...[
             ThemedSwitch(
@@ -232,6 +389,27 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
     );
   }
 
+  Widget _buildListBody(
+    ThemeData theme,
+    FixedTagsState state,
+    bool isDark,
+  ) {
+    if (!state.negativePanelExpanded) {
+      _scheduledLinkGeometryHash = null;
+    }
+    return ClipRect(
+      child: state.negativePanelExpanded
+          ? _buildDualColumnLayout(theme, state, isDark)
+          : _buildEntryList(
+              theme,
+              state.positiveEntries.sortedByOrder(),
+              isDark,
+              FixedTagPromptType.positive,
+              scrollController: _positiveListController,
+            ),
+    );
+  }
+
   Widget _buildEmptyState(ThemeData theme, bool isDark) {
     return Center(
       child: Padding(
@@ -265,39 +443,478 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
     ThemeData theme,
     List<FixedTagEntry> entries,
     bool isDark,
-  ) {
+    FixedTagPromptType promptType, {
+    ScrollController? scrollController,
+    bool allowReorder = true,
+    bool showLinkAnchors = false,
+  }) {
+    Widget buildTile(FixedTagEntry entry, int index) {
+      return _FixedTagEntryTile(
+        key: ValueKey(entry.id),
+        entry: entry,
+        index: index,
+        isDark: isDark,
+        linkAnchor: showLinkAnchors ? _buildLinkAnchor(theme, entry) : null,
+        onToggleEnabled: () {
+          ref.read(fixedTagsNotifierProvider.notifier).toggleEnabled(entry.id);
+        },
+        onEdit: () => _showEditDialog(entry),
+        onDelete: () => _showDeleteConfirmation(entry),
+      );
+    }
+
+    if (!allowReorder) {
+      return ListView.builder(
+        controller: scrollController,
+        shrinkWrap: true,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        itemCount: entries.length,
+        itemBuilder: (context, index) => buildTile(entries[index], index),
+      );
+    }
+
     return ReorderableListView.builder(
+      scrollController: scrollController,
       shrinkWrap: true,
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
       buildDefaultDragHandles: false,
       itemCount: entries.length,
       itemBuilder: (context, index) {
         final entry = entries[index];
-        return _FixedTagEntryTile(
-          key: ValueKey(entry.id),
-          entry: entry,
-          index: index,
-          isDark: isDark,
-          onToggleEnabled: () {
-            ref
-                .read(fixedTagsNotifierProvider.notifier)
-                .toggleEnabled(entry.id);
-          },
-          onEdit: () => _showEditDialog(entry),
-          onDelete: () => _showDeleteConfirmation(entry),
-        );
+        return buildTile(entry, index);
       },
       onReorder: (oldIndex, newIndex) {
-        if (newIndex > oldIndex) newIndex--;
         ref
             .read(fixedTagsNotifierProvider.notifier)
-            .reorder(oldIndex, newIndex);
+            .reorderWithinPromptType(promptType, oldIndex, newIndex);
+      },
+    );
+  }
+
+  Widget _buildDualColumnLayout(
+    ThemeData theme,
+    FixedTagsState state,
+    bool isDark,
+  ) {
+    final positives = _filterEntries(
+      state.positiveEntries.sortedByOrder(),
+      _positiveSearchQuery,
+    );
+    final negatives = _filterEntries(
+      state.negativeEntries.sortedByOrder(),
+      _negativeSearchQuery,
+    );
+    _scheduleLinkGeometryRefresh(
+      positives: positives,
+      negatives: negatives,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columnWidth = (constraints.maxWidth - _fixedTagColumnGap) / 2;
+        final positiveAnchorX = columnWidth - _fixedTagLinkAnchorInset;
+        final negativeAnchorX =
+            columnWidth + _fixedTagColumnGap + _fixedTagLinkAnchorInset;
+        final positiveAnchors = _collectAnchorCenters(_positiveAnchorKeys);
+        final negativeAnchors = _collectAnchorCenters(_negativeAnchorKeys);
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: RepaintBoundary(
+                  child: CustomPaint(
+                    key: _linkLayerKey,
+                    painter: _FixedTagLinkPainter(
+                      positiveEntries: positives,
+                      negativeEntries: negatives,
+                      links: state.links,
+                      isMismatched: state.isMismatched,
+                      color: theme.colorScheme.secondary,
+                      positiveAnchors: positiveAnchors,
+                      negativeAnchors: negativeAnchors,
+                      positiveAnchorX: positiveAnchorX,
+                      negativeAnchorX: negativeAnchorX,
+                      positiveScrollOffset: _positiveListController.hasClients
+                          ? _positiveListController.offset
+                          : 0,
+                      negativeScrollOffset: _negativeListController.hasClients
+                          ? _negativeListController.offset
+                          : 0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildFixedTagColumn(
+                    theme: theme,
+                    title: '正向固定词',
+                    promptType: FixedTagPromptType.positive,
+                    entries: positives,
+                    searchController: _positiveSearchController,
+                    searchQuery: _positiveSearchQuery,
+                    isDark: isDark,
+                    scrollController: _positiveListController,
+                    onSearchChanged: (value) {
+                      setState(() => _positiveSearchQuery = value);
+                    },
+                  ),
+                ),
+                const SizedBox(width: _fixedTagColumnGap),
+                Expanded(
+                  child: _buildFixedTagColumn(
+                    theme: theme,
+                    title: '负向固定词',
+                    promptType: FixedTagPromptType.negative,
+                    entries: negatives,
+                    searchController: _negativeSearchController,
+                    searchQuery: _negativeSearchQuery,
+                    isDark: isDark,
+                    scrollController: _negativeListController,
+                    onSearchChanged: (value) {
+                      setState(() => _negativeSearchQuery = value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  List<FixedTagEntry> _filterEntries(
+    List<FixedTagEntry> entries,
+    String query,
+  ) {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return entries;
+    }
+    return entries.where((entry) {
+      return entry.name.toLowerCase().contains(normalized) ||
+          entry.content.toLowerCase().contains(normalized);
+    }).toList();
+  }
+
+  Widget _buildFixedTagColumn({
+    required ThemeData theme,
+    required String title,
+    required FixedTagPromptType promptType,
+    required List<FixedTagEntry> entries,
+    required TextEditingController searchController,
+    required String searchQuery,
+    required bool isDark,
+    required ScrollController scrollController,
+    required ValueChanged<String> onSearchChanged,
+  }) {
+    final state = ref.watch(fixedTagsNotifierProvider);
+    final allEntries = promptType == FixedTagPromptType.positive
+        ? state.positiveEntries
+        : state.negativeEntries;
+    final enabledCount = allEntries.where((entry) => entry.enabled).length;
+    final hasSearch = searchQuery.trim().isNotEmpty;
+    final totalText = hasSearch
+        ? '$enabledCount/${allEntries.length} · 显示 ${entries.length}'
+        : '$enabledCount/${allEntries.length}';
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '$title · $totalText',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildColumnActionButton(
+                theme: theme,
+                icon: Icons.add_rounded,
+                label: '新建',
+                tooltip: '新建$title',
+                onPressed: () => _showEditDialog(
+                  null,
+                  initialPromptType: promptType,
+                ),
+              ),
+              const SizedBox(width: 4),
+              _buildColumnActionButton(
+                theme: theme,
+                icon: Icons.playlist_add_rounded,
+                label: '词库',
+                tooltip: '从词库添加到$title',
+                onPressed: () => _showLibraryPicker(theme, promptType),
+              ),
+              const SizedBox(width: 4),
+              TextButton(
+                onPressed: () {
+                  if (promptType == FixedTagPromptType.positive) {
+                    ref
+                        .read(fixedTagsNotifierProvider.notifier)
+                        .setAllPositiveEnabled(
+                          enabledCount != allEntries.length,
+                        );
+                  } else {
+                    ref
+                        .read(fixedTagsNotifierProvider.notifier)
+                        .setAllNegativeEnabled(
+                          enabledCount != allEntries.length,
+                        );
+                  }
+                },
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                child: Text(enabledCount == allEntries.length ? '全关' : '全开'),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: ThemedInput(
+            controller: searchController,
+            decoration: InputDecoration(
+              hintText: '搜索 $title...',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: hasSearch
+                  ? IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      onPressed: () {
+                        searchController.clear();
+                        onSearchChanged('');
+                      },
+                    )
+                  : null,
+              isDense: true,
+            ),
+            onChanged: onSearchChanged,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Expanded(
+          child: entries.isEmpty
+              ? Center(
+                  child: Text(
+                    hasSearch ? '无匹配固定词' : '暂无$title',
+                    style: TextStyle(color: theme.colorScheme.outline),
+                  ),
+                )
+              : _buildEntryList(
+                  theme,
+                  entries,
+                  isDark,
+                  promptType,
+                  scrollController: scrollController,
+                  allowReorder: !hasSearch,
+                  showLinkAnchors: true,
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildColumnActionButton({
+    required ThemeData theme,
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: TextButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          foregroundColor: theme.colorScheme.onSurface,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLinkAnchor(ThemeData theme, FixedTagEntry entry) {
+    final state = ref.watch(fixedTagsNotifierProvider);
+    final linkCount = entry.promptType == FixedTagPromptType.positive
+        ? state.linkedNegativesOf(entry.id).length
+        : state.linkedPositivesOf(entry.id).length;
+    final linkedNames = entry.promptType == FixedTagPromptType.positive
+        ? state
+            .linkedNegativesOf(entry.id)
+            .map((entry) => entry.displayName)
+            .join(', ')
+        : state
+            .linkedPositivesOf(entry.id)
+            .map((entry) => entry.displayName)
+            .join(', ');
+    final tooltip = linkCount == 0 ? '拖拽创建联动' : '已联动：$linkedNames';
+
+    final anchorVisual = SizedBox(
+      width: 22,
+      height: 22,
+      child: Center(
+        child: GestureDetector(
+          onTap: () => _showLinkMenu(entry),
+          child: Tooltip(
+            message: tooltip,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  Icons.link_rounded,
+                  size: 17,
+                  color: linkCount > 0
+                      ? theme.colorScheme.secondary
+                      : theme.colorScheme.outline,
+                ),
+                if (linkCount > 0)
+                  Positioned(
+                    right: -6,
+                    top: -7,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.secondary,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        linkCount.toString(),
+                        style: TextStyle(
+                          fontSize: 8,
+                          color: theme.colorScheme.onSecondary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (entry.promptType == FixedTagPromptType.positive) {
+      return KeyedSubtree(
+        key: _anchorKeyFor(entry),
+        child: Draggable<String>(
+          data: entry.id,
+          feedback: Material(
+            color: Colors.transparent,
+            child: Icon(
+              Icons.link_rounded,
+              color: theme.colorScheme.secondary,
+              size: 22,
+            ),
+          ),
+          childWhenDragging: Opacity(opacity: 0.35, child: anchorVisual),
+          child: anchorVisual,
+        ),
+      );
+    }
+
+    return KeyedSubtree(
+      key: _anchorKeyFor(entry),
+      child: DragTarget<String>(
+        onWillAcceptWithDetails: (details) {
+          final positive = state.entries.cast<FixedTagEntry?>().firstWhere(
+                (entry) => entry?.id == details.data,
+                orElse: () => null,
+              );
+          return positive?.promptType == FixedTagPromptType.positive;
+        },
+        onAcceptWithDetails: (details) {
+          ref.read(fixedTagsNotifierProvider.notifier).createLink(
+                positiveEntryId: details.data,
+                negativeEntryId: entry.id,
+              );
+        },
+        builder: (context, candidateData, rejectedData) {
+          final isActive = candidateData.isNotEmpty;
+          return AnimatedScale(
+            scale: isActive ? 1.25 : 1.0,
+            duration: const Duration(milliseconds: 120),
+            child: anchorVisual,
+          );
+        },
+      ),
+    );
+  }
+
+  void _showLinkMenu(FixedTagEntry entry) {
+    final state = ref.read(fixedTagsNotifierProvider);
+    final linkedEntries = entry.promptType == FixedTagPromptType.positive
+        ? state.linkedNegativesOf(entry.id)
+        : state.linkedPositivesOf(entry.id);
+    if (linkedEntries.isEmpty) {
+      AppToast.info(context, '拖拽正向固定词的关联图标到负向固定词即可创建联动');
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text('管理联动'),
+          children: [
+            for (final linkedEntry in linkedEntries)
+              SimpleDialogOption(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  if (entry.promptType == FixedTagPromptType.positive) {
+                    await ref
+                        .read(fixedTagsNotifierProvider.notifier)
+                        .removeLinkByPair(
+                          positiveEntryId: entry.id,
+                          negativeEntryId: linkedEntry.id,
+                        );
+                  } else {
+                    await ref
+                        .read(fixedTagsNotifierProvider.notifier)
+                        .removeLinkByPair(
+                          positiveEntryId: linkedEntry.id,
+                          negativeEntryId: entry.id,
+                        );
+                  }
+                },
+                child: Row(
+                  children: [
+                    const Icon(Icons.link_off_rounded, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('取消联动：${linkedEntry.displayName}'),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        );
       },
     );
   }
 
   Widget _buildFooter(ThemeData theme, bool isDark) {
     final hasEntries = ref.watch(fixedTagsNotifierProvider).entries.isNotEmpty;
+    final negativeExpanded =
+        ref.watch(fixedTagsNotifierProvider).negativePanelExpanded;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -344,32 +961,48 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
               ),
             ),
           const Spacer(),
-          // 添加按钮 - 次要
-          FilledButton.tonalIcon(
-            onPressed: () => _showEditDialog(null),
-            icon: const Icon(Icons.add_rounded, size: 17),
-            label: Text(context.l10n.fixedTags_add),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          if (negativeExpanded)
+            Text(
+              '在各列顶部新建或从词库添加',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            )
+          else ...[
+            // 收起负向列时保留正向固定词入口，标签明确目标。
+            FilledButton.tonalIcon(
+              onPressed: () => _showEditDialog(
+                null,
+                initialPromptType: FixedTagPromptType.positive,
+              ),
+              icon: const Icon(Icons.add_rounded, size: 17),
+              label: const Text('新建正向'),
+              style: FilledButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          // 从词库添加按钮 - 主要（最常用）
-          FilledButton.icon(
-            onPressed: () => _showLibraryPicker(theme),
-            icon: const Icon(Icons.playlist_add_rounded, size: 17),
-            label: const Text('从词库添加'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              onPressed: () => _showLibraryPicker(
+                theme,
+                FixedTagPromptType.positive,
+              ),
+              icon: const Icon(Icons.playlist_add_rounded, size: 17),
+              label: const Text('词库添加正向'),
+              style: FilledButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
   }
 
   /// 显示词库选择器
-  void _showLibraryPicker(ThemeData theme) {
+  void _showLibraryPicker(ThemeData theme, FixedTagPromptType promptType) {
     final libraryState = ref.read(tagLibraryPageNotifierProvider);
     final entries = libraryState.entries;
 
@@ -382,27 +1015,37 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
       context: context,
       builder: (ctx) => _LibraryPickerDialog(
         entries: entries,
-        onSelect: _addFromLibrary,
+        onSelect: (entry) => _addFromLibrary(entry, promptType),
       ),
     );
   }
 
   /// 从词库添加条目
-  Future<void> _addFromLibrary(TagLibraryEntry entry) async {
+  Future<void> _addFromLibrary(
+    TagLibraryEntry entry,
+    FixedTagPromptType promptType,
+  ) async {
     await ref.read(fixedTagsNotifierProvider.notifier).addEntry(
           name: entry.name,
           content: entry.content,
           weight: 1.0,
           position: FixedTagPosition.prefix,
           enabled: true,
-          sourceEntryId: entry.id,  // 【修复】传递词库条目ID，启用双向同步
+          promptType: promptType,
+          sourceEntryId: entry.id, // 【修复】传递词库条目ID，启用双向同步
         );
   }
 
-  void _showEditDialog(FixedTagEntry? entry) async {
+  void _showEditDialog(
+    FixedTagEntry? entry, {
+    FixedTagPromptType initialPromptType = FixedTagPromptType.positive,
+  }) async {
     final result = await showDialog<FixedTagEntry>(
       context: context,
-      builder: (context) => FixedTagEditDialog(entry: entry),
+      builder: (context) => FixedTagEditDialog(
+        entry: entry,
+        initialPromptType: initialPromptType,
+      ),
     );
 
     if (result != null) {
@@ -413,6 +1056,7 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
               content: result.content,
               weight: result.weight,
               position: result.position,
+              promptType: result.promptType,
               enabled: result.enabled,
             );
       } else {
@@ -654,6 +1298,7 @@ class _FixedTagEntryTile extends StatefulWidget {
   final FixedTagEntry entry;
   final int index;
   final bool isDark;
+  final Widget? linkAnchor;
   final VoidCallback onToggleEnabled;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -663,6 +1308,7 @@ class _FixedTagEntryTile extends StatefulWidget {
     required this.entry,
     required this.index,
     required this.isDark,
+    this.linkAnchor,
     required this.onToggleEnabled,
     required this.onEdit,
     required this.onDelete,
@@ -687,6 +1333,10 @@ class _FixedTagEntryTileState extends State<_FixedTagEntryTile> {
 
     // 禁用状态透明度
     final disabledOpacity = entry.enabled ? 1.0 : 0.5;
+    final hasPositiveAnchor = entry.promptType == FixedTagPromptType.positive &&
+        widget.linkAnchor != null;
+    final hasNegativeAnchor = entry.promptType == FixedTagPromptType.negative &&
+        widget.linkAnchor != null;
 
     return ReorderableDragStartListener(
       index: widget.index,
@@ -736,6 +1386,11 @@ class _FixedTagEntryTileState extends State<_FixedTagEntryTile> {
             opacity: disabledOpacity,
             child: Row(
               children: [
+                if (hasNegativeAnchor) ...[
+                  widget.linkAnchor!,
+                  const SizedBox(width: 10),
+                ],
+
                 // 启用开关
                 ThemedSwitch(
                   value: entry.enabled,
@@ -898,6 +1553,10 @@ class _FixedTagEntryTileState extends State<_FixedTagEntryTile> {
                     ],
                   ),
                 ),
+                if (hasPositiveAnchor) ...[
+                  const SizedBox(width: 6),
+                  widget.linkAnchor!,
+                ],
               ],
             ),
           ),
@@ -951,5 +1610,140 @@ class _CompactIconButtonState extends State<_CompactIconButton> {
         ),
       ),
     );
+  }
+}
+
+class _FixedTagLinkPainter extends CustomPainter {
+  _FixedTagLinkPainter({
+    required this.positiveEntries,
+    required this.negativeEntries,
+    required this.links,
+    required this.isMismatched,
+    required this.color,
+    required this.positiveAnchors,
+    required this.negativeAnchors,
+    required this.positiveAnchorX,
+    required this.negativeAnchorX,
+    required this.positiveScrollOffset,
+    required this.negativeScrollOffset,
+  });
+
+  final List<FixedTagEntry> positiveEntries;
+  final List<FixedTagEntry> negativeEntries;
+  final List<FixedTagLink> links;
+  final bool Function(FixedTagLink link) isMismatched;
+  final Color color;
+  final Map<String, Offset> positiveAnchors;
+  final Map<String, Offset> negativeAnchors;
+  final double positiveAnchorX;
+  final double negativeAnchorX;
+  final double positiveScrollOffset;
+  final double negativeScrollOffset;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (positiveEntries.isEmpty || negativeEntries.isEmpty || links.isEmpty) {
+      return;
+    }
+    const clipTop = _fixedTagLinkTopOffset - _fixedTagLinkRowHeight / 2;
+    final clipBottom = size.height - _fixedTagLinkBottomPadding;
+    if (clipBottom <= clipTop) {
+      return;
+    }
+    canvas.save();
+    canvas.clipRect(Rect.fromLTRB(0, clipTop, size.width, clipBottom));
+
+    final positiveIndex = {
+      for (var i = 0; i < positiveEntries.length; i++) positiveEntries[i].id: i,
+    };
+    final negativeIndex = {
+      for (var i = 0; i < negativeEntries.length; i++) negativeEntries[i].id: i,
+    };
+
+    for (final link in links) {
+      final startIndex = positiveIndex[link.positiveEntryId];
+      final endIndex = negativeIndex[link.negativeEntryId];
+      if (startIndex == null || endIndex == null) {
+        continue;
+      }
+
+      final start = positiveAnchors[link.positiveEntryId] ??
+          Offset(
+            positiveAnchorX,
+            _fixedTagLinkTopOffset +
+                startIndex * _fixedTagLinkRowHeight -
+                positiveScrollOffset,
+          );
+      final end = negativeAnchors[link.negativeEntryId] ??
+          Offset(
+            negativeAnchorX,
+            _fixedTagLinkTopOffset +
+                endIndex * _fixedTagLinkRowHeight -
+                negativeScrollOffset,
+          );
+      if (!_isVisible(start.dy, size.height) &&
+          !_isVisible(end.dy, size.height)) {
+        continue;
+      }
+      final path = Path()
+        ..moveTo(start.dx, start.dy)
+        ..cubicTo(
+          start.dx + 28,
+          start.dy,
+          end.dx - 28,
+          end.dy,
+          end.dx,
+          end.dy,
+        );
+      final paint = Paint()
+        ..color = color.withOpacity(isMismatched(link) ? 0.35 : 0.65)
+        ..strokeWidth = 1.6
+        ..style = PaintingStyle.stroke;
+
+      if (isMismatched(link)) {
+        _drawDashedPath(canvas, path, paint);
+      } else {
+        canvas.drawPath(path, paint);
+      }
+    }
+    canvas.restore();
+  }
+
+  bool _isVisible(double y, double height) {
+    return y >= _fixedTagLinkTopOffset - _fixedTagLinkRowHeight / 2 &&
+        y <= height - _fixedTagLinkBottomPadding;
+  }
+
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
+    const dashWidth = 5.0;
+    const dashSpace = 4.0;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final next = distance + dashWidth;
+        canvas.drawPath(
+          metric.extractPath(
+            distance,
+            next.clamp(0.0, metric.length).toDouble(),
+          ),
+          paint,
+        );
+        distance = next + dashSpace;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FixedTagLinkPainter oldDelegate) {
+    return oldDelegate.positiveEntries != positiveEntries ||
+        oldDelegate.negativeEntries != negativeEntries ||
+        oldDelegate.links != links ||
+        oldDelegate.color != color ||
+        oldDelegate.positiveAnchors != positiveAnchors ||
+        oldDelegate.negativeAnchors != negativeAnchors ||
+        oldDelegate.positiveAnchorX != positiveAnchorX ||
+        oldDelegate.negativeAnchorX != negativeAnchorX ||
+        oldDelegate.positiveScrollOffset != positiveScrollOffset ||
+        oldDelegate.negativeScrollOffset != negativeScrollOffset;
   }
 }

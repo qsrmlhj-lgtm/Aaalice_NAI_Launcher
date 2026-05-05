@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
 
 import '../../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../../data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/tag_library_page_provider.dart';
 import '../autocomplete/autocomplete.dart';
@@ -16,8 +17,13 @@ import '../prompt/prompt_formatter_wrapper.dart';
 class FixedTagEditDialog extends ConsumerStatefulWidget {
   /// 要编辑的条目，如果为 null 则为新建模式
   final FixedTagEntry? entry;
+  final FixedTagPromptType initialPromptType;
 
-  const FixedTagEditDialog({super.key, this.entry});
+  const FixedTagEditDialog({
+    super.key,
+    this.entry,
+    this.initialPromptType = FixedTagPromptType.positive,
+  });
 
   @override
   ConsumerState<FixedTagEditDialog> createState() => _FixedTagEditDialogState();
@@ -27,6 +33,7 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
   late final TextEditingController _nameController;
   late final NaiSyntaxController _contentController;
   late FixedTagPosition _position;
+  late FixedTagPromptType _promptType;
   late double _weight;
   late bool _enabled;
   bool _saveToLibrary = false;
@@ -44,6 +51,7 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
     _nameController = TextEditingController(text: entry?.name ?? '');
     _contentController = NaiSyntaxController(text: entry?.content ?? '');
     _position = entry?.position ?? FixedTagPosition.prefix;
+    _promptType = entry?.promptType ?? widget.initialPromptType;
     _weight = entry?.weight ?? 1.0;
     _enabled = entry?.enabled ?? true;
   }
@@ -105,7 +113,8 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
                 if (widget.entry?.sourceEntryId != null)
                   Container(
                     margin: const EdgeInsets.only(bottom: 16),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
                       color: Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(6),
@@ -197,6 +206,40 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
                     ),
                     maxLines: 2,
                   ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 作用范围选择
+                Row(
+                  children: [
+                    Text(
+                      '作用范围',
+                      style: theme.textTheme.labelLarge,
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: SegmentedButton<FixedTagPromptType>(
+                        segments: const [
+                          ButtonSegment(
+                            value: FixedTagPromptType.positive,
+                            label: Text('正向'),
+                            icon: Icon(Icons.add_circle_outline, size: 16),
+                          ),
+                          ButtonSegment(
+                            value: FixedTagPromptType.negative,
+                            label: Text('负向'),
+                            icon: Icon(Icons.remove_circle_outline, size: 16),
+                          ),
+                        ],
+                        selected: {_promptType},
+                        onSelectionChanged: (selection) {
+                          setState(() => _promptType = selection.first);
+                        },
+                        showSelectedIcon: false,
+                      ),
+                    ),
+                  ],
                 ),
 
                 const SizedBox(height: 16),
@@ -465,6 +508,7 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
           content: content,
           weight: _weight,
           position: _position,
+          promptType: _promptType,
           enabled: _enabled,
         ) ??
         FixedTagEntry.create(
@@ -472,6 +516,7 @@ class _FixedTagEditDialogState extends ConsumerState<FixedTagEditDialog> {
           content: content,
           weight: _weight,
           position: _position,
+          promptType: _promptType,
           enabled: _enabled,
         );
 
