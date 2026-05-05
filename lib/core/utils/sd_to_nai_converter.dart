@@ -266,7 +266,7 @@ class SdToNaiConverter {
   /// - `(text:1.5)` → `1.5::text::`
   /// - `(long hair)` → `1.1::long hair::`
   /// - `[ugly]` → `0.91::ugly::`
-  /// - `\(text\)` → `(text)` (转义符保留)
+  /// - `\(text\)` → `(text)` (移除圆括号转义符)
   ///
   /// 注意：只负责 SD 语法转换，不做通用空格转换
   /// 是否将空格转换为下划线由 NaiPromptFormatter 统一负责

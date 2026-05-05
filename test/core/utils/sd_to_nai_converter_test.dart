@@ -4,13 +4,14 @@ import 'package:nai_launcher/core/utils/sd_to_nai_converter.dart';
 void main() {
   group('SdToNaiConverter', () {
     test(
-        'should not treat tag names with trailing parenthetical qualifiers as SD weights',
-        () {
-      expect(
-        SdToNaiConverter.convert('summer dress (blue_archive)'),
-        equals('summer dress (blue_archive)'),
-      );
-    });
+      'should not treat tag names with trailing parenthetical qualifiers as SD weights',
+      () {
+        expect(
+          SdToNaiConverter.convert('summer dress (blue_archive)'),
+          equals('summer dress (blue_archive)'),
+        );
+      },
+    );
 
     test('should preserve inline parenthetical qualifiers with spaces', () {
       expect(
@@ -55,18 +56,24 @@ void main() {
       );
     });
 
-    test('should unescape SD escaped parentheses in prompts', () {
+    test('should unescape escaped parentheses without SD weights', () {
       expect(
         SdToNaiConverter.convert(r'\(literal parentheses\)'),
         equals('(literal parentheses)'),
       );
-      expect(
-        SdToNaiConverter.convert(r'\(literal\), (cinematic lighting)'),
-        equals('(literal), 1.1::cinematic lighting::'),
-      );
+    });
+
+    test('should unescape escaped parentheses when NAI syntax is present', () {
       expect(
         SdToNaiConverter.convert(r'1.2::tag::, \(literal\)'),
         equals('1.2::tag::, (literal)'),
+      );
+    });
+
+    test('should unescape escaped parentheses while converting SD weights', () {
+      expect(
+        SdToNaiConverter.convert(r'\(literal\), (cinematic lighting)'),
+        equals('(literal), 1.1::cinematic lighting::'),
       );
     });
   });
