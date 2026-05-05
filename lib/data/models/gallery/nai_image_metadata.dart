@@ -350,7 +350,6 @@ class NaiImageMetadata with _$NaiImageMetadata {
         characterInfos: characterInfos,
         vibeReferences: vibeReferences,
         originalPrompt: prompt,
-        varietyPlus: _extractVarietyPlus(commentData),
         preciseReferenceImages: preciseReferenceMetadata.images,
         preciseReferenceTypes: preciseReferenceMetadata.types,
         preciseReferenceStrengths: preciseReferenceMetadata.strengths,
@@ -427,15 +426,6 @@ class NaiImageMetadata with _$NaiImageMetadata {
     if (value is int) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
-  }
-
-  static bool? _extractVarietyPlus(Map<String, dynamic> data) {
-    final direct = _safeGetBool(data, 'variety_plus');
-    if (direct != null) return direct;
-
-    final skipCfgAboveSigma = _toDouble(data['skip_cfg_above_sigma']);
-    if (skipCfgAboveSigma == null) return null;
-    return skipCfgAboveSigma > 0;
   }
 
   /// 提取 Comment 数据（支持官网格式和直接格式）

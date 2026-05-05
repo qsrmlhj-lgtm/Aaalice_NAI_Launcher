@@ -6,6 +6,7 @@ import '../../enums/precise_ref_type.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/inpaint_mask_utils.dart';
 import '../../utils/nai_api_utils.dart';
+import '../../utils/prompt_semantics_utils.dart';
 import '../../../data/models/image/image_params.dart';
 
 typedef EncodeVibeFn = Future<String> Function(
@@ -378,8 +379,15 @@ class NAIImageRequestBuilder {
 
     final seed = params.seed == -1 ? Random().nextInt(4294967295) : params.seed;
 
-    final effectivePrompt = params.prompt;
-    final effectiveNegativePrompt = params.negativePrompt;
+    final promptSemantics = buildPromptSemanticsSnapshot(
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      model: params.model,
+      qualityToggle: params.qualityToggle,
+      ucPreset: params.ucPreset,
+    );
+    final effectivePrompt = promptSemantics.effectivePrompt;
+    final effectiveNegativePrompt = promptSemantics.effectiveNegativePrompt;
 
     final requestParameters = buildBaseParameters(
       sampler: sampler,

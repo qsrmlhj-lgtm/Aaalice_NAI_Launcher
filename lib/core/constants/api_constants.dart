@@ -505,16 +505,6 @@ class UcPresets {
     return type != UcPresetType.furryFocus;
   }
 
-  static int toApiValue(UcPresetType type) {
-    return switch (type) {
-      UcPresetType.heavy => heavyApiValue,
-      UcPresetType.light => lightApiValue,
-      UcPresetType.humanFocus => humanFocusApiValue,
-      UcPresetType.none => noneApiValue,
-      UcPresetType.furryFocus => noneApiValue,
-    };
-  }
-
   /// 将预设应用到负面提示词
   static String applyPreset(
     String negativePrompt,

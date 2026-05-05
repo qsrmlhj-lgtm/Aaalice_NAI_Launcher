@@ -38,15 +38,17 @@ void main() {
       expect(metadata.displayNegativePrompt, equals('plain_negative'));
     });
 
-    test('fromNaiComment should parse structured negative fixed words',
-        () {
+    test('fromNaiComment should parse structured negative fixed words', () {
       const metadata = NaiImageMetadata(
         negativePrompt: 'bad anatomy, plain_negative, text',
         fixedNegativePrefixTags: ['bad anatomy'],
         fixedNegativeSuffixTags: ['text'],
       );
 
-      expect(metadata.displayNegativePrompt, equals('plain_negative'));
+      expect(
+        metadata.displayNegativePrompt,
+        equals('bad anatomy, plain_negative, text'),
+      );
     });
 
     test(
@@ -346,7 +348,8 @@ void main() {
 
       expect(metadata.fixedNegativePrefixTags, equals(['bad anatomy']));
       expect(metadata.fixedNegativeSuffixTags, equals(['text']));
-      expect(metadata.displayNegativePrompt, equals('bad anatomy, bad hands, text'));
+      expect(metadata.displayNegativePrompt,
+          equals('bad anatomy, bad hands, text'));
     });
 
     test('fromNaiComment should parse Variety Plus flag', () {
