@@ -111,7 +111,10 @@ class FileExplorerUtils {
       if (startProcess == null && _tryRevealFileWithShellApi(absolutePath)) {
         return;
       }
-      await launcher('explorer.exe', windowsRevealFileArguments(absolutePath));
+      await launcher(
+        'explorer.exe',
+        windowsRevealFileArguments(absolutePath),
+      );
     } else if (Platform.isMacOS) {
       await launcher('open', ['-R', absolutePath]);
     } else if (Platform.isLinux) {
@@ -144,13 +147,16 @@ class FileExplorerUtils {
         .lookupFunction<_CoInitializeNative, _CoInitializeDart>('CoInitialize');
     final coUninitialize =
         ole32.lookupFunction<_CoUninitializeNative, _CoUninitializeDart>(
-            'CoUninitialize');
+      'CoUninitialize',
+    );
     final coTaskMemFree =
         ole32.lookupFunction<_CoTaskMemFreeNative, _CoTaskMemFreeDart>(
-            'CoTaskMemFree');
+      'CoTaskMemFree',
+    );
     final coTaskMemAlloc =
         ole32.lookupFunction<_CoTaskMemAllocNative, _CoTaskMemAllocDart>(
-            'CoTaskMemAlloc');
+      'CoTaskMemAlloc',
+    );
     final shParseDisplayName = shell32.lookupFunction<_SHParseDisplayNameNative,
         _SHParseDisplayNameDart>('SHParseDisplayName');
     final shOpenFolderAndSelectItems = shell32.lookupFunction<
