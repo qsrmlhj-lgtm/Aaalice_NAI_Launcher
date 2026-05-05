@@ -66,11 +66,8 @@ class UcPresetNotifier extends _$UcPresetNotifier {
     final customId = _storage.getUcPresetCustomId();
 
     // 读取 NAI 预设类型
-    final typeIndex = _storage.getUcPresetType();
-    final presetType =
-        (typeIndex >= 0 && typeIndex < UcPresetType.values.length)
-            ? UcPresetType.values[typeIndex]
-            : UcPresetType.heavy;
+    final storedType = _storage.getUcPresetType();
+    final presetType = UcPresets.getPresetTypeFromStorage(storedType);
 
     return UcPresetState(
       presetType: presetType,
@@ -131,7 +128,7 @@ class UcPresetNotifier extends _$UcPresetNotifier {
 
   /// 保存到本地存储
   void _save() {
-    _storage.setUcPresetType(state.presetType.index);
+    _storage.setUcPresetType(UcPresets.toApiValue(state.presetType));
     _storage.setUcPresetCustomId(state.customEntryId);
     _storage.setUcPresetCustomIds(state.customEntryIds);
   }

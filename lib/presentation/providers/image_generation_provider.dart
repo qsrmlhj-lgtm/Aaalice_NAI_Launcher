@@ -195,12 +195,18 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     final fixedTagsState = ref.read(fixedTagsNotifierProvider);
     final promptWithFixedTags =
         fixedTagsState.applyToPrompt(effectiveParams.prompt);
-    if (promptWithFixedTags != effectiveParams.prompt) {
+    final negativePromptWithFixedTags =
+        fixedTagsState.applyToNegativePrompt(effectiveParams.negativePrompt);
+    if (promptWithFixedTags != effectiveParams.prompt ||
+        negativePromptWithFixedTags != effectiveParams.negativePrompt) {
       AppLogger.d(
-        'Applied fixed tags: ${fixedTagsState.enabledCount} entries',
+        'Applied fixed tags: positive=${fixedTagsState.enabledCount}, negative=${fixedTagsState.negativeEnabledCount}',
         'FixedTags',
       );
-      effectiveParams = effectiveParams.copyWith(prompt: promptWithFixedTags);
+      effectiveParams = effectiveParams.copyWith(
+        prompt: promptWithFixedTags,
+        negativePrompt: negativePromptWithFixedTags,
+      );
     }
 
     final presetResolution = _resolvePromptPresets(effectiveParams);
@@ -213,7 +219,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
     final characterConfig = ref.read(characterPromptNotifierProvider);
     final apiCharacters = _convertCharactersToApiFormat(characterConfig);
 
-    // 将 UI 预设解析为一次生成实际使用的请求参数。
+    // NAI 官方预设保持为 API 开关；自定义预设展开成显式提示词，避免官方预设重复生效。
     final ImageParams baseParams = effectiveParams.copyWith(
       qualityToggle: presetResolution.qualityToggle,
       ucPreset: presetResolution.ucPreset,
@@ -473,9 +479,19 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           .map((e) => e.weightedContent)
           .where((c) => c.isNotEmpty)
           .toList();
+      final fixedNegativePrefixTags = fixedTagsState.negativeEnabledPrefixes
+          .sortedByOrder()
+          .map((e) => e.weightedContent)
+          .where((c) => c.isNotEmpty)
+          .toList();
+      final fixedNegativeSuffixTags = fixedTagsState.negativeEnabledSuffixes
+          .sortedByOrder()
+          .map((e) => e.weightedContent)
+          .where((c) => c.isNotEmpty)
+          .toList();
 
       AppLogger.i(
-        '[ImageGeneration] Fixed tags for save: enabled=${fixedTagsState.enabledCount}, prefix=$fixedPrefixTags, suffix=$fixedSuffixTags',
+        '[ImageGeneration] Fixed tags for save: positive=${fixedTagsState.enabledCount}, negative=${fixedTagsState.negativeEnabledCount}, prefix=$fixedPrefixTags, suffix=$fixedSuffixTags, negativePrefix=$fixedNegativePrefixTags, negativeSuffix=$fixedNegativeSuffixTags',
         'ImageGeneration',
       );
 
@@ -535,7 +551,7 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
           }
 
           AppLogger.i(
-            '[ImageGeneration] Saving image with fixed_prefix=$fixedPrefixTags, fixed_suffix=$fixedSuffixTags',
+            '[ImageGeneration] Saving image with fixed_prefix=$fixedPrefixTags, fixed_suffix=$fixedSuffixTags, fixed_negative_prefix=$fixedNegativePrefixTags, fixed_negative_suffix=$fixedNegativeSuffixTags',
             'ImageGeneration',
           );
 
@@ -546,6 +562,8 @@ class ImageGenerationNotifier extends _$ImageGenerationNotifier {
             actualSeed: actualSeed,
             fixedPrefixTags: fixedPrefixTags,
             fixedSuffixTags: fixedSuffixTags,
+            fixedNegativePrefixTags: fixedNegativePrefixTags,
+            fixedNegativeSuffixTags: fixedNegativeSuffixTags,
             charCaptions: charCaptions,
             charNegCaptions: charNegCaptions,
             useCoords: !characterConfig.globalAiChoice,

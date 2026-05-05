@@ -10,6 +10,7 @@ import '../../data/services/metadata/unified_metadata_parser.dart';
 import '../constants/api_constants.dart';
 import '../enums/precise_ref_type.dart';
 import 'app_logger.dart';
+import 'prompt_semantics_utils.dart';
 
 /// 统一图像保存工具类
 ///
@@ -24,6 +25,8 @@ class ImageSaveUtils {
   /// [actualSeed] - 实际使用的种子
   /// [fixedPrefixTags] - 固定前缀标签列表
   /// [fixedSuffixTags] - 固定后缀标签列表
+  /// [fixedNegativePrefixTags] - 负向固定前缀标签列表
+  /// [fixedNegativeSuffixTags] - 负向固定后缀标签列表
   /// [charCaptions] - 角色提示词列表（V4多角色）
   /// [charNegCaptions] - 角色负面提示词列表
   /// [useCoords] - 是否使用坐标模式
@@ -32,6 +35,8 @@ class ImageSaveUtils {
     required int actualSeed,
     List<String>? fixedPrefixTags,
     List<String>? fixedSuffixTags,
+    List<String>? fixedNegativePrefixTags,
+    List<String>? fixedNegativeSuffixTags,
     List<Map<String, dynamic>>? charCaptions,
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
@@ -63,6 +68,19 @@ class ImageSaveUtils {
         'noise': params.noise,
       },
     };
+
+    if (fixedPrefixTags?.isNotEmpty == true) {
+      commentJson['fixed_prefix'] = fixedPrefixTags;
+    }
+    if (fixedSuffixTags?.isNotEmpty == true) {
+      commentJson['fixed_suffix'] = fixedSuffixTags;
+    }
+    if (fixedNegativePrefixTags?.isNotEmpty == true) {
+      commentJson['fixed_negative_prefix'] = fixedNegativePrefixTags;
+    }
+    if (fixedNegativeSuffixTags?.isNotEmpty == true) {
+      commentJson['fixed_negative_suffix'] = fixedNegativeSuffixTags;
+    }
 
     // V4多角色提示词
     if (params.isV4Model) {
@@ -145,12 +163,24 @@ class ImageSaveUtils {
     int? actualSeed,
     List<String>? fixedPrefixTags,
     List<String>? fixedSuffixTags,
+    List<String>? fixedNegativePrefixTags,
+    List<String>? fixedNegativeSuffixTags,
     List<Map<String, dynamic>>? charCaptions,
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
     bool useStealth = false,
+    bool preserveExistingNovelAiMetadata = false,
   }) async {
     final existingMetadata = _extractEmbeddedPngMetadata(imageBytes);
+    if (preserveExistingNovelAiMetadata &&
+        _hasReadableNovelAiMetadata(imageBytes, existingMetadata)) {
+      AppLogger.i(
+        'Preserving existing NovelAI metadata without rewriting image bytes',
+        'ImageSaveUtils',
+      );
+      return imageBytes;
+    }
+
     final embeddedSeed = existingMetadata?.commentJson['seed'];
     final normalizedSeed = actualSeed ??
         (embeddedSeed is int
@@ -164,6 +194,8 @@ class ImageSaveUtils {
           actualSeed: normalizedSeed,
           fixedPrefixTags: fixedPrefixTags,
           fixedSuffixTags: fixedSuffixTags,
+          fixedNegativePrefixTags: fixedNegativePrefixTags,
+          fixedNegativeSuffixTags: fixedNegativeSuffixTags,
           charCaptions: charCaptions,
           charNegCaptions: charNegCaptions,
           useCoords: useCoords,
@@ -172,7 +204,14 @@ class ImageSaveUtils {
     return _embedNaiAlignedMetadata(
       imageBytes: imageBytes,
       commentJson: commentJson,
-      description: existingMetadata?.description ?? params.prompt,
+      description: existingMetadata?.description ??
+          buildPromptSemanticsSnapshot(
+            prompt: params.prompt,
+            negativePrompt: params.negativePrompt,
+            model: params.model,
+            qualityToggle: params.qualityToggle,
+            ucPreset: params.ucPreset,
+          ).effectivePrompt,
       source: existingMetadata?.source ?? _getModelSourceName(params.model),
       software: existingMetadata?.software ?? 'NovelAI',
       useStealth: useStealth,
@@ -187,9 +226,12 @@ class ImageSaveUtils {
   /// [actualSeed] - 实际使用的种子
   /// [fixedPrefixTags] - 固定前缀标签
   /// [fixedSuffixTags] - 固定后缀标签
+  /// [fixedNegativePrefixTags] - 负向固定前缀标签
+  /// [fixedNegativeSuffixTags] - 负向固定后缀标签
   /// [charCaptions] - 角色提示词列表
   /// [charNegCaptions] - 角色负面提示词列表
   /// [useStealth] - 是否使用stealth编码（默认false）
+  /// [preserveExistingNovelAiMetadata] - 原图已有 NovelAI 元数据时不重写 PNG 字节。
   ///
   /// 返回保存后的文件
   static Future<File> saveImageWithMetadata({
@@ -199,10 +241,13 @@ class ImageSaveUtils {
     required int actualSeed,
     List<String>? fixedPrefixTags,
     List<String>? fixedSuffixTags,
+    List<String>? fixedNegativePrefixTags,
+    List<String>? fixedNegativeSuffixTags,
     List<Map<String, dynamic>>? charCaptions,
     List<Map<String, dynamic>>? charNegCaptions,
     bool useCoords = false,
     bool useStealth = false,
+    bool preserveExistingNovelAiMetadata = true,
   }) async {
     final embeddedBytes = await rebuildImageBytesWithMetadata(
       imageBytes: imageBytes,
@@ -210,10 +255,13 @@ class ImageSaveUtils {
       actualSeed: actualSeed,
       fixedPrefixTags: fixedPrefixTags,
       fixedSuffixTags: fixedSuffixTags,
+      fixedNegativePrefixTags: fixedNegativePrefixTags,
+      fixedNegativeSuffixTags: fixedNegativeSuffixTags,
       charCaptions: charCaptions,
       charNegCaptions: charNegCaptions,
       useCoords: useCoords,
       useStealth: useStealth,
+      preserveExistingNovelAiMetadata: preserveExistingNovelAiMetadata,
     );
 
     // 确保目录存在
@@ -272,7 +320,10 @@ class ImageSaveUtils {
   }
 
   static bool hasEmbeddedNovelAiMetadata(Uint8List imageBytes) {
-    return _extractEmbeddedPngMetadata(imageBytes) != null;
+    return _hasReadableNovelAiMetadata(
+      imageBytes,
+      _extractEmbeddedPngMetadata(imageBytes),
+    );
   }
 
   /// 从元数据重新构建 ImageParams
@@ -301,6 +352,9 @@ class ImageSaveUtils {
         noiseSchedule: metadata.noiseSchedule ?? 'karras',
         smea: metadata.smea ?? false,
         smeaDyn: metadata.smeaDyn ?? false,
+        varietyPlus: metadata.varietyPlus ?? false,
+        qualityToggle: metadata.qualityToggle ?? false,
+        ucPreset: metadata.ucPreset ?? UcPresets.noneApiValue,
       );
 
       // 恢复Vibe数据
@@ -380,6 +434,26 @@ class ImageSaveUtils {
     } catch (_) {
       return null;
     }
+  }
+
+  static bool _hasReadableNovelAiMetadata(
+    Uint8List imageBytes,
+    _EmbeddedPngMetadata? embeddedMetadata,
+  ) {
+    if (embeddedMetadata != null) {
+      return true;
+    }
+
+    final result = UnifiedMetadataParser.parseFromPng(imageBytes);
+    if (!result.success) {
+      return false;
+    }
+    final sourceFormat = result.sourceFormat?.toLowerCase() ?? '';
+    final software = result.metadata?.software?.toLowerCase() ?? '';
+    final source = result.metadata?.source?.toLowerCase() ?? '';
+    return sourceFormat.contains('novelai') ||
+        software.contains('novelai') ||
+        source.contains('novelai');
   }
 
   /// 对齐 NAI 官网格式写入 PNG 文本块：

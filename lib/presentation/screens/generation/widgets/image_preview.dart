@@ -672,6 +672,8 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             aliasResolver.resolveAliases(params.negativePrompt);
         final promptWithFixedTags =
             fixedTagsState.applyToPrompt(resolvedPrompt);
+        final negativePromptWithFixedTags =
+            fixedTagsState.applyToNegativePrompt(resolvedNegative);
         final qualityState = ref.read(qualityPresetNotifierProvider);
         final qualityContent = ref
             .read(qualityPresetNotifierProvider.notifier)
@@ -682,7 +684,7 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             .getEffectiveContent(params.model);
         final presetResolution = resolvePromptPresetSettings(
           prompt: promptWithFixedTags,
-          negativePrompt: resolvedNegative,
+          negativePrompt: negativePromptWithFixedTags,
           qualityMode: qualityState.mode,
           qualityContent: qualityContent,
           ucPresetType: ucState.presetType,
@@ -740,6 +742,14 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
               .where((content) => content.isNotEmpty)
               .toList(growable: false),
           fixedSuffixTags: fixedTagsState.enabledSuffixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          fixedNegativePrefixTags: fixedTagsState.negativeEnabledPrefixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          fixedNegativeSuffixTags: fixedTagsState.negativeEnabledSuffixes
               .map((entry) => entry.weightedContent)
               .where((content) => content.isNotEmpty)
               .toList(growable: false),

@@ -75,6 +75,45 @@ void main() {
       );
     });
 
+    test('should apply native quality and UC presets only at request boundary',
+        () async {
+      final params = ImageParams(
+        prompt: 'fixed positive, user positive',
+        negativePrompt: 'fixed negative, user negative',
+        model: ImageModels.animeDiffusionV45Full,
+        qualityToggle: true,
+        ucPreset: UcPresets.toApiValue(UcPresetType.heavy),
+      );
+      final builder = NAIImageRequestBuilder(
+        params: params,
+        encodeVibe: _fakeEncodeVibe,
+      );
+
+      final result = await builder.build(sampler: 'k_euler');
+      final preset = UcPresets.getPresetContent(
+        ImageModels.animeDiffusionV45Full,
+        UcPresetType.heavy,
+      );
+
+      expect(
+        result.effectivePrompt,
+        equals(
+          'fixed positive, user positive, location, very aesthetic, masterpiece, no text',
+        ),
+      );
+      expect(
+        result.effectiveNegativePrompt,
+        equals('$preset, fixed negative, user negative'),
+      );
+      expect(result.requestData['input'], equals(result.effectivePrompt));
+      expect(
+        result.requestParameters['negative_prompt'],
+        equals(result.effectiveNegativePrompt),
+      );
+      expect(result.requestParameters['ucPreset'], equals(0));
+      expect(result.effectiveNegativePrompt, isNot(contains('nsfw')));
+    });
+
     test('should return vibeEncodingMap only in non-stream mode', () async {
       final params = ImageParams(
         model: 'nai-diffusion-4-full',

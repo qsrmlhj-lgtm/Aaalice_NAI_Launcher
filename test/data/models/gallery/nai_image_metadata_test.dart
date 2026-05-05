@@ -38,6 +38,17 @@ void main() {
       expect(metadata.displayNegativePrompt, equals('plain_negative'));
     });
 
+    test('fromNaiComment should parse structured negative fixed words',
+        () {
+      const metadata = NaiImageMetadata(
+        negativePrompt: 'bad anatomy, plain_negative, text',
+        fixedNegativePrefixTags: ['bad anatomy'],
+        fixedNegativeSuffixTags: ['text'],
+      );
+
+      expect(metadata.displayNegativePrompt, equals('plain_negative'));
+    });
+
     test(
         'fromNaiComment should infer V4.5 Full model and heavy uc preset from raw NovelAI metadata',
         () {
@@ -321,6 +332,50 @@ void main() {
       expect(metadata.preciseReferences[0].type, PreciseRefType.style);
       expect(metadata.preciseReferences[0].strength, 0.65);
       expect(metadata.preciseReferences[0].fidelity, 0.8);
+    });
+
+    test('fromNaiComment should parse structured negative fixed tags', () {
+      final metadata = NaiImageMetadata.fromNaiComment(
+        {
+          'prompt': '1girl',
+          'uc': 'bad anatomy, bad hands, text',
+          'fixed_negative_prefix': ['bad anatomy'],
+          'fixed_negative_suffix': ['text'],
+        },
+      );
+
+      expect(metadata.fixedNegativePrefixTags, equals(['bad anatomy']));
+      expect(metadata.fixedNegativeSuffixTags, equals(['text']));
+      expect(metadata.displayNegativePrompt, equals('bad anatomy, bad hands, text'));
+    });
+
+    test('fromNaiComment should parse Variety Plus flag', () {
+      final metadata = NaiImageMetadata.fromNaiComment(
+        {
+          'prompt': '1girl',
+          'uc': 'bad hands',
+          'skip_cfg_above_sigma': 19,
+        },
+      );
+
+      expect(metadata.varietyPlus, isTrue);
+    });
+
+    test('fromNaiComment should parse string-list Vibe metadata', () {
+      final metadata = NaiImageMetadata.fromNaiComment(
+        {
+          'prompt': '1girl',
+          'uc': 'bad hands',
+          'reference_image_multiple': ['encoded-a', 'encoded-b'],
+          'reference_strength_multiple': [0.25, 0.75],
+          'reference_information_extracted_multiple': [0.4, 0.8],
+        },
+      );
+
+      expect(metadata.vibeReferences, hasLength(2));
+      expect(metadata.vibeReferences.first.vibeEncoding, equals('encoded-a'));
+      expect(metadata.vibeReferences.first.strength, equals(0.25));
+      expect(metadata.vibeReferences.last.infoExtracted, equals(0.8));
     });
   });
 }

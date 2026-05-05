@@ -258,15 +258,16 @@ class QualityTags {
   /// 各模型的质量标签映射
   static const Map<String, String> modelQualityTags = {
     // V4.5 系列 (添加到末尾)
-    ImageModels.animeDiffusionV45Full: 'very aesthetic, masterpiece, no text',
+    ImageModels.animeDiffusionV45Full:
+        'location, very aesthetic, masterpiece, no text',
     ImageModels.animeDiffusionV45Curated:
-        'very aesthetic, masterpiece, no text, -0.8::feet::, rating:general',
+        'location, masterpiece, no text, -0.8::feet::, rating:general',
 
     // V4 系列 (添加到末尾)
     ImageModels.animeDiffusionV4Full:
         'no text, best quality, very aesthetic, absurdres',
     ImageModels.animeDiffusionV4Curated:
-        'rating:general, best quality, very aesthetic, absurdres',
+        'rating:general, amazing quality, very aesthetic, absurdres',
 
     // V3 系列 (添加到末尾)
     ImageModels.animeDiffusionV3:
@@ -274,9 +275,34 @@ class QualityTags {
     ImageModels.furryDiffusionV3: '{best quality}, {amazing quality}',
   };
 
+  /// 历史启动器版本写入过的质量词。
+  ///
+  /// 这些值只用于读取/识别旧 PNG 元数据，不能用于新的生成请求。
+  static const Map<String, List<String>> legacyModelQualityTags = {
+    ImageModels.animeDiffusionV45Full: [
+      'very aesthetic, masterpiece, no text',
+    ],
+    ImageModels.animeDiffusionV45Curated: [
+      'very aesthetic, masterpiece, no text, -0.8::feet::, rating:general',
+    ],
+    ImageModels.animeDiffusionV4Curated: [
+      'rating:general, best quality, very aesthetic, absurdres',
+    ],
+  };
+
   /// 获取指定模型的质量标签
   static String? getQualityTags(String model) {
     return modelQualityTags[model];
+  }
+
+  /// 获取当前官方质量词和历史兼容质量词。
+  static List<String> getQualityTagVariants(String model) {
+    final current = getQualityTags(model);
+    return [
+      if (current != null && current.isNotEmpty) current,
+      ...legacyModelQualityTags[model]?.where((tags) => tags != current) ??
+          const <String>[],
+    ];
   }
 
   /// 将质量标签应用到提示词
@@ -314,16 +340,26 @@ class UcPresets {
   static const int humanFocusApiValue = 2;
   static const int noneApiValue = 3;
 
+  static int toApiValue(UcPresetType type) {
+    return switch (type) {
+      UcPresetType.heavy => heavyApiValue,
+      UcPresetType.light => lightApiValue,
+      UcPresetType.humanFocus => humanFocusApiValue,
+      UcPresetType.none => noneApiValue,
+      UcPresetType.furryFocus => UCPresets.furryFocus,
+    };
+  }
+
   /// V4.5 Full 预设
   static const Map<UcPresetType, String> v45FullPresets = {
     UcPresetType.heavy:
-        'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
+        'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
     UcPresetType.light:
-        'nsfw, lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page',
+        'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page',
     UcPresetType.furryFocus:
-        'nsfw, {worst quality}, distracting watermark, unfinished, bad quality, {widescreen}, upscale, {sequence}, {{grandfathered content}}, blurred foreground, chromatic aberration, sketch, everyone, [sketch background], simple, [flat colors], ych (character), outline, multiple scenes, [[horror (theme)]], comic',
+        '{worst quality}, distracting watermark, unfinished, bad quality, {widescreen}, upscale, {sequence}, {{grandfathered content}}, blurred foreground, chromatic aberration, sketch, everyone, [sketch background], simple, [flat colors], ych (character), outline, multiple scenes, [[horror (theme)]], comic',
     UcPresetType.humanFocus:
-        'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, @_@, mismatched pupils, glowing eyes, bad anatomy',
+        'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, @_@, mismatched pupils, glowing eyes, bad anatomy',
     UcPresetType.none: '',
   };
 
@@ -343,9 +379,9 @@ class UcPresets {
   /// V4 Full 预设
   static const Map<UcPresetType, String> v4FullPresets = {
     UcPresetType.heavy:
-        'nsfw, blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, white blank page, blank page',
+        'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks',
     UcPresetType.light:
-        'nsfw, blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, white blank page, blank page',
+        'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing',
     UcPresetType.furryFocus:
         '{{worst quality}}, [displeasing], {unusual pupils}, guide lines, {{unfinished}}, {bad}, url, artist name, {{tall image}}, mosaic, {sketch page}, comic panel, impact (font), [dated], {logo}, ych, {what}, {where is your god now}, {distorted text}, repeated text, {floating head}, {1994}, {widescreen}, absolutely everyone, sequence, {compression artifacts}, hard translated, {cropped}, {commissioner name}, unknown text, high contrast',
     UcPresetType.humanFocus:
@@ -356,9 +392,9 @@ class UcPresets {
   /// V4 Curated 预设
   static const Map<UcPresetType, String> v4CuratedPresets = {
     UcPresetType.heavy:
-        'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views, gigantic breasts, white blank page, blank page',
+        'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views, gigantic breasts',
     UcPresetType.light:
-        'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature, white blank page, blank page',
+        'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature',
     UcPresetType.furryFocus:
         '{{worst quality}}, [displeasing], {unusual pupils}, guide lines, {{unfinished}}, {bad}, url, artist name, {{tall image}}, mosaic, {sketch page}, comic panel, impact (font), [dated], {logo}, ych, {what}, {where is your god now}, {distorted text}, repeated text, {floating head}, {1994}, {widescreen}, absolutely everyone, sequence, {compression artifacts}, hard translated, {cropped}, {commissioner name}, unknown text, high contrast',
     UcPresetType.humanFocus:
@@ -369,14 +405,62 @@ class UcPresets {
   /// V3 预设
   static const Map<UcPresetType, String> v3Presets = {
     UcPresetType.heavy:
-        'nsfw, lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]',
+        'lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]',
     UcPresetType.light:
-        'nsfw, lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing',
+        'lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing',
     UcPresetType.furryFocus:
         '{{worst quality}}, [displeasing], {unusual pupils}, guide lines, {{unfinished}}, {bad}, url, artist name, {{tall image}}, mosaic, {sketch page}, comic panel, impact (font), [dated], {logo}, ych, {what}, {where is your god now}, {distorted text}, repeated text, {floating head}, {1994}, {widescreen}, absolutely everyone, sequence, {compression artifacts}, hard translated, {cropped}, {commissioner name}, unknown text, high contrast',
     UcPresetType.humanFocus:
-        'nsfw, lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands, @_@, mismatched pupils, heart-shaped pupils, glowing eyes',
+        'lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands, @_@, mismatched pupils, heart-shaped pupils, glowing eyes',
     UcPresetType.none: 'lowres',
+  };
+
+  /// 历史启动器版本写入过的 UC 文本。
+  ///
+  /// 这些值只用于读取/剥离旧 PNG 元数据，不能用于新的生成请求。
+  static const Map<String, Map<UcPresetType, List<String>>>
+      legacyPresetVariants = {
+    ImageModels.animeDiffusionV45Full: {
+      UcPresetType.heavy: [
+        'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
+      ],
+      UcPresetType.light: [
+        'nsfw, lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page',
+      ],
+      UcPresetType.furryFocus: [
+        'nsfw, {worst quality}, distracting watermark, unfinished, bad quality, {widescreen}, upscale, {sequence}, {{grandfathered content}}, blurred foreground, chromatic aberration, sketch, everyone, [sketch background], simple, [flat colors], ych (character), outline, multiple scenes, [[horror (theme)]], comic',
+      ],
+      UcPresetType.humanFocus: [
+        'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, @_@, mismatched pupils, glowing eyes, bad anatomy',
+      ],
+    },
+    ImageModels.animeDiffusionV4Full: {
+      UcPresetType.heavy: [
+        'nsfw, blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, white blank page, blank page',
+      ],
+      UcPresetType.light: [
+        'nsfw, blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, white blank page, blank page',
+      ],
+    },
+    ImageModels.animeDiffusionV4Curated: {
+      UcPresetType.heavy: [
+        'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views, gigantic breasts, white blank page, blank page',
+      ],
+      UcPresetType.light: [
+        'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature, white blank page, blank page',
+      ],
+    },
+    ImageModels.animeDiffusionV3: {
+      UcPresetType.heavy: [
+        'nsfw, lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]',
+      ],
+      UcPresetType.light: [
+        'nsfw, lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing',
+      ],
+      UcPresetType.humanFocus: [
+        'nsfw, lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands, @_@, mismatched pupils, heart-shaped pupils, glowing eyes',
+      ],
+    },
   };
 
   /// Furry V3 预设
@@ -474,6 +558,30 @@ class UcPresets {
     }
   }
 
+  /// 读取本地设置中的 UC 预设值。
+  ///
+  /// 旧 provider 持久化的是 0=Heavy, 1=Light, 2=Human Focus, 3=None。
+  /// 新 provider 统一持久化请求使用的 API id，并额外用 7 表示 Furry Focus。
+  static UcPresetType getPresetTypeFromStorage(int storedValue) {
+    switch (storedValue) {
+      case heavyApiValue:
+        return UcPresetType.heavy;
+      case lightApiValue:
+      case UCPresets.light:
+        return UcPresetType.light;
+      case humanFocusApiValue:
+      case UCPresets.humanFocus:
+        return UcPresetType.humanFocus;
+      case UCPresets.furryFocus:
+        return UcPresetType.furryFocus;
+      case noneApiValue:
+      case 4:
+        return UcPresetType.none;
+      default:
+        return UcPresetType.heavy;
+    }
+  }
+
   /// 根据整数 ucPreset 值和模型直接获取预设内容
   static String getPresetContentByInt(String model, int ucPreset) {
     final presetType = getPresetTypeFromInt(ucPreset);
@@ -501,24 +609,45 @@ class UcPresets {
       return trimmedNegative;
     }
 
-    final presetContent = getPresetContent(model, type).trim();
-    if (presetContent.isEmpty) {
-      return trimmedNegative;
+    for (final presetContent in _getPresetVariants(model, type)) {
+      final stripped = _stripPresetContent(trimmedNegative, presetContent);
+      if (stripped != null) {
+        return stripped;
+      }
     }
+    return trimmedNegative;
+  }
 
-    final promptTags = _splitPromptTags(trimmedNegative);
-    final presetTags = _splitPromptTags(presetContent);
+  static String? _stripPresetContent(
+    String negativePrompt,
+    String presetContent,
+  ) {
+    final trimmedPreset = presetContent.trim();
+    if (trimmedPreset.isEmpty) {
+      return null;
+    }
+    final promptTags = _splitPromptTags(negativePrompt);
+    final presetTags = _splitPromptTags(trimmedPreset);
     if (promptTags.length < presetTags.length) {
-      return trimmedNegative;
+      return null;
     }
 
     for (var i = 0; i < presetTags.length; i++) {
       if (promptTags[i].toLowerCase() != presetTags[i].toLowerCase()) {
-        return trimmedNegative;
+        return null;
       }
     }
 
     return promptTags.sublist(presetTags.length).join(', ');
+  }
+
+  static List<String> _getPresetVariants(String model, UcPresetType type) {
+    final current = getPresetContent(model, type);
+    final legacy = legacyPresetVariants[model]?[type] ?? const <String>[];
+    return [
+      if (current.isNotEmpty) current,
+      ...legacy.where((preset) => preset != current),
+    ];
   }
 
   /// 根据整数 ucPreset 值剥离预设内容，恢复用户输入的负面提示词。

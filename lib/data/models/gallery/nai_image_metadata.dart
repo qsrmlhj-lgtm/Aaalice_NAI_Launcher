@@ -150,6 +150,16 @@ class NaiImageMetadata with _$NaiImageMetadata {
 
     /// Precise Reference 保真度
     @HiveField(34) @Default([]) List<double> preciseReferenceFidelities,
+
+    /// 负向固定前缀词列表
+    @HiveField(35, defaultValue: [])
+    @Default([])
+    List<String> fixedNegativePrefixTags,
+
+    /// 负向固定后缀词列表
+    @HiveField(36, defaultValue: [])
+    @Default([])
+    List<String> fixedNegativeSuffixTags,
   }) = _NaiImageMetadata;
 
   const NaiImageMetadata._();
@@ -236,6 +246,8 @@ class NaiImageMetadata with _$NaiImageMetadata {
     Map<String, List<String>> parts = {
       'fixedPrefix': [],
       'fixedSuffix': [],
+      'fixedNegativePrefix': [],
+      'fixedNegativeSuffix': [],
       'qualityTags': [],
     };
     List<String> characterPrompts = [];
@@ -316,6 +328,7 @@ class NaiImageMetadata with _$NaiImageMetadata {
         model: inferredModel,
         smea: _safeGetBool(commentData, 'sm'),
         smeaDyn: _safeGetBool(commentData, 'sm_dyn'),
+        varietyPlus: _extractVarietyPlus(commentData),
         noiseSchedule: _safeGetString(commentData, 'noise_schedule'),
         cfgRescale: _toDouble(commentData['cfg_rescale']),
         ucPreset: inferredUcPreset,
@@ -331,6 +344,8 @@ class NaiImageMetadata with _$NaiImageMetadata {
         rawJson: rawJson,
         fixedPrefixTags: parts['fixedPrefix'] ?? [],
         fixedSuffixTags: parts['fixedSuffix'] ?? [],
+        fixedNegativePrefixTags: parts['fixedNegativePrefix'] ?? [],
+        fixedNegativeSuffixTags: parts['fixedNegativeSuffix'] ?? [],
         qualityTags: parts['qualityTags'] ?? [],
         characterInfos: characterInfos,
         vibeReferences: vibeReferences,
@@ -412,6 +427,15 @@ class NaiImageMetadata with _$NaiImageMetadata {
     if (value is int) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  static bool? _extractVarietyPlus(Map<String, dynamic> data) {
+    final direct = _safeGetBool(data, 'variety_plus');
+    if (direct != null) return direct;
+
+    final skipCfgAboveSigma = _toDouble(data['skip_cfg_above_sigma']);
+    if (skipCfgAboveSigma == null) return null;
+    return skipCfgAboveSigma > 0;
   }
 
   /// 提取 Comment 数据（支持官网格式和直接格式）
@@ -501,18 +525,28 @@ class NaiImageMetadata with _$NaiImageMetadata {
     final parts = <String, List<String>>{
       'fixedPrefix': [],
       'fixedSuffix': [],
+      'fixedNegativePrefix': [],
+      'fixedNegativeSuffix': [],
       'qualityTags': [],
     };
 
     // 优先从应用专属字段读取
     final fixedPrefix = commentData['fixed_prefix'];
     final fixedSuffix = commentData['fixed_suffix'];
+    final fixedNegativePrefix = commentData['fixed_negative_prefix'];
+    final fixedNegativeSuffix = commentData['fixed_negative_suffix'];
 
     if (fixedPrefix is List) {
       parts['fixedPrefix'] = fixedPrefix.cast<String>();
     }
     if (fixedSuffix is List) {
       parts['fixedSuffix'] = fixedSuffix.cast<String>();
+    }
+    if (fixedNegativePrefix is List) {
+      parts['fixedNegativePrefix'] = fixedNegativePrefix.cast<String>();
+    }
+    if (fixedNegativeSuffix is List) {
+      parts['fixedNegativeSuffix'] = fixedNegativeSuffix.cast<String>();
     }
 
     // 如果没有读取到，从 prompt 提取
@@ -528,16 +562,29 @@ class NaiImageMetadata with _$NaiImageMetadata {
               caption['main_caption'] as String? ??
               '';
           if (baseCaption.isNotEmpty) {
-            return _extractPromptParts(baseCaption);
+            _mergeInferredPromptParts(parts, _extractPromptParts(baseCaption));
+            return parts;
           }
         }
       }
       if (promptStr.isNotEmpty) {
-        return _extractPromptParts(promptStr);
+        _mergeInferredPromptParts(parts, _extractPromptParts(promptStr));
+        return parts;
       }
     }
 
     return parts;
+  }
+
+  static void _mergeInferredPromptParts(
+    Map<String, List<String>> target,
+    Map<String, List<String>> inferred,
+  ) {
+    for (final key in ['fixedPrefix', 'fixedSuffix', 'qualityTags']) {
+      if (target[key]?.isEmpty == true && inferred[key]?.isNotEmpty == true) {
+        target[key] = inferred[key]!;
+      }
+    }
   }
 
   /// 提取角色提示词信息
@@ -1079,9 +1126,10 @@ class NaiImageMetadata with _$NaiImageMetadata {
     String negativePrompt,
     String curatedModel,
   ) {
-    final curatedQualityTags = QualityTags.getQualityTags(curatedModel);
-    if (_containsOrderedPromptFragment(prompt, curatedQualityTags)) {
-      return true;
+    for (final qualityTags in QualityTags.getQualityTagVariants(curatedModel)) {
+      if (_containsOrderedPromptFragment(prompt, qualityTags)) {
+        return true;
+      }
     }
 
     for (final preset in const [0, 1, 2]) {
@@ -1127,12 +1175,14 @@ class NaiImageMetadata with _$NaiImageMetadata {
       return null;
     }
 
-    final qualityTags = QualityTags.getQualityTags(model);
-    if (qualityTags == null || qualityTags.isEmpty) {
+    final qualityTagVariants = QualityTags.getQualityTagVariants(model);
+    if (qualityTagVariants.isEmpty) {
       return null;
     }
 
-    return _containsOrderedPromptFragment(prompt, qualityTags);
+    return qualityTagVariants.any(
+      (qualityTags) => _containsOrderedPromptFragment(prompt, qualityTags),
+    );
   }
 
   static bool _containsOrderedPromptFragment(String prompt, String? fragment) {
@@ -1206,6 +1256,8 @@ class NaiImageMetadata with _$NaiImageMetadata {
     final result = <String, List<String>>{
       'fixedPrefix': [],
       'fixedSuffix': [],
+      'fixedNegativePrefix': [],
+      'fixedNegativeSuffix': [],
       'qualityTags': [],
     };
 
@@ -1266,6 +1318,8 @@ class NaiImageMetadata with _$NaiImageMetadata {
   bool get hasSeparatedFields =>
       fixedPrefixTags.isNotEmpty ||
       fixedSuffixTags.isNotEmpty ||
+      fixedNegativePrefixTags.isNotEmpty ||
+      fixedNegativeSuffixTags.isNotEmpty ||
       qualityTags.isNotEmpty ||
       characterInfos.isNotEmpty ||
       vibeReferences.isNotEmpty ||
