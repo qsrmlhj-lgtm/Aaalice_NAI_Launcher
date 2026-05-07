@@ -3,6 +3,7 @@ import 'package:nai_launcher/core/constants/api_constants.dart';
 import 'package:nai_launcher/core/enums/precise_ref_type.dart';
 import 'package:nai_launcher/data/models/gallery/local_image_record.dart';
 import 'package:nai_launcher/data/models/gallery/nai_image_metadata.dart';
+import 'package:nai_launcher/data/models/online_gallery/danbooru_post.dart';
 import 'package:nai_launcher/presentation/widgets/common/image_detail/image_detail_data.dart';
 import 'dart:convert';
 
@@ -348,8 +349,10 @@ void main() {
 
       expect(metadata.fixedNegativePrefixTags, equals(['bad anatomy']));
       expect(metadata.fixedNegativeSuffixTags, equals(['text']));
-      expect(metadata.displayNegativePrompt,
-          equals('bad anatomy, bad hands, text'));
+      expect(
+        metadata.displayNegativePrompt,
+        equals('bad anatomy, bad hands, text'),
+      );
     });
 
     test('fromNaiComment should parse Variety Plus flag', () {
@@ -379,6 +382,35 @@ void main() {
       expect(metadata.vibeReferences.first.vibeEncoding, equals('encoded-a'));
       expect(metadata.vibeReferences.first.strength, equals(0.25));
       expect(metadata.vibeReferences.last.infoExtracted, equals(0.8));
+    });
+  });
+
+  group('DanbooruPost', () {
+    test('bestQualityUrl prefers the original file over sample and preview',
+        () {
+      const post = DanbooruPost(
+        id: 1,
+        fileUrl: 'https://example.com/original.png',
+        largeFileUrl: 'https://example.com/sample.jpg',
+        previewFileUrl: 'https://example.com/preview.jpg',
+      );
+
+      expect(post.bestQualityUrl, 'https://example.com/original.png');
+    });
+
+    test('bestQualityUrl falls back from sample to preview when needed', () {
+      const sampleOnlyPost = DanbooruPost(
+        id: 2,
+        largeFileUrl: 'https://example.com/sample.jpg',
+        previewFileUrl: 'https://example.com/preview.jpg',
+      );
+      const previewOnlyPost = DanbooruPost(
+        id: 3,
+        previewFileUrl: 'https://example.com/preview.jpg',
+      );
+
+      expect(sampleOnlyPost.bestQualityUrl, 'https://example.com/sample.jpg');
+      expect(previewOnlyPost.bestQualityUrl, 'https://example.com/preview.jpg');
     });
   });
 }
