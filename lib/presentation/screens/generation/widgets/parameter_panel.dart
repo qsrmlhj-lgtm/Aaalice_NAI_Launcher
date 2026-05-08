@@ -527,18 +527,6 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
               ),
           ],
         ),
-
-        const SizedBox(height: 16),
-
-        // 重置按钮
-        ThemedButton(
-          onPressed: () {
-            ref.read(generationParamsNotifierProvider.notifier).reset();
-          },
-          icon: const Icon(Icons.restart_alt),
-          label: Text(context.l10n.generation_resetParams),
-          style: ThemedButtonStyle.outlined,
-        ),
       ],
     );
   }

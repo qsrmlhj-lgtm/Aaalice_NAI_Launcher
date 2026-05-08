@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -148,13 +149,36 @@ class _WeightAdjustToolbarWrapperState
     _overlayEntry = null;
   }
 
+  void _adjustWeightByStep(double step) {
+    final result = _WeightSelectionEditor.parseSelection(widget.controller);
+    _WeightSelectionEditor.applyWeight(
+      widget.controller,
+      (result.weight + step).clamp(0.1, 3.0),
+    );
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent ||
+        event.scrollDelta.dy == 0 ||
+        !widget.enabled ||
+        !_WeightSelectionEditor.hasSelection(widget.controller)) {
+      return;
+    }
+
+    _adjustWeightByStep(event.scrollDelta.dy < 0 ? 0.05 : -0.05);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return CompositedTransformTarget(
-      link: _layerLink,
-      child: KeyedSubtree(
-        key: _textFieldKey,
-        child: widget.child,
+    return Listener(
+      onPointerSignal: _handlePointerSignal,
+      child: CompositedTransformTarget(
+        link: _layerLink,
+        child: KeyedSubtree(
+          key: _textFieldKey,
+          child: widget.child,
+        ),
       ),
     );
   }
@@ -171,49 +195,18 @@ class _WeightParseResult {
   });
 }
 
-/// 权重调整工具条
-class _WeightAdjustToolbar extends StatefulWidget {
-  final TextEditingController controller;
-  final LayerLink layerLink;
-  final GlobalKey textFieldKey;
-  final VoidCallback onClose;
-  final ValueChanged<bool> onInteractingChanged;
-
-  const _WeightAdjustToolbar({
-    required this.controller,
-    required this.layerLink,
-    required this.textFieldKey,
-    required this.onClose,
-    required this.onInteractingChanged,
-  });
-
-  @override
-  State<_WeightAdjustToolbar> createState() => _WeightAdjustToolbarState();
-}
-
-class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
-  final TextEditingController _weightController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _updateWeightDisplay();
+class _WeightSelectionEditor {
+  static bool hasSelection(TextEditingController controller) {
+    final selection = controller.selection;
+    return selection.isValid &&
+        selection.start != selection.end &&
+        selection.start >= 0 &&
+        selection.end <= controller.text.length;
   }
 
-  @override
-  void didUpdateWidget(_WeightAdjustToolbar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _updateWeightDisplay();
-  }
-
-  void _updateWeightDisplay() {
-    final result = _parseSelection();
-    _weightController.text = result.weight.toStringAsFixed(2);
-  }
-
-  _WeightParseResult _parseSelection() {
-    final text = widget.controller.text;
-    final selection = widget.controller.selection;
+  static _WeightParseResult parseSelection(TextEditingController controller) {
+    final text = controller.text;
+    final selection = controller.selection;
     final start = selection.start;
     final end = selection.end;
 
@@ -222,10 +215,10 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
     }
 
     final selectedText = text.substring(start, end);
-    return _parseWeightSyntax(selectedText);
+    return parseWeightSyntax(selectedText);
   }
 
-  _WeightParseResult _parseWeightSyntax(String text) {
+  static _WeightParseResult parseWeightSyntax(String text) {
     var baseText = text;
     var weight = 1.0;
 
@@ -277,25 +270,37 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
       }
     }
 
-    final effectiveBraces = braceCount < closeBraceCount ? braceCount : closeBraceCount;
-    final effectiveBrackets = bracketCount < closeBracketCount ? bracketCount : closeBracketCount;
+    final effectiveBraces =
+        braceCount < closeBraceCount ? braceCount : closeBraceCount;
+    final effectiveBrackets =
+        bracketCount < closeBracketCount ? bracketCount : closeBracketCount;
 
     if (effectiveBraces > 0) {
       weight = 1.0 + (effectiveBraces * 0.05);
-      baseText = trimmed.substring(effectiveBraces, trimmed.length - effectiveBraces).trim();
+      baseText = trimmed
+          .substring(effectiveBraces, trimmed.length - effectiveBraces)
+          .trim();
     } else if (effectiveBrackets > 0) {
       weight = 1.0 - (effectiveBrackets * 0.05);
-      baseText = trimmed.substring(effectiveBrackets, trimmed.length - effectiveBrackets).trim();
+      baseText = trimmed
+          .substring(effectiveBrackets, trimmed.length - effectiveBrackets)
+          .trim();
     }
 
-    return _WeightParseResult(baseText: baseText.trim(), weight: weight.clamp(0.1, 3.0));
+    return _WeightParseResult(
+      baseText: baseText.trim(),
+      weight: weight.clamp(0.1, 3.0),
+    );
   }
 
-  void _applyWeight(double newWeight) {
-    final result = _parseSelection();
+  static bool applyWeight(
+    TextEditingController controller,
+    double newWeight,
+  ) {
+    final result = parseSelection(controller);
     final baseText = result.baseText;
 
-    if (baseText.isEmpty) return;
+    if (baseText.isEmpty) return false;
 
     String newText;
     if (newWeight == 1.0) {
@@ -304,23 +309,84 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
       newText = '${newWeight.toStringAsFixed(2)}::$baseText::';
     }
 
-    final text = widget.controller.text;
-    final selection = widget.controller.selection;
+    final text = controller.text;
+    final selection = controller.selection;
     final newTextValue = text.substring(0, selection.start) +
         newText +
         text.substring(selection.end);
 
-    widget.controller.text = newTextValue;
+    controller.text = newTextValue;
 
     final newSelectionEnd = selection.start + newText.length;
-    widget.controller.selection = TextSelection(
+    controller.selection = TextSelection(
       baseOffset: selection.start,
       extentOffset: newSelectionEnd,
     );
 
+    return true;
+  }
+}
+
+/// 权重调整工具条
+class _WeightAdjustToolbar extends StatefulWidget {
+  final TextEditingController controller;
+  final LayerLink layerLink;
+  final GlobalKey textFieldKey;
+  final VoidCallback onClose;
+  final ValueChanged<bool> onInteractingChanged;
+
+  const _WeightAdjustToolbar({
+    required this.controller,
+    required this.layerLink,
+    required this.textFieldKey,
+    required this.onClose,
+    required this.onInteractingChanged,
+  });
+
+  @override
+  State<_WeightAdjustToolbar> createState() => _WeightAdjustToolbarState();
+}
+
+class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
+  final TextEditingController _weightController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _updateWeightDisplay();
+  }
+
+  @override
+  void didUpdateWidget(_WeightAdjustToolbar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _updateWeightDisplay();
+  }
+
+  void _updateWeightDisplay() {
+    final result = _WeightSelectionEditor.parseSelection(widget.controller);
+    _weightController.text = result.weight.toStringAsFixed(2);
+  }
+
+  void _applyWeight(double newWeight) {
+    if (!_WeightSelectionEditor.applyWeight(widget.controller, newWeight)) {
+      return;
+    }
+
     setState(() {
       _weightController.text = newWeight.toStringAsFixed(2);
     });
+  }
+
+  void _adjustWeightByStep(double step) {
+    final currentWeight = double.tryParse(_weightController.text) ?? 1.0;
+    _applyWeight((currentWeight + step).clamp(0.1, 3.0));
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || event.scrollDelta.dy == 0) {
+      return;
+    }
+    _adjustWeightByStep(event.scrollDelta.dy < 0 ? 0.05 : -0.05);
   }
 
   Offset _calculateOffset() {
@@ -329,7 +395,8 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
       return const Offset(0, -52);
     }
 
-    final textFieldRenderBox = textFieldContext.findRenderObject() as RenderBox?;
+    final textFieldRenderBox =
+        textFieldContext.findRenderObject() as RenderBox?;
     if (textFieldRenderBox == null) {
       return const Offset(0, -52);
     }
@@ -344,6 +411,7 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
         }
         e.visitChildren(search);
       }
+
       search(element);
       return result;
     }
@@ -378,6 +446,7 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
     return Listener(
       onPointerDown: (_) => widget.onInteractingChanged(true),
       onPointerUp: (_) => widget.onInteractingChanged(false),
+      onPointerSignal: _handlePointerSignal,
       child: CompositedTransformFollower(
         link: widget.layerLink,
         showWhenUnlinked: false,
@@ -404,10 +473,7 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
                   children: [
                     _WeightButton(
                       icon: Icons.remove,
-                      onPressed: () {
-                        final currentWeight = double.tryParse(_weightController.text) ?? 1.0;
-                        _applyWeight((currentWeight - 0.05).clamp(0.1, 3.0));
-                      },
+                      onPressed: () => _adjustWeightByStep(-0.05),
                       tooltip: '减少权重 (-0.05)',
                     ),
                     Expanded(
@@ -459,10 +525,7 @@ class _WeightAdjustToolbarState extends State<_WeightAdjustToolbar> {
                     ),
                     _WeightButton(
                       icon: Icons.add,
-                      onPressed: () {
-                        final currentWeight = double.tryParse(_weightController.text) ?? 1.0;
-                        _applyWeight((currentWeight + 0.05).clamp(0.1, 3.0));
-                      },
+                      onPressed: () => _adjustWeightByStep(0.05),
                       tooltip: '增加权重 (+0.05)',
                     ),
                     Container(
