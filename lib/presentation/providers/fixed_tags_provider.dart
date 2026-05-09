@@ -6,6 +6,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../core/storage/local_storage_service.dart';
 import '../../core/utils/app_logger.dart';
 import '../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../data/models/fixed_tag/fixed_tag_link.dart';
+import '../../data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import '../../data/models/tag_library/tag_library_entry.dart';
 import 'tag_library_page_provider.dart';
 
@@ -14,45 +16,132 @@ part 'fixed_tags_provider.g.dart';
 /// 固定词状态
 class FixedTagsState {
   final List<FixedTagEntry> entries;
+  final List<FixedTagLink> links;
+  final bool negativePanelExpanded;
+  final int undoDepth;
+  final int redoDepth;
   final bool isLoading;
   final String? error;
 
   const FixedTagsState({
     this.entries = const [],
+    this.links = const [],
+    this.negativePanelExpanded = true,
+    this.undoDepth = 0,
+    this.redoDepth = 0,
     this.isLoading = false,
     this.error,
   });
 
   FixedTagsState copyWith({
     List<FixedTagEntry>? entries,
+    List<FixedTagLink>? links,
+    bool? negativePanelExpanded,
+    int? undoDepth,
+    int? redoDepth,
     bool? isLoading,
     String? error,
   }) {
     return FixedTagsState(
       entries: entries ?? this.entries,
+      links: links ?? this.links,
+      negativePanelExpanded:
+          negativePanelExpanded ?? this.negativePanelExpanded,
+      undoDepth: undoDepth ?? this.undoDepth,
+      redoDepth: redoDepth ?? this.redoDepth,
       isLoading: isLoading ?? this.isLoading,
       error: error,
     );
   }
 
+  bool get canUndo => undoDepth > 0;
+
+  bool get canRedo => redoDepth > 0;
+
+  /// 获取正向固定词条目
+  List<FixedTagEntry> get positiveEntries => entries
+      .where((e) => e.promptType == FixedTagPromptType.positive)
+      .toList();
+
   /// 获取启用的条目
-  List<FixedTagEntry> get enabledEntries =>
-      entries.where((e) => e.enabled).toList();
+  List<FixedTagEntry> get enabledEntries => entries
+      .where((e) => e.enabled && e.promptType == FixedTagPromptType.positive)
+      .toList();
 
   /// 获取启用的条目数量
-  int get enabledCount => entries.where((e) => e.enabled).length;
+  int get enabledCount => entries
+      .where((e) => e.enabled && e.promptType == FixedTagPromptType.positive)
+      .length;
 
   /// 获取禁用的条目数量
-  int get disabledCount => entries.where((e) => !e.enabled).length;
+  int get disabledCount => entries
+      .where((e) => !e.enabled && e.promptType == FixedTagPromptType.positive)
+      .length;
 
   /// 获取启用的前缀条目
   List<FixedTagEntry> get enabledPrefixes => entries
-      .where((e) => e.enabled && e.position == FixedTagPosition.prefix)
+      .where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.prefix,
+      )
       .toList();
 
   /// 获取启用的后缀条目
   List<FixedTagEntry> get enabledSuffixes => entries
-      .where((e) => e.enabled && e.position == FixedTagPosition.suffix)
+      .where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.suffix,
+      )
+      .toList();
+
+  /// 获取负向固定词条目
+  List<FixedTagEntry> get negativeEntries => entries
+      .where((e) => e.promptType == FixedTagPromptType.negative)
+      .toList();
+
+  /// 获取启用的负向条目
+  List<FixedTagEntry> get negativeEnabledEntries =>
+      negativeEntries.where((e) => e.enabled).toList();
+
+  /// 获取启用的负向条目数量
+  int get negativeEnabledCount =>
+      negativeEntries.where((e) => e.enabled).length;
+
+  /// 获取禁用的负向条目数量
+  int get negativeDisabledCount =>
+      negativeEntries.where((e) => !e.enabled).length;
+
+  /// 按分类分组的正向固定词条目
+  Map<String?, List<FixedTagEntry>> get positiveByCategory {
+    final grouped = <String?, List<FixedTagEntry>>{};
+    for (final entry in positiveEntries.sortedByOrder()) {
+      grouped.putIfAbsent(entry.categoryId, () => []).add(entry);
+    }
+    return grouped;
+  }
+
+  /// 获取启用的负向前缀条目
+  List<FixedTagEntry> get negativeEnabledPrefixes => entries
+      .where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.negative &&
+            e.position == FixedTagPosition.prefix,
+      )
+      .toList();
+
+  /// 获取启用的负向后缀条目
+  List<FixedTagEntry> get negativeEnabledSuffixes => entries
+      .where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.negative &&
+            e.position == FixedTagPosition.suffix,
+      )
       .toList();
 
   /// 应用固定词到提示词
@@ -80,6 +169,77 @@ class FixedTagsState {
     return parts.join(', ');
   }
 
+  /// 应用负向固定词到负向提示词。
+  ///
+  /// 语义与正向固定词一致：前缀 + 用户主体 + 后缀。
+  String applyToNegativePrompt(String userNegativePrompt) {
+    final enabledPrefixContents = negativeEnabledPrefixes
+        .sortedByOrder()
+        .map((e) => e.weightedContent)
+        .where((c) => c.isNotEmpty)
+        .toList();
+
+    final enabledSuffixContents = negativeEnabledSuffixes
+        .sortedByOrder()
+        .map((e) => e.weightedContent)
+        .where((c) => c.isNotEmpty)
+        .toList();
+
+    final parts = <String>[
+      ...enabledPrefixContents,
+      userNegativePrompt,
+      ...enabledSuffixContents,
+    ].where((s) => s.isNotEmpty).toList();
+
+    return parts.join(', ');
+  }
+
+  /// 获取某个正向固定词联动的负向固定词。
+  List<FixedTagEntry> linkedNegativesOf(String positiveId) {
+    final negativeIds = links
+        .where((link) => link.positiveEntryId == positiveId)
+        .map((link) => link.negativeEntryId)
+        .toSet();
+    return entries
+        .where(
+          (entry) =>
+              entry.promptType == FixedTagPromptType.negative &&
+              negativeIds.contains(entry.id),
+        )
+        .toList();
+  }
+
+  /// 获取某个负向固定词被哪些正向固定词联动。
+  List<FixedTagEntry> linkedPositivesOf(String negativeId) {
+    final positiveIds = links
+        .where((link) => link.negativeEntryId == negativeId)
+        .map((link) => link.positiveEntryId)
+        .toSet();
+    return entries
+        .where(
+          (entry) =>
+              entry.promptType == FixedTagPromptType.positive &&
+              positiveIds.contains(entry.id),
+        )
+        .toList();
+  }
+
+  /// 判断联动两端是否被用户手动改成不一致状态。
+  bool isMismatched(FixedTagLink link) {
+    final positive = entries.cast<FixedTagEntry?>().firstWhere(
+          (entry) => entry?.id == link.positiveEntryId,
+          orElse: () => null,
+        );
+    final negative = entries.cast<FixedTagEntry?>().firstWhere(
+          (entry) => entry?.id == link.negativeEntryId,
+          orElse: () => null,
+        );
+    if (positive == null || negative == null) {
+      return false;
+    }
+    return positive.enabled != negative.enabled;
+  }
+
   /// 从完整提示词中剥离当前启用的固定词前缀/后缀。
   ///
   /// 提示词助手只应处理用户输入框主体内容；如果上游流程已经把固定词
@@ -90,6 +250,18 @@ class FixedTagsState {
       result = _stripLeadingSegment(result, entry.weightedContent);
     }
     for (final entry in enabledSuffixes.sortedByOrder().reversed) {
+      result = _stripTrailingSegment(result, entry.weightedContent);
+    }
+    return result.trim();
+  }
+
+  /// 从完整负向提示词中剥离当前启用的负向固定词前缀/后缀。
+  String stripFromNegativePrompt(String negativePrompt) {
+    var result = negativePrompt.trim();
+    for (final entry in negativeEnabledPrefixes.sortedByOrder()) {
+      result = _stripLeadingSegment(result, entry.weightedContent);
+    }
+    for (final entry in negativeEnabledSuffixes.sortedByOrder().reversed) {
       result = _stripTrailingSegment(result, entry.weightedContent);
     }
     return result.trim();
@@ -136,6 +308,80 @@ class FixedTagsState {
   }
 }
 
+/// 从词库条目推断固定词分类。
+List<FixedTagEntry> inferFixedTagCategories(
+  List<FixedTagEntry> fixedEntries,
+  List<TagLibraryEntry> libraryEntries,
+) {
+  if (libraryEntries.isEmpty) return fixedEntries;
+  final entryById = {for (final entry in libraryEntries) entry.id: entry};
+
+  return [
+    for (final entry in fixedEntries)
+      if (entry.categoryId != null || entry.sourceEntryId == null)
+        entry
+      else
+        entryById[entry.sourceEntryId]?.categoryId == null
+            ? entry
+            : entry.copyWith(
+                categoryId: entryById[entry.sourceEntryId]!.categoryId,
+              ),
+  ];
+}
+
+/// 在筛选后的可见条目内重排，保持隐藏条目的相对位置。
+List<FixedTagEntry> reorderFixedTagsWithinVisibleIds({
+  required List<FixedTagEntry> entries,
+  required FixedTagPromptType promptType,
+  required List<String> visibleIds,
+  required int oldIndex,
+  required int newIndex,
+}) {
+  final sameType = entries
+      .where((entry) => entry.promptType == promptType)
+      .toList()
+      .sortedByOrder();
+  final visibleSet = visibleIds.toSet();
+  final visible =
+      sameType.where((entry) => visibleSet.contains(entry.id)).toList();
+
+  if (oldIndex < 0 || oldIndex >= visible.length) return entries;
+  if (newIndex < 0 || newIndex > visible.length) return entries;
+  if (newIndex > oldIndex) newIndex--;
+  if (oldIndex == newIndex) return entries;
+
+  final moved = visible.removeAt(oldIndex);
+  visible.insert(newIndex, moved);
+
+  var visibleCursor = 0;
+  final reorderedSameType = [
+    for (final entry in sameType)
+      if (visibleSet.contains(entry.id)) visible[visibleCursor++] else entry,
+  ].reindex();
+
+  final reorderedById = {
+    for (final entry in reorderedSameType) entry.id: entry,
+  };
+  return entries
+      .map((entry) => reorderedById[entry.id] ?? entry)
+      .toList()
+      .sortedByOrder();
+}
+
+bool _sameCategoryAssignments(
+  List<FixedTagEntry> before,
+  List<FixedTagEntry> after,
+) {
+  if (before.length != after.length) return false;
+  for (var i = 0; i < before.length; i++) {
+    if (before[i].id != after[i].id ||
+        before[i].categoryId != after[i].categoryId) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// 固定词 Provider
 ///
 /// 管理固定词列表，支持增删改查、排序、状态切换
@@ -144,32 +390,50 @@ class FixedTagsState {
 class FixedTagsNotifier extends _$FixedTagsNotifier {
   /// 存储服务
   late LocalStorageService _storage;
+  final List<FixedTagsState> _undoStack = [];
+  final List<FixedTagsState> _redoStack = [];
 
   @override
   FixedTagsState build() {
     _storage = ref.watch(localStorageServiceProvider);
+    _undoStack.clear();
+    _redoStack.clear();
 
     // 直接返回加载的固定词列表
-    return _loadEntries();
+    return _withHistoryCounts(_loadState());
   }
 
-  /// 从存储加载固定词列表
-  FixedTagsState _loadEntries() {
+  /// 从存储加载固定词状态
+  FixedTagsState _loadState() {
     try {
       final json = _storage.getFixedTagsJson();
-      if (json == null || json.isEmpty) {
-        return const FixedTagsState(entries: []);
-      }
+      final entries = json == null || json.isEmpty
+          ? <FixedTagEntry>[]
+          : (jsonDecode(json) as List<dynamic>)
+              .map((e) => FixedTagEntry.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
 
-      final List<dynamic> decoded = jsonDecode(json);
-      final entries = decoded
-          .map((e) => FixedTagEntry.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
+      final linksJson = _storage.getFixedTagLinksJson();
+      final links = linksJson == null || linksJson.isEmpty
+          ? <FixedTagLink>[]
+          : (jsonDecode(linksJson) as List<dynamic>)
+              .map((e) => FixedTagLink.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
 
       // 按排序顺序排列
       final sortedEntries = entries.sortedByOrder();
-      AppLogger.d('Loaded ${entries.length} fixed tags', 'FixedTagsProvider');
-      return FixedTagsState(entries: sortedEntries);
+      final sanitizedLinks = _sanitizeLinks(sortedEntries, links);
+      final negativePanelExpanded =
+          _storage.getFixedTagsNegativePanelExpanded();
+      AppLogger.d(
+        'Loaded ${entries.length} fixed tags and ${sanitizedLinks.length} links',
+        'FixedTagsProvider',
+      );
+      return FixedTagsState(
+        entries: sortedEntries,
+        links: sanitizedLinks,
+        negativePanelExpanded: negativePanelExpanded,
+      );
     } catch (e, stack) {
       AppLogger.e(
         'Failed to load fixed tags: $e',
@@ -179,9 +443,38 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       );
       return FixedTagsState(
         entries: [],
+        links: [],
         error: e.toString(),
       );
     }
+  }
+
+  List<FixedTagLink> _sanitizeLinks(
+    List<FixedTagEntry> entries,
+    List<FixedTagLink> links,
+  ) {
+    final positiveIds = entries
+        .where((entry) => entry.promptType == FixedTagPromptType.positive)
+        .map((entry) => entry.id)
+        .toSet();
+    final negativeIds = entries
+        .where((entry) => entry.promptType == FixedTagPromptType.negative)
+        .map((entry) => entry.id)
+        .toSet();
+    final seenPairs = <String>{};
+    final sanitized = <FixedTagLink>[];
+    for (final link in links) {
+      if (!positiveIds.contains(link.positiveEntryId) ||
+          !negativeIds.contains(link.negativeEntryId)) {
+        continue;
+      }
+      final pairKey = '${link.positiveEntryId}:${link.negativeEntryId}';
+      if (!seenPairs.add(pairKey)) {
+        continue;
+      }
+      sanitized.add(link);
+    }
+    return sanitized;
   }
 
   /// 保存固定词列表到存储
@@ -203,6 +496,68 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
     }
   }
 
+  /// 保存固定词联动关系到存储
+  Future<void> _saveLinks() async {
+    try {
+      final json = jsonEncode(state.links.map((e) => e.toJson()).toList());
+      await _storage.setFixedTagLinksJson(json);
+      AppLogger.d(
+        'Saved ${state.links.length} fixed tag links',
+        'FixedTagsProvider',
+      );
+    } catch (e, stack) {
+      AppLogger.e(
+        'Failed to save fixed tag links: $e',
+        e,
+        stack,
+        'FixedTagsProvider',
+      );
+    }
+  }
+
+  Future<void> _saveNegativePanelExpanded() async {
+    await _storage.setFixedTagsNegativePanelExpanded(
+      state.negativePanelExpanded,
+    );
+  }
+
+  FixedTagsState _historySnapshot(FixedTagsState value) {
+    return value.copyWith(undoDepth: 0, redoDepth: 0);
+  }
+
+  FixedTagsState _withHistoryCounts(FixedTagsState value) {
+    return value.copyWith(
+      undoDepth: _undoStack.length,
+      redoDepth: _redoStack.length,
+    );
+  }
+
+  void _commitState(FixedTagsState nextState) {
+    _undoStack.add(_historySnapshot(state));
+    _redoStack.clear();
+    state = _withHistoryCounts(nextState);
+  }
+
+  Future<void> _saveAllState() async {
+    await _saveEntries();
+    await _saveLinks();
+    await _saveNegativePanelExpanded();
+  }
+
+  Future<void> undo() async {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_historySnapshot(state));
+    state = _withHistoryCounts(_undoStack.removeLast());
+    await _saveAllState();
+  }
+
+  Future<void> redo() async {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(_historySnapshot(state));
+    state = _withHistoryCounts(_redoStack.removeLast());
+    await _saveAllState();
+  }
+
   /// 添加固定词
   ///
   /// 【新增】sourceEntryId 参数：如果此固定词是从词库关联过来的，
@@ -213,7 +568,9 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
     double weight = 1.0,
     FixedTagPosition position = FixedTagPosition.prefix,
     bool enabled = true,
+    FixedTagPromptType promptType = FixedTagPromptType.positive,
     String? sourceEntryId, // 【新增】来源词库条目ID
+    String? categoryId,
   }) async {
     final entry = FixedTagEntry.create(
       name: name,
@@ -221,12 +578,14 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       weight: weight,
       position: position,
       enabled: enabled,
+      promptType: promptType,
       sourceEntryId: sourceEntryId, // 【新增】
+      categoryId: categoryId,
       sortOrder: state.entries.length,
     );
 
     final newEntries = [...state.entries, entry];
-    state = state.copyWith(entries: newEntries);
+    _commitState(state.copyWith(entries: newEntries));
     await _saveEntries();
 
     AppLogger.d(
@@ -257,8 +616,13 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
 
     final newEntries = [...state.entries];
     newEntries[index] = updatedEntry;
-    state = state.copyWith(entries: newEntries);
+    final sanitizedLinks = _sanitizeLinks(newEntries, state.links);
+    final removedInvalidLinks = sanitizedLinks.length != state.links.length;
+    _commitState(state.copyWith(entries: newEntries, links: sanitizedLinks));
     await _saveEntries();
+    if (removedInvalidLinks) {
+      await _saveLinks();
+    }
 
     AppLogger.d(
       'Updated fixed tag: ${updatedEntry.displayName}, checking for sync...',
@@ -297,18 +661,32 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
         newEntries[index] = fixedTag.copyWith(
           name: tagEntry.name,
           content: tagEntry.content,
+          categoryId: tagEntry.categoryId,
           updatedAt: DateTime.now(),
         );
       }
     }
 
-    state = state.copyWith(entries: newEntries);
+    _commitState(state.copyWith(entries: newEntries));
     await _saveEntries();
 
     AppLogger.d(
       'Synced ${entriesToSync.length} fixed tags from tag library: ${tagEntry.name}',
       'FixedTagsProvider',
     );
+  }
+
+  /// 从词库条目补齐已关联固定词缺失的分类。
+  Future<void> inferCategoriesFromLibrary() async {
+    final tagLibraryState = ref.read(tagLibraryPageNotifierProvider);
+    final inferred = inferFixedTagCategories(
+      state.entries,
+      tagLibraryState.entries,
+    );
+    if (_sameCategoryAssignments(state.entries, inferred)) return;
+
+    state = state.copyWith(entries: inferred);
+    await _saveEntries();
   }
 
   /// 【新增】同步到词库（反向同步）
@@ -388,7 +766,11 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       );
     } catch (e, stack) {
       AppLogger.e(
-          'Failed to sync to tag library: $e', e, stack, 'FixedTagsProvider');
+        'Failed to sync to tag library: $e',
+        e,
+        stack,
+        'FixedTagsProvider',
+      );
     }
   }
 
@@ -396,8 +778,16 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
   Future<void> deleteEntry(String entryId) async {
     final newEntries =
         state.entries.where((e) => e.id != entryId).toList().reindex();
-    state = state.copyWith(entries: newEntries);
+    final newLinks = state.links
+        .where(
+          (link) =>
+              link.positiveEntryId != entryId &&
+              link.negativeEntryId != entryId,
+        )
+        .toList();
+    _commitState(state.copyWith(entries: newEntries, links: newLinks));
     await _saveEntries();
+    await _saveLinks();
 
     AppLogger.d('Deleted fixed tag: $entryId', 'FixedTagsProvider');
   }
@@ -408,8 +798,31 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
     if (index == -1) return;
 
     final newEntries = [...state.entries];
-    newEntries[index] = newEntries[index].toggleEnabled();
-    state = state.copyWith(entries: newEntries);
+    final entry = newEntries[index];
+    final nextEnabled = !entry.enabled;
+    newEntries[index] = entry.copyWith(
+      enabled: nextEnabled,
+      updatedAt: DateTime.now(),
+    );
+
+    if (entry.promptType == FixedTagPromptType.positive) {
+      final linkedNegativeIds = state.links
+          .where((link) => link.positiveEntryId == entry.id)
+          .map((link) => link.negativeEntryId)
+          .toSet();
+      for (var i = 0; i < newEntries.length; i++) {
+        final candidate = newEntries[i];
+        if (linkedNegativeIds.contains(candidate.id) &&
+            candidate.enabled != nextEnabled) {
+          newEntries[i] = candidate.copyWith(
+            enabled: nextEnabled,
+            updatedAt: DateTime.now(),
+          );
+        }
+      }
+    }
+
+    _commitState(state.copyWith(entries: newEntries));
     await _saveEntries();
   }
 
@@ -420,7 +833,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
 
     final newEntries = [...state.entries];
     newEntries[index] = newEntries[index].togglePosition();
-    state = state.copyWith(entries: newEntries);
+    _commitState(state.copyWith(entries: newEntries));
     await _saveEntries();
   }
 
@@ -434,7 +847,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
 
     // 重新分配 sortOrder
     final reindexed = entries.reindex();
-    state = state.copyWith(entries: reindexed);
+    _commitState(state.copyWith(entries: reindexed));
     await _saveEntries();
 
     AppLogger.d(
@@ -443,11 +856,132 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
     );
   }
 
+  /// 在同一提示词类型内重排，避免双栏或过滤列表误改另一侧顺序。
+  Future<void> reorderWithinPromptType(
+    FixedTagPromptType promptType,
+    int oldIndex,
+    int newIndex,
+  ) async {
+    if (oldIndex == newIndex) return;
+
+    final sameType = state.entries
+        .where((entry) => entry.promptType == promptType)
+        .toList()
+        .sortedByOrder();
+    if (oldIndex < 0 || oldIndex >= sameType.length) return;
+    if (newIndex < 0 || newIndex > sameType.length) return;
+    if (newIndex > oldIndex) newIndex--;
+
+    final moved = sameType.removeAt(oldIndex);
+    sameType.insert(newIndex, moved);
+    final sameTypeById = {
+      for (var i = 0; i < sameType.length; i++)
+        sameType[i].id: sameType[i].copyWith(sortOrder: i),
+    };
+    final newEntries = state.entries
+        .map((entry) => sameTypeById[entry.id] ?? entry)
+        .toList()
+        .sortedByOrder();
+
+    _commitState(state.copyWith(entries: newEntries));
+    await _saveEntries();
+  }
+
+  /// 在可见固定词 ID 范围内重排，适用于分类或搜索筛选后的列表。
+  Future<void> reorderWithinVisibleIds({
+    required FixedTagPromptType promptType,
+    required List<String> visibleIds,
+    required int oldIndex,
+    required int newIndex,
+  }) async {
+    final reordered = reorderFixedTagsWithinVisibleIds(
+      entries: state.entries,
+      promptType: promptType,
+      visibleIds: visibleIds,
+      oldIndex: oldIndex,
+      newIndex: newIndex,
+    );
+    if (identical(reordered, state.entries) || reordered == state.entries) {
+      return;
+    }
+    _commitState(state.copyWith(entries: reordered));
+    await _saveEntries();
+  }
+
+  /// 创建正向到负向的联动关系。
+  Future<FixedTagLink?> createLink({
+    required String positiveEntryId,
+    required String negativeEntryId,
+  }) async {
+    final positive = getEntry(positiveEntryId);
+    final negative = getEntry(negativeEntryId);
+    if (positive?.promptType != FixedTagPromptType.positive ||
+        negative?.promptType != FixedTagPromptType.negative) {
+      AppLogger.w(
+        'Invalid fixed tag link endpoints: $positiveEntryId -> $negativeEntryId',
+        'FixedTagsProvider',
+      );
+      return null;
+    }
+
+    final exists = state.links.any(
+      (link) =>
+          link.positiveEntryId == positiveEntryId &&
+          link.negativeEntryId == negativeEntryId,
+    );
+    if (exists) {
+      return null;
+    }
+
+    final link = FixedTagLink.create(
+      positiveEntryId: positiveEntryId,
+      negativeEntryId: negativeEntryId,
+    );
+    _commitState(state.copyWith(links: [...state.links, link]));
+    await _saveLinks();
+    return link;
+  }
+
+  /// 删除指定联动关系。
+  Future<void> removeLink(String linkId) async {
+    final newLinks = state.links.where((link) => link.id != linkId).toList();
+    if (newLinks.length == state.links.length) return;
+    _commitState(state.copyWith(links: newLinks));
+    await _saveLinks();
+  }
+
+  /// 按端点删除联动关系。
+  Future<void> removeLinkByPair({
+    required String positiveEntryId,
+    required String negativeEntryId,
+  }) async {
+    final newLinks = state.links
+        .where(
+          (link) =>
+              link.positiveEntryId != positiveEntryId ||
+              link.negativeEntryId != negativeEntryId,
+        )
+        .toList();
+    if (newLinks.length == state.links.length) return;
+    _commitState(state.copyWith(links: newLinks));
+    await _saveLinks();
+  }
+
   /// 应用固定词到提示词
   ///
   /// 将所有启用的固定词按位置应用到用户提示词
   String applyToPrompt(String userPrompt) {
     return state.applyToPrompt(userPrompt);
+  }
+
+  /// 应用负向固定词到负向提示词
+  String applyToNegativePrompt(String userNegativePrompt) {
+    return state.applyToNegativePrompt(userNegativePrompt);
+  }
+
+  /// 从负向提示词中剥离负向固定词
+  String stripFromNegativePrompt(String negativePrompt) {
+    return state.stripFromNegativePrompt(negativePrompt);
   }
 
   /// 根据ID获取条目
@@ -460,14 +994,17 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
 
   /// 清空所有固定词
   Future<void> clearAll() async {
-    state = state.copyWith(entries: []);
+    _commitState(state.copyWith(entries: [], links: []));
     await _saveEntries();
+    await _saveLinks();
     AppLogger.d('Cleared all fixed tags', 'FixedTagsProvider');
   }
 
   /// 重新加载
   void refresh() {
-    state = _loadEntries();
+    _undoStack.clear();
+    _redoStack.clear();
+    state = _withHistoryCounts(_loadState());
   }
 
   /// 清除错误状态
@@ -486,8 +1023,45 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
               : e.copyWith(enabled: enabled, updatedAt: DateTime.now()),
         )
         .toList();
-    state = state.copyWith(entries: newEntries);
+    _commitState(state.copyWith(entries: newEntries));
     await _saveEntries();
+  }
+
+  /// 批量设置正向固定词，并让联动负向跟随。
+  Future<void> setAllPositiveEnabled(bool enabled) async {
+    final linkedNegativeIds = state.links.map((link) => link.negativeEntryId);
+    final affectedIds = {
+      ...state.positiveEntries.map((entry) => entry.id),
+      ...linkedNegativeIds,
+    };
+    final newEntries = state.entries
+        .map(
+          (entry) => affectedIds.contains(entry.id) && entry.enabled != enabled
+              ? entry.copyWith(enabled: enabled, updatedAt: DateTime.now())
+              : entry,
+        )
+        .toList();
+    _commitState(state.copyWith(entries: newEntries));
+    await _saveEntries();
+  }
+
+  /// 批量设置负向固定词，不反向影响正向。
+  Future<void> setAllNegativeEnabled(bool enabled) async {
+    final newEntries = state.entries
+        .map(
+          (entry) => entry.promptType == FixedTagPromptType.negative &&
+                  entry.enabled != enabled
+              ? entry.copyWith(enabled: enabled, updatedAt: DateTime.now())
+              : entry,
+        )
+        .toList();
+    _commitState(state.copyWith(entries: newEntries));
+    await _saveEntries();
+  }
+
+  Future<void> setNegativePanelExpanded(bool expanded) async {
+    state = _withHistoryCounts(state.copyWith(negativePanelExpanded: expanded));
+    await _saveNegativePanelExpanded();
   }
 }
 

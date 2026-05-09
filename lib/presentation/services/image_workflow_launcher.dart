@@ -12,6 +12,7 @@ import '../../data/services/image_metadata_service.dart';
 import '../providers/generation/image_workflow_controller.dart';
 import '../providers/image_generation_provider.dart';
 import '../screens/director_tools/director_tools_screen.dart';
+import '../utils/prompt_preset_import_utils.dart';
 import '../widgets/common/app_toast.dart';
 import '../widgets/image_editor/image_editor_screen.dart';
 
@@ -178,6 +179,7 @@ class ImageWorkflowLauncher {
     if (metadata != null && metadata.hasData) {
       _applyVariationMetadata(
         metadata,
+        ref,
         paramsNotifier,
         fallbackModel: ref.read(generationParamsNotifierProvider).model,
       );
@@ -196,6 +198,7 @@ class ImageWorkflowLauncher {
 
   static void _applyVariationMetadata(
     NaiImageMetadata metadata,
+    WidgetRef ref,
     GenerationParamsNotifier notifier, {
     required String fallbackModel,
   }) {
@@ -236,15 +239,20 @@ class ImageWorkflowLauncher {
     }
     if (metadata.ucPreset != null) {
       notifier.updateUcPreset(metadata.ucPreset!);
+      applyImportedUcPreset(ref.read, metadata.ucPreset!);
     }
     if (metadata.qualityToggle != null) {
       notifier.updateQualityToggle(metadata.qualityToggle!);
+      applyImportedQualityToggle(ref.read, metadata.qualityToggle!);
     }
     if (metadata.smea != null) {
       notifier.updateSmea(metadata.smea!);
     }
     if (metadata.smeaDyn != null) {
       notifier.updateSmeaDyn(metadata.smeaDyn!);
+    }
+    if (metadata.varietyPlus != null) {
+      notifier.updateVarietyPlus(metadata.varietyPlus!);
     }
 
     notifier.randomizeSeed();

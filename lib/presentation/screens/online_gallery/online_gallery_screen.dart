@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +11,7 @@ import 'package:path/path.dart' as path;
 
 import '../../../core/cache/danbooru_image_cache_manager.dart';
 import '../../../core/services/date_formatting_service.dart';
+import '../../../core/utils/file_picker_utils.dart';
 import '../../../data/datasources/remote/danbooru_api_service.dart';
 import '../../../data/models/online_gallery/danbooru_post.dart';
 import '../../../data/models/queue/replication_task.dart';
@@ -1103,7 +1103,17 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
 
     if (selectedPosts.isEmpty) return;
 
-    final result = await FilePicker.platform.getDirectoryPath();
+    String? result;
+    try {
+      result = await FilePickerUtils.pickDirectoryModal(
+        dialogTitle: '选择下载目录',
+      );
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, '选择下载目录失败: $e');
+      }
+      return;
+    }
     if (result == null) return;
 
     if (mounted) {
@@ -1133,7 +1143,7 @@ class _OnlineGalleryScreenState extends ConsumerState<OnlineGalleryScreen>
       await Future.wait(
         batch.map((post) async {
           try {
-            final url = post.largeFileUrl ?? post.sampleUrl ?? post.previewUrl;
+            final url = post.bestQualityUrl;
             if (url.isEmpty) return;
 
             final file =

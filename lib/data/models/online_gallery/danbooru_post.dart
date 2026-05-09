@@ -68,6 +68,20 @@ class DanbooruPost with _$DanbooruPost {
     return fileUrl;
   }
 
+  /// 获取最高质量可下载 URL
+  String get bestQualityUrl {
+    if (fileUrl != null && fileUrl!.isNotEmpty) {
+      return fileUrl!;
+    }
+
+    final sample = sampleUrl;
+    if (sample != null && sample.isNotEmpty) {
+      return sample;
+    }
+
+    return previewUrl;
+  }
+
   /// 是否有有效的预览图
   bool get hasValidPreview => previewUrl.isNotEmpty;
 

@@ -19,58 +19,33 @@ PromptPresetResolution resolvePromptPresetSettings({
   required String prompt,
   required String negativePrompt,
   required PromptPresetMode qualityMode,
-  String? qualityContent,
+  required String? qualityContent,
   required UcPresetType ucPresetType,
-  String? ucPresetContent,
+  required String? ucPresetContent,
   required bool useCustomUcPreset,
 }) {
-  var resolvedPrompt = prompt.trim();
-  var resolvedNegativePrompt = negativePrompt.trim();
-  var qualityToggle = false;
-  var ucPreset = UcPresets.noneApiValue;
+  final resolvedPrompt = switch (qualityMode) {
+    PromptPresetMode.custom => _joinPromptParts([prompt, qualityContent]),
+    PromptPresetMode.naiDefault || PromptPresetMode.none => prompt,
+  };
 
-  switch (qualityMode) {
-    case PromptPresetMode.naiDefault:
-      qualityToggle = true;
-    case PromptPresetMode.none:
-      qualityToggle = false;
-    case PromptPresetMode.custom:
-      resolvedPrompt = _appendPromptPart(resolvedPrompt, qualityContent);
-      qualityToggle = false;
-  }
-
-  if (useCustomUcPreset) {
-    resolvedNegativePrompt =
-        _prependPromptPart(resolvedNegativePrompt, ucPresetContent);
-  } else if (UcPresets.hasNativeApiValue(ucPresetType)) {
-    ucPreset = UcPresets.toApiValue(ucPresetType);
-  } else {
-    resolvedNegativePrompt =
-        _prependPromptPart(resolvedNegativePrompt, ucPresetContent);
-  }
+  final resolvedNegativePrompt = useCustomUcPreset
+      ? _joinPromptParts([ucPresetContent, negativePrompt])
+      : negativePrompt;
 
   return PromptPresetResolution(
     prompt: resolvedPrompt,
     negativePrompt: resolvedNegativePrompt,
-    qualityToggle: qualityToggle,
-    ucPreset: ucPreset,
+    qualityToggle: qualityMode == PromptPresetMode.naiDefault,
+    ucPreset: useCustomUcPreset
+        ? UcPresets.noneApiValue
+        : UcPresets.toApiValue(ucPresetType),
   );
 }
 
-String _appendPromptPart(String base, String? addition) {
-  final trimmedBase = base.trim();
-  final trimmedAddition = addition?.trim() ?? '';
-  if (trimmedAddition.isEmpty) return trimmedBase;
-  if (trimmedBase.isEmpty) return trimmedAddition;
-  if (trimmedBase.endsWith(',')) return '$trimmedBase $trimmedAddition';
-  return '$trimmedBase, $trimmedAddition';
-}
-
-String _prependPromptPart(String base, String? prefix) {
-  final trimmedBase = base.trim();
-  final trimmedPrefix = prefix?.trim() ?? '';
-  if (trimmedPrefix.isEmpty) return trimmedBase;
-  if (trimmedBase.isEmpty) return trimmedPrefix;
-  if (trimmedPrefix.endsWith(',')) return '$trimmedPrefix $trimmedBase';
-  return '$trimmedPrefix, $trimmedBase';
+String _joinPromptParts(Iterable<String?> parts) {
+  return parts
+      .map((part) => part?.trim() ?? '')
+      .where((part) => part.isNotEmpty)
+      .join(', ');
 }

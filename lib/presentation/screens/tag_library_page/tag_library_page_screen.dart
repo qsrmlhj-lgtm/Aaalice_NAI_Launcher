@@ -28,7 +28,6 @@ import 'widgets/export_dialog.dart';
 import 'widgets/import_dialog.dart';
 import 'widgets/grouped_view/grouped_entries_view.dart';
 
-
 /// 词库页面
 class TagLibraryPageScreen extends ConsumerStatefulWidget {
   const TagLibraryPageScreen({super.key});
@@ -765,7 +764,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
   }
 
   /// 处理发送到固定词
-  /// 
+  ///
   /// 【新增】传入 sourceEntryId 建立双向同步关联
   Future<void> _handleSendToFixedTag(
     TagLibraryEntry entry,
@@ -779,6 +778,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
           name: entry.name,
           content: content,
           sourceEntryId: entry.id, // 【新增】建立关联，用于双向同步
+          categoryId: entry.categoryId,
         );
 
     if (!mounted) return;
@@ -818,8 +818,7 @@ class _TagLibraryPageScreenState extends ConsumerState<TagLibraryPageScreen> {
 
     // 检查是否为竖线格式且需要提取角色部分
     final isPipeFormat = PipeParser.isPipeFormat(entry.content);
-    final needsCharacterExtract =
-        isPipeFormat &&
+    final needsCharacterExtract = isPipeFormat &&
         (options.targetType == SendTargetType.replaceCharacter ||
             options.targetType == SendTargetType.appendCharacter);
 

@@ -20,6 +20,7 @@ import '../../services/image_workflow_launcher.dart';
 import '../../utils/asset_protection_guard.dart';
 import 'widgets/resize_handle.dart';
 import 'widgets/left_panel.dart';
+import 'widgets/fixed_tags_sidebar.dart';
 import 'widgets/main_workspace.dart';
 import 'widgets/right_panel.dart';
 import 'package:nai_launcher/core/utils/localization_extension.dart';
@@ -40,10 +41,13 @@ class _DesktopGenerationLayoutState
   static const double _leftPanelMaxWidth = 450;
   static const double _rightPanelMinWidth = 200;
   static const double _rightPanelMaxWidth = 400;
+  static const double _fixedTagsSidebarMinWidth = 240;
+  static const double _fixedTagsSidebarMaxWidth = 400;
 
   // 拖拽状态（拖拽时禁用动画以避免粘滞感）
   bool _isResizingLeft = false;
   bool _isResizingRight = false;
+  bool _isResizingFixedTags = false;
 
   /// 切换提示词区域最大化状态
   void _togglePromptMaximize() {
@@ -150,6 +154,53 @@ class _DesktopGenerationLayoutState
                   .setLeftPanelWidth(newWidth);
             },
           ),
+
+        if (layoutState.fixedTagsSidebarExpanded) ...[
+          Builder(
+            builder: (context) {
+              final width = layoutState.fixedTagsSidebarWidth;
+              final decoration = BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                border: Border(
+                  right: BorderSide(
+                    color: Theme.of(context).dividerColor,
+                  ),
+                ),
+              );
+              final child = FixedTagsSidebar(
+                isResizing: _isResizingFixedTags,
+              );
+              if (_isResizingFixedTags) {
+                return Container(
+                  width: width,
+                  decoration: decoration,
+                  child: child,
+                );
+              }
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: width,
+                decoration: decoration,
+                child: child,
+              );
+            },
+          ),
+          ResizeHandle(
+            onDragStart: () => setState(() => _isResizingFixedTags = true),
+            onDragEnd: () => setState(() => _isResizingFixedTags = false),
+            onDrag: (dx) {
+              final currentWidth =
+                  ref.read(layoutStateNotifierProvider).fixedTagsSidebarWidth;
+              final newWidth = (currentWidth + dx).clamp(
+                _fixedTagsSidebarMinWidth,
+                _fixedTagsSidebarMaxWidth,
+              );
+              ref
+                  .read(layoutStateNotifierProvider.notifier)
+                  .setFixedTagsSidebarWidth(newWidth.toDouble());
+            },
+          ),
+        ],
 
         // 中间 - 主工作区（包裹在 ShortcutAwareWidget 中，确保整个区域都支持快捷键）
         Expanded(

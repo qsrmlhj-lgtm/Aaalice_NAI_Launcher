@@ -191,12 +191,27 @@ logs/security/
 # 测试产物
 .sisyphus/
 .opencode/
-test/
+test/*
 test_results/
 test_hive/
 
 # 但保留测试夹具
 !test/fixtures/
+
+# 保留本功能新增的固定标签侧栏回归测试
+!test/presentation/
+test/presentation/*
+!test/presentation/providers/
+test/presentation/providers/*
+!test/presentation/providers/fixed_tags_provider_test.dart
+!test/presentation/providers/layout_state_provider_test.dart
+!test/presentation/screens/
+test/presentation/screens/*
+!test/presentation/screens/generation/
+test/presentation/screens/generation/*
+!test/presentation/screens/generation/widgets/
+test/presentation/screens/generation/widgets/*
+!test/presentation/screens/generation/widgets/fixed_tags_sidebar_test.dart
 
 # 项目管理文件
 AGENTS.md

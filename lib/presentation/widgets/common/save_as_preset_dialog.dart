@@ -133,6 +133,8 @@ class _SaveAsPresetDialogState extends ConsumerState<SaveAsPresetDialog> {
       final fixedTags = <String>[
         ...metadata.fixedPrefixTags,
         ...metadata.fixedSuffixTags,
+        ...metadata.fixedNegativePrefixTags,
+        ...metadata.fixedNegativeSuffixTags,
       ];
       if (fixedTags.isNotEmpty) {
         configs.add(
@@ -146,8 +148,9 @@ class _SaveAsPresetDialogState extends ConsumerState<SaveAsPresetDialog> {
     }
 
     // 负向提示词处理
-    if (_includeNegativePrompt && metadata.negativePrompt.isNotEmpty) {
-      final negativeTags = _extractTags(metadata.negativePrompt);
+    final negativePrompt = metadata.displayNegativePrompt;
+    if (_includeNegativePrompt && negativePrompt.isNotEmpty) {
+      final negativeTags = _extractTags(negativePrompt);
       if (negativeTags.isNotEmpty) {
         configs.add(
           PromptConfig.create(
@@ -332,7 +335,10 @@ class _SaveAsPresetDialogState extends ConsumerState<SaveAsPresetDialog> {
                         label: '固定词',
                         value: _includeFixedTags,
                         hasData: widget.metadata.fixedPrefixTags.isNotEmpty ||
-                            widget.metadata.fixedSuffixTags.isNotEmpty,
+                            widget.metadata.fixedSuffixTags.isNotEmpty ||
+                            widget
+                                .metadata.fixedNegativePrefixTags.isNotEmpty ||
+                            widget.metadata.fixedNegativeSuffixTags.isNotEmpty,
                         onChanged: (v) => setState(() => _includeFixedTags = v),
                       ),
                       _buildCheckbox(

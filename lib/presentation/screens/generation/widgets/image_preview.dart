@@ -333,32 +333,17 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
     int imageHeight,
   ) {
     final aspectRatio = imageWidth / imageHeight;
-    const maxHeight = 400.0;
-    const maxWidth = 400.0;
-
-    double cardWidth, cardHeight;
-    if (aspectRatio > 1) {
-      cardWidth = maxWidth;
-      cardHeight = maxWidth / aspectRatio;
-    } else {
-      cardHeight = maxHeight;
-      cardWidth = maxHeight * aspectRatio;
-    }
-
-    return Center(
-      child: SizedBox(
-        width: cardWidth,
-        height: cardHeight,
-        child: SelectableImageCard(
-          isGenerating: true,
-          currentImage: state.currentImage,
-          totalImages: state.totalImages,
-          progress: state.progress,
-          streamPreview: state.streamPreview,
-          imageWidth: imageWidth,
-          imageHeight: imageHeight,
-          enableSelection: false,
-        ),
+    return _buildSingleAspectRatioCard(
+      aspectRatio: aspectRatio,
+      child: SelectableImageCard(
+        isGenerating: true,
+        currentImage: state.currentImage,
+        totalImages: state.totalImages,
+        progress: state.progress,
+        streamPreview: state.streamPreview,
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        enableSelection: false,
       ),
     );
   }
@@ -506,48 +491,81 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
     GeneratedImage image,
     ThemeData theme,
   ) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: 500,
-          maxHeight: 650,
+    return _buildSingleAspectRatioCard(
+      aspectRatio: image.aspectRatio,
+      child: SelectableImageCard(
+        imageBytes: image.bytes,
+        sourceFilePath: image.filePath,
+        showIndex: false,
+        enableSelection: false,
+        onTap: () => _showFullscreenImage(image.bytes),
+        onEditImage: () => ImageWorkflowLauncher.openEditor(
+          context,
+          ref,
+          image.bytes,
+          mode: ImageEditorMode.edit,
         ),
-        child: AspectRatio(
-          aspectRatio: image.aspectRatio,
-          child: SelectableImageCard(
-            imageBytes: image.bytes,
-            sourceFilePath: image.filePath,
-            showIndex: false,
-            enableSelection: false,
-            onTap: () => _showFullscreenImage(image.bytes),
-            onEditImage: () => ImageWorkflowLauncher.openEditor(
-              context,
-              ref,
-              image.bytes,
-              mode: ImageEditorMode.edit,
-            ),
-            onInpaint: () =>
-                ImageWorkflowLauncher.openInpaint(context, ref, image.bytes),
-            onGenerateVariations: () =>
-                ImageWorkflowLauncher.generateVariations(
-              context,
-              ref,
-              image.bytes,
-            ),
-            onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
-              context,
-              ref,
-              image.bytes,
-            ),
-            onEnhance: () =>
-                ImageWorkflowLauncher.openEnhance(ref, image.bytes),
-            onUpscale: () =>
-                ImageWorkflowLauncher.openUpscale(ref, image.bytes),
-            onSaveToLibrary: (bytes, _) =>
-                _showSaveToLibraryDialog(context, bytes),
-          ),
+        onInpaint: () =>
+            ImageWorkflowLauncher.openInpaint(context, ref, image.bytes),
+        onGenerateVariations: () => ImageWorkflowLauncher.generateVariations(
+          context,
+          ref,
+          image.bytes,
         ),
+        onDirectorTools: () => ImageWorkflowLauncher.openDirectorTools(
+          context,
+          ref,
+          image.bytes,
+        ),
+        onEnhance: () => ImageWorkflowLauncher.openEnhance(ref, image.bytes),
+        onUpscale: () => ImageWorkflowLauncher.openUpscale(ref, image.bytes),
+        onSaveToLibrary: (bytes, _) => _showSaveToLibraryDialog(context, bytes),
       ),
+    );
+  }
+
+  Widget _buildSingleAspectRatioCard({
+    required double aspectRatio,
+    required Widget child,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardSize = _fitAspectRatio(
+          aspectRatio: aspectRatio,
+          maxSize: Size(constraints.maxWidth, constraints.maxHeight),
+        );
+
+        return Center(
+          child: SizedBox(
+            width: cardSize.width,
+            height: cardSize.height,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  Size _fitAspectRatio({
+    required double aspectRatio,
+    required Size maxSize,
+  }) {
+    final safeAspectRatio =
+        aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
+    final maxWidth = maxSize.width.isFinite ? max(0.0, maxSize.width) : 500.0;
+    final maxHeight =
+        maxSize.height.isFinite ? max(0.0, maxSize.height) : 650.0;
+
+    var width = maxWidth;
+    var height = width / safeAspectRatio;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * safeAspectRatio;
+    }
+
+    return Size(
+      width.clamp(0.0, maxWidth).toDouble(),
+      height.clamp(0.0, maxHeight).toDouble(),
     );
   }
 
@@ -672,6 +690,8 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             aliasResolver.resolveAliases(params.negativePrompt);
         final promptWithFixedTags =
             fixedTagsState.applyToPrompt(resolvedPrompt);
+        final negativePromptWithFixedTags =
+            fixedTagsState.applyToNegativePrompt(resolvedNegative);
         final qualityState = ref.read(qualityPresetNotifierProvider);
         final qualityContent = ref
             .read(qualityPresetNotifierProvider.notifier)
@@ -682,7 +702,7 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
             .getEffectiveContent(params.model);
         final presetResolution = resolvePromptPresetSettings(
           prompt: promptWithFixedTags,
-          negativePrompt: resolvedNegative,
+          negativePrompt: negativePromptWithFixedTags,
           qualityMode: qualityState.mode,
           qualityContent: qualityContent,
           ucPresetType: ucState.presetType,
@@ -740,6 +760,14 @@ class _ImagePreviewWidgetState extends ConsumerState<ImagePreviewWidget> {
               .where((content) => content.isNotEmpty)
               .toList(growable: false),
           fixedSuffixTags: fixedTagsState.enabledSuffixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          fixedNegativePrefixTags: fixedTagsState.negativeEnabledPrefixes
+              .map((entry) => entry.weightedContent)
+              .where((content) => content.isNotEmpty)
+              .toList(growable: false),
+          fixedNegativeSuffixTags: fixedTagsState.negativeEnabledSuffixes
               .map((entry) => entry.weightedContent)
               .where((content) => content.isNotEmpty)
               .toList(growable: false),

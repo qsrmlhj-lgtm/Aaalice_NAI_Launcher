@@ -12,6 +12,8 @@ import '../../../core/constants/api_constants.dart';
 import '../../../core/enums/precise_ref_type.dart';
 import '../../../core/utils/app_logger.dart';
 import '../../../data/models/gallery/nai_image_metadata.dart';
+import '../../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../../data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import '../../../data/services/image_metadata_service.dart';
 import '../../../core/utils/vibe_file_parser.dart';
 import '../../../data/models/character/character_prompt.dart' as char;
@@ -22,12 +24,14 @@ import '../../../data/models/vibe/vibe_reference.dart';
 import '../../../data/services/vibe_library_storage_service.dart';
 import '../../../data/services/vibe_metadata_service.dart';
 import '../../providers/character_prompt_provider.dart';
+import '../../providers/fixed_tags_provider.dart';
 import '../../providers/generation/image_workflow_controller.dart';
 import '../../providers/image_generation_provider.dart';
 import '../../providers/replication_queue_provider.dart';
 import '../../providers/vibe_library_provider.dart';
 import '../../router/app_router.dart';
 import '../../utils/dropped_file_reader.dart';
+import '../../utils/prompt_preset_import_utils.dart';
 import '../common/app_toast.dart';
 import '../metadata/metadata_import_dialog.dart';
 import 'image_destination_dialog.dart';
@@ -701,6 +705,9 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     // 应用参考图参数
     appliedCount += _applyReferenceParams(metadata, options, notifier);
 
+    // 应用结构化固定词
+    appliedCount += await _applyFixedTags(metadata, options);
+
     // 应用高级参数
     appliedCount += _applyAdvancedParams(metadata, options, notifier);
 
@@ -715,7 +722,9 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     var count = 0;
 
     if (options.importPrompt && metadata.prompt.isNotEmpty) {
-      notifier.updatePrompt(metadata.prompt);
+      notifier.updatePrompt(
+        metadata.hasSeparatedFields ? metadata.mainPrompt : metadata.prompt,
+      );
       count++;
     }
 
@@ -759,17 +768,84 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
     NaiImageMetadata metadata, {
     required bool importUcPreset,
   }) {
+    final baseNegative = metadata.displayNegativePrompt;
     if (!importUcPreset || metadata.ucPreset == null) {
-      return metadata.negativePrompt;
+      return baseNegative;
     }
 
     final model =
         metadata.model ?? ref.read(generationParamsNotifierProvider).model;
     return UcPresets.stripPresetByInt(
-      metadata.negativePrompt,
+      baseNegative,
       model,
       metadata.ucPreset!,
     );
+  }
+
+  Future<int> _applyFixedTags(
+    NaiImageMetadata metadata,
+    MetadataImportOptions options,
+  ) async {
+    if (!options.importFixedTags) {
+      return 0;
+    }
+
+    final fixedTagsNotifier = ref.read(fixedTagsNotifierProvider.notifier);
+    var added = 0;
+
+    Future<void> addTags(
+      List<String> tags, {
+      required FixedTagPosition position,
+      required FixedTagPromptType promptType,
+      required String prefix,
+    }) async {
+      for (final tag in tags) {
+        final content = tag.trim();
+        if (content.isEmpty) {
+          continue;
+        }
+        await fixedTagsNotifier.addEntry(
+          name: '$prefix$content',
+          content: content,
+          position: position,
+          promptType: promptType,
+          enabled: true,
+        );
+        added++;
+      }
+    }
+
+    if (options.importFixedPrefix) {
+      await addTags(
+        metadata.fixedPrefixTags,
+        position: FixedTagPosition.prefix,
+        promptType: FixedTagPromptType.positive,
+        prefix: '导入前缀: ',
+      );
+      await addTags(
+        metadata.fixedNegativePrefixTags,
+        position: FixedTagPosition.prefix,
+        promptType: FixedTagPromptType.negative,
+        prefix: '导入负向前缀: ',
+      );
+    }
+
+    if (options.importFixedSuffix) {
+      await addTags(
+        metadata.fixedSuffixTags,
+        position: FixedTagPosition.suffix,
+        promptType: FixedTagPromptType.positive,
+        prefix: '导入后缀: ',
+      );
+      await addTags(
+        metadata.fixedNegativeSuffixTags,
+        position: FixedTagPosition.suffix,
+        promptType: FixedTagPromptType.negative,
+        prefix: '导入负向后缀: ',
+      );
+    }
+
+    return added > 0 ? 1 : 0;
   }
 
   void _applyCharacterPrompts(NaiImageMetadata metadata) {
@@ -853,60 +929,67 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
   ) {
     var count = 0;
 
-    void applyParam<T>(
-      bool shouldImport,
-      T? value,
-      void Function(T value) updateFn,
-    ) {
-      if (shouldImport && value != null) {
-        updateFn(value);
-        count++;
-      }
-    }
-
-    applyParam<String>(
+    count += _applyImportParam<String>(
       options.importSampler,
       metadata.sampler,
       notifier.updateSampler,
     );
-    applyParam<String>(
+    count += _applyImportParam<String>(
       options.importModel,
       metadata.model,
       notifier.updateModel,
     );
-    applyParam<bool>(options.importSmea, metadata.smea, notifier.updateSmea);
-    applyParam<bool>(
+    count += _applyImportParam<bool>(
+      options.importSmea,
+      metadata.smea,
+      notifier.updateSmea,
+    );
+    count += _applyImportParam<bool>(
       options.importSmeaDyn,
       metadata.smeaDyn,
       notifier.updateSmeaDyn,
     );
-    applyParam<String>(
-      options.importNoiseSchedule,
-      metadata.noiseSchedule,
-      notifier.updateNoiseSchedule,
-    );
-    applyParam<double>(
-      options.importCfgRescale,
-      metadata.cfgRescale,
-      notifier.updateCfgRescale,
-    );
-    applyParam<bool>(
-      options.importQualityToggle,
-      metadata.qualityToggle,
-      notifier.updateQualityToggle,
-    );
-    applyParam<int>(
-      options.importUcPreset,
-      metadata.ucPreset,
-      notifier.updateUcPreset,
-    );
-    applyParam<bool>(
+    count += _applyImportParam<bool>(
       options.importVarietyPlus,
       metadata.varietyPlus,
       notifier.updateVarietyPlus,
     );
+    count += _applyImportParam<String>(
+      options.importNoiseSchedule,
+      metadata.noiseSchedule,
+      notifier.updateNoiseSchedule,
+    );
+    count += _applyImportParam<double>(
+      options.importCfgRescale,
+      metadata.cfgRescale,
+      notifier.updateCfgRescale,
+    );
+
+    if (options.importQualityToggle && metadata.qualityToggle != null) {
+      notifier.updateQualityToggle(metadata.qualityToggle!);
+      applyImportedQualityToggle(ref.read, metadata.qualityToggle!);
+      count++;
+    }
+
+    if (options.importUcPreset && metadata.ucPreset != null) {
+      notifier.updateUcPreset(metadata.ucPreset!);
+      applyImportedUcPreset(ref.read, metadata.ucPreset!);
+      count++;
+    }
 
     return count;
+  }
+
+  int _applyImportParam<T>(
+    bool shouldImport,
+    T? value,
+    void Function(T) updater,
+  ) {
+    if (!shouldImport || value == null) {
+      return 0;
+    }
+    updater(value);
+    return 1;
   }
 
   Future<void> _handleAddToQueue(Uint8List bytes, AppLocalizations l10n) async {
@@ -1017,6 +1100,22 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         2,
       ),
       (
+        options.importFixedTags &&
+            (options.importFixedPrefix || options.importFixedSuffix) &&
+            (metadata.fixedPrefixTags.isNotEmpty ||
+                metadata.fixedSuffixTags.isNotEmpty ||
+                metadata.fixedNegativePrefixTags.isNotEmpty ||
+                metadata.fixedNegativeSuffixTags.isNotEmpty),
+        '固定词',
+        [
+          if (options.importFixedPrefix) ...metadata.fixedPrefixTags,
+          if (options.importFixedSuffix) ...metadata.fixedSuffixTags,
+          if (options.importFixedPrefix) ...metadata.fixedNegativePrefixTags,
+          if (options.importFixedSuffix) ...metadata.fixedNegativeSuffixTags,
+        ].join(', '),
+        2,
+      ),
+      (
         options.importCharacterPrompts && metadata.characterPrompts.isNotEmpty,
         l10n.metadataImport_characterPrompts,
         '${metadata.characterPrompts.length} ${l10n.metadataImport_charactersCount}',
@@ -1084,6 +1183,12 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         1
       ),
       (
+        options.importVarietyPlus && metadata.varietyPlus != null,
+        'Variety+',
+        metadata.varietyPlus?.toString(),
+        1,
+      ),
+      (
         options.importNoiseSchedule && metadata.noiseSchedule != null,
         l10n.metadataImport_noiseSchedule,
         metadata.noiseSchedule?.toString(),
@@ -1105,12 +1210,6 @@ class _GlobalDropHandlerState extends ConsumerState<GlobalDropHandler> {
         options.importUcPreset && metadata.ucPreset != null,
         l10n.metadataImport_ucPreset,
         metadata.ucPreset?.toString(),
-        1,
-      ),
-      (
-        options.importVarietyPlus && metadata.varietyPlus != null,
-        'Variety+',
-        metadata.varietyPlus?.toString(),
         1,
       ),
     ];

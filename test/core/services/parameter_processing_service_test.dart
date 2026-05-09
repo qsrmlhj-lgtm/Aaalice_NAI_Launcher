@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_launcher/core/services/parameter_processing_service.dart';
 import 'package:nai_launcher/core/utils/alias_parser.dart';
 import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_entry.dart';
+import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import 'package:nai_launcher/data/models/tag_library/tag_library_entry.dart';
 
 void main() {
@@ -43,8 +44,12 @@ void main() {
       });
 
       test('should create with both tag libraries and fixed tags', () {
-        final entries = [TagLibraryEntry.create(name: 'test', content: 'content')];
-        final fixedTags = [FixedTagEntry.create(name: 'fixed', content: 'fixed content')];
+        final entries = [
+          TagLibraryEntry.create(name: 'test', content: 'content')
+        ];
+        final fixedTags = [
+          FixedTagEntry.create(name: 'fixed', content: 'fixed content')
+        ];
 
         final service = ParameterProcessingService(
           tagLibraryEntries: entries,
@@ -119,7 +124,8 @@ void main() {
 
       test('should resolve alias in negative prompt', () {
         final entries = [
-          TagLibraryEntry.create(name: 'badhands', content: 'bad hands, extra fingers'),
+          TagLibraryEntry.create(
+              name: 'badhands', content: 'bad hands, extra fingers'),
         ];
         final service = ParameterProcessingService(tagLibraryEntries: entries);
 
@@ -128,7 +134,8 @@ void main() {
           negativePrompt: '<badhands>, blurry',
         );
 
-        expect(result.negativePrompt, equals('bad hands, extra fingers, blurry'));
+        expect(
+            result.negativePrompt, equals('bad hands, extra fingers, blurry'));
         expect(result.aliasesResolved, isTrue);
       });
 
@@ -149,7 +156,8 @@ void main() {
 
       test('should resolve aliases with case insensitive matching', () {
         final entries = [
-          TagLibraryEntry.create(name: 'Character', content: 'female character'),
+          TagLibraryEntry.create(
+              name: 'Character', content: 'female character'),
         ];
         final service = ParameterProcessingService(tagLibraryEntries: entries);
 
@@ -371,7 +379,8 @@ void main() {
         expect(result.prompt.contains('{masterpiece}'), isTrue);
       });
 
-      test('should skip fixed tags application when applyFixedTags is false', () {
+      test('should skip fixed tags application when applyFixedTags is false',
+          () {
         final fixedTags = [
           FixedTagEntry.create(
             name: 'quality',
@@ -416,6 +425,40 @@ void main() {
 
         // Should still include fixed tags even if user prompt is empty
         expect(result.prompt, equals('prefix, suffix'));
+      });
+
+      test('should apply negative fixed tags without changing positive prompt',
+          () {
+        final fixedTags = [
+          FixedTagEntry.create(
+            name: 'positive',
+            content: 'masterpiece',
+            position: FixedTagPosition.prefix,
+          ),
+          FixedTagEntry.create(
+            name: 'negative-prefix',
+            content: 'bad anatomy',
+            position: FixedTagPosition.prefix,
+            promptType: FixedTagPromptType.negative,
+          ),
+          FixedTagEntry.create(
+            name: 'negative-suffix',
+            content: 'text',
+            position: FixedTagPosition.suffix,
+            promptType: FixedTagPromptType.negative,
+          ),
+        ];
+        final service = ParameterProcessingService(fixedTags: fixedTags);
+
+        final result = service.process(
+          prompt: '1girl',
+          negativePrompt: 'bad hands',
+        );
+
+        expect(result.prompt, equals('masterpiece, 1girl'));
+        expect(result.negativePrompt, equals('bad anatomy, bad hands, text'));
+        expect(result.fixedTagsApplied, isTrue);
+        expect(result.fixedTagsCount, equals(3));
       });
     });
 
@@ -476,7 +519,10 @@ void main() {
           negativePrompt: 'low quality, <bad>',
         );
 
-        expect(result.prompt, equals('best quality, 1girl, long hair, blue eyes, smiling, cinematic lighting'));
+        expect(
+            result.prompt,
+            equals(
+                'best quality, 1girl, long hair, blue eyes, smiling, cinematic lighting'));
         expect(result.negativePrompt, equals('low quality, <bad>'));
       });
     });
@@ -575,7 +621,8 @@ void main() {
         final service = ParameterProcessingService(tagLibraryEntries: entries);
 
         expect(service.isEntryNameValid('TestEntry'), isTrue);
-        expect(service.isEntryNameValid('testentry'), isTrue); // case insensitive
+        expect(
+            service.isEntryNameValid('testentry'), isTrue); // case insensitive
       });
 
       test('should return false for non-existing entry name', () {
@@ -650,7 +697,8 @@ void main() {
 
         expect(
           stats.toString(),
-          equals('FixedTagsStatistics(total: 1, enabled: 1, prefix: 1, suffix: 0)'),
+          equals(
+              'FixedTagsStatistics(total: 1, enabled: 1, prefix: 1, suffix: 0)'),
         );
       });
     });
@@ -686,7 +734,8 @@ void main() {
       });
 
       test('should create unprocessed result using factory', () {
-        final result = ParameterProcessingResult.unprocessed('prompt', 'negative');
+        final result =
+            ParameterProcessingResult.unprocessed('prompt', 'negative');
 
         expect(result.prompt, equals('prompt'));
         expect(result.negativePrompt, equals('negative'));

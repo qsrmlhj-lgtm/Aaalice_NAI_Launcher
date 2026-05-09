@@ -266,13 +266,14 @@ class SdToNaiConverter {
   /// - `(text:1.5)` → `1.5::text::`
   /// - `(long hair)` → `1.1::long hair::`
   /// - `[ugly]` → `0.91::ugly::`
-  /// - `\(text\)` → `(text)` (转义符保留)
+  /// - `\(text\)` → `(text)` (移除圆括号转义符)
   ///
   /// 注意：只负责 SD 语法转换，不做通用空格转换
   /// 是否将空格转换为下划线由 NaiPromptFormatter 统一负责
   static String convert(String text) {
-    // 只有当有SD语法且没有NAI语法时，才执行转换
-    if (hasSDWeightSyntax(text) && !hasNAISyntax(text)) {
+    // 按局部 SD 权重语法转换；已有 NAI 语法不应阻止同一提示词中
+    // 其它 `(tag)` / `[tag]` 片段被转换。
+    if (hasSDWeightSyntax(text)) {
       final parsed = _parsePromptAttention(text);
       return _buildNaiV4(parsed);
     }

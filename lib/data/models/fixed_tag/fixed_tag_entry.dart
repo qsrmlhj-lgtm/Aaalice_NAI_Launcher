@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:uuid/uuid.dart';
 
+import 'fixed_tag_prompt_type.dart';
+
 part 'fixed_tag_entry.freezed.dart';
 part 'fixed_tag_entry.g.dart';
 
@@ -43,6 +45,11 @@ class FixedTagEntry with _$FixedTagEntry {
     /// 是否启用
     @Default(true) bool enabled,
 
+    /// 应用到正向或负向提示词
+    @Default(FixedTagPromptType.positive)
+    @JsonKey(unknownEnumValue: FixedTagPromptType.positive)
+    FixedTagPromptType promptType,
+
     /// 所属分类ID (用于词库功能)
     String? categoryId,
 
@@ -70,6 +77,7 @@ class FixedTagEntry with _$FixedTagEntry {
     double weight = 1.0,
     FixedTagPosition position = FixedTagPosition.prefix,
     bool enabled = true,
+    FixedTagPromptType promptType = FixedTagPromptType.positive,
     String? categoryId,
     String? sourceEntryId, // 【新增】来源词库条目ID
     int sortOrder = 0,
@@ -82,6 +90,7 @@ class FixedTagEntry with _$FixedTagEntry {
       weight: weight.clamp(0.5, 2.0),
       position: position,
       enabled: enabled,
+      promptType: promptType,
       categoryId: categoryId,
       sourceEntryId: sourceEntryId, // 【新增】
       sortOrder: sortOrder,
@@ -165,6 +174,7 @@ class FixedTagEntry with _$FixedTagEntry {
     double? weight,
     FixedTagPosition? position,
     bool? enabled,
+    FixedTagPromptType? promptType,
     String? categoryId,
     String? sourceEntryId,
     int? sortOrder,
@@ -175,6 +185,7 @@ class FixedTagEntry with _$FixedTagEntry {
       weight: weight?.clamp(0.5, 2.0) ?? this.weight,
       position: position ?? this.position,
       enabled: enabled ?? this.enabled,
+      promptType: promptType ?? this.promptType,
       categoryId: categoryId ?? this.categoryId,
       sourceEntryId: sourceEntryId ?? this.sourceEntryId,
       sortOrder: sortOrder ?? this.sortOrder,
@@ -201,27 +212,69 @@ class FixedTagEntry with _$FixedTagEntry {
 
 /// 固定词列表扩展
 extension FixedTagEntryListExtension on List<FixedTagEntry> {
+  /// 获取正向固定词条目
+  List<FixedTagEntry> get positive =>
+      where((e) => e.promptType == FixedTagPromptType.positive).toList();
+
+  /// 获取负向固定词条目
+  List<FixedTagEntry> get negative =>
+      where((e) => e.promptType == FixedTagPromptType.negative).toList();
+
   /// 获取启用的条目
-  List<FixedTagEntry> get enabled => where((e) => e.enabled).toList();
+  List<FixedTagEntry> get enabled =>
+      where((e) => e.enabled && e.promptType == FixedTagPromptType.positive)
+          .toList();
 
   /// 获取禁用的条目
-  List<FixedTagEntry> get disabled => where((e) => !e.enabled).toList();
+  List<FixedTagEntry> get disabled =>
+      where((e) => !e.enabled && e.promptType == FixedTagPromptType.positive)
+          .toList();
 
   /// 获取前缀条目
-  List<FixedTagEntry> get prefixes =>
-      where((e) => e.position == FixedTagPosition.prefix).toList();
+  List<FixedTagEntry> get prefixes => where(
+        (e) =>
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.prefix,
+      ).toList();
 
   /// 获取后缀条目
-  List<FixedTagEntry> get suffixes =>
-      where((e) => e.position == FixedTagPosition.suffix).toList();
+  List<FixedTagEntry> get suffixes => where(
+        (e) =>
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.suffix,
+      ).toList();
 
   /// 获取启用的前缀条目
-  List<FixedTagEntry> get enabledPrefixes =>
-      where((e) => e.enabled && e.position == FixedTagPosition.prefix).toList();
+  List<FixedTagEntry> get enabledPrefixes => where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.prefix,
+      ).toList();
 
   /// 获取启用的后缀条目
-  List<FixedTagEntry> get enabledSuffixes =>
-      where((e) => e.enabled && e.position == FixedTagPosition.suffix).toList();
+  List<FixedTagEntry> get enabledSuffixes => where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.positive &&
+            e.position == FixedTagPosition.suffix,
+      ).toList();
+
+  /// 获取启用的负向前缀条目
+  List<FixedTagEntry> get negativeEnabledPrefixes => where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.negative &&
+            e.position == FixedTagPosition.prefix,
+      ).toList();
+
+  /// 获取启用的负向后缀条目
+  List<FixedTagEntry> get negativeEnabledSuffixes => where(
+        (e) =>
+            e.enabled &&
+            e.promptType == FixedTagPromptType.negative &&
+            e.position == FixedTagPosition.suffix,
+      ).toList();
 
   /// 按排序顺序排列
   List<FixedTagEntry> sortedByOrder() {

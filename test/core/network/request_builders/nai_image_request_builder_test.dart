@@ -31,7 +31,7 @@ void main() {
       expect(streamResult.requestParameters['stream'], 'msgpack');
     });
 
-    test('should keep prompt text raw while forwarding native preset flags',
+    test('should send effective prompt while forwarding native preset flags',
         () async {
       final params = ImageParams(
         prompt: '1girl, sunset',
@@ -47,18 +47,25 @@ void main() {
 
       final result = await builder.build(sampler: 'k_euler');
       final parameters = result.requestParameters;
+      final preset = UcPresets.getPresetContent(
+        ImageModels.animeDiffusionV45Full,
+        UcPresetType.heavy,
+      );
 
-      expect(result.requestData['input'], equals('1girl, sunset'));
-      expect(parameters['negative_prompt'], equals('bad hands'));
+      expect(
+        result.requestData['input'],
+        equals('1girl, sunset, location, very aesthetic, masterpiece, no text'),
+      );
+      expect(parameters['negative_prompt'], equals('$preset, bad hands'));
       expect(parameters['qualityToggle'], isTrue);
       expect(parameters['ucPreset'], equals(0));
       expect(
         parameters['v4_prompt']['caption']['base_caption'],
-        equals('1girl, sunset'),
+        equals('1girl, sunset, location, very aesthetic, masterpiece, no text'),
       );
       expect(
         parameters['v4_negative_prompt']['caption']['base_caption'],
-        equals('bad hands'),
+        equals('$preset, bad hands'),
       );
     });
 
@@ -73,6 +80,45 @@ void main() {
         () => builder.build(sampler: ''),
         throwsA(isA<ArgumentError>()),
       );
+    });
+
+    test('should apply native quality and UC presets only at request boundary',
+        () async {
+      final params = ImageParams(
+        prompt: 'fixed positive, user positive',
+        negativePrompt: 'fixed negative, user negative',
+        model: ImageModels.animeDiffusionV45Full,
+        qualityToggle: true,
+        ucPreset: UcPresets.toApiValue(UcPresetType.heavy),
+      );
+      final builder = NAIImageRequestBuilder(
+        params: params,
+        encodeVibe: _fakeEncodeVibe,
+      );
+
+      final result = await builder.build(sampler: 'k_euler');
+      final preset = UcPresets.getPresetContent(
+        ImageModels.animeDiffusionV45Full,
+        UcPresetType.heavy,
+      );
+
+      expect(
+        result.effectivePrompt,
+        equals(
+          'fixed positive, user positive, location, very aesthetic, masterpiece, no text',
+        ),
+      );
+      expect(
+        result.effectiveNegativePrompt,
+        equals('$preset, fixed negative, user negative'),
+      );
+      expect(result.requestData['input'], equals(result.effectivePrompt));
+      expect(
+        result.requestParameters['negative_prompt'],
+        equals(result.effectiveNegativePrompt),
+      );
+      expect(result.requestParameters['ucPreset'], equals(0));
+      expect(result.effectiveNegativePrompt, isNot(contains('nsfw')));
     });
 
     test('should return vibeEncodingMap only in non-stream mode', () async {

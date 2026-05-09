@@ -280,7 +280,7 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
           value: params.scale,
           min: 1,
           max: 20,
-          divisions: 38,
+          divisions: 190,
           onChanged: (value) {
             ref
                 .read(generationParamsNotifierProvider.notifier)
@@ -526,18 +526,6 @@ class _ParameterPanelState extends ConsumerState<ParameterPanel> {
                 ),
               ),
           ],
-        ),
-
-        const SizedBox(height: 16),
-
-        // 重置按钮
-        ThemedButton(
-          onPressed: () {
-            ref.read(generationParamsNotifierProvider.notifier).reset();
-          },
-          icon: const Icon(Icons.restart_alt),
-          label: Text(context.l10n.generation_resetParams),
-          style: ThemedButtonStyle.outlined,
         ),
       ],
     );

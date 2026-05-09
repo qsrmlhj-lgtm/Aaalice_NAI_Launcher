@@ -1,5 +1,4 @@
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +7,7 @@ import 'package:path/path.dart' as path;
 
 import '../../core/cache/danbooru_image_cache_manager.dart';
 import '../../core/utils/localization_extension.dart';
+import '../../core/utils/file_picker_utils.dart';
 import '../../data/models/online_gallery/danbooru_post.dart';
 import '../../data/models/queue/replication_task.dart';
 import '../../data/services/tag_translation_service.dart';
@@ -98,13 +98,14 @@ class _DanbooruPostCardState extends State<DanbooruPostCard> {
   }
 
   Future<void> _handleDownload() async {
-    final url = widget.post.largeFileUrl ??
-        widget.post.sampleUrl ??
-        widget.post.previewUrl;
+    final url = widget.post.bestQualityUrl;
     if (url.isEmpty) return;
 
     try {
-      final result = await FilePicker.platform.getDirectoryPath();
+      _removeOverlay();
+      final result = await FilePickerUtils.pickDirectoryModal(
+        dialogTitle: '选择下载目录',
+      );
       if (result == null) return;
 
       if (!mounted) return;

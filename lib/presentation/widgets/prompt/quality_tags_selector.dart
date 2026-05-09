@@ -356,10 +356,12 @@ class _QualityTagsSelectorState extends ConsumerState<QualityTagsSelector> {
           );
       content = currentEntry?.content ??
           QualityTags.getQualityTags(widget.model) ??
-          'very aesthetic, masterpiece, no text';
+          QualityTags.getQualityTags(ImageModels.animeDiffusionV45Full) ??
+          '';
     } else {
       content = QualityTags.getQualityTags(widget.model) ??
-          'very aesthetic, masterpiece, no text';
+          QualityTags.getQualityTags(ImageModels.animeDiffusionV45Full) ??
+          '';
     }
 
     return Column(

@@ -3,16 +3,22 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:nai_launcher/core/constants/api_constants.dart' as api;
 import 'package:nai_launcher/core/constants/storage_keys.dart';
-import 'package:nai_launcher/core/enums/uc_preset_type.dart';
 import 'package:nai_launcher/core/services/prompt_token_counter_service.dart';
 import 'package:nai_launcher/core/storage/local_storage_service.dart';
 import 'package:nai_launcher/data/models/character/character_prompt.dart';
 import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_entry.dart';
+import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_link.dart';
+import 'package:nai_launcher/data/models/fixed_tag/fixed_tag_prompt_type.dart';
+import 'package:nai_launcher/data/models/prompt/prompt_preset_mode.dart';
 import 'package:nai_launcher/data/models/vibe/vibe_reference.dart';
 import 'package:nai_launcher/presentation/providers/fixed_tags_provider.dart';
 import 'package:nai_launcher/presentation/providers/generation/generation_params_notifier.dart';
 import 'package:nai_launcher/presentation/providers/prompt_token_counter_provider.dart';
+import 'package:nai_launcher/presentation/providers/quality_preset_provider.dart';
+import 'package:nai_launcher/presentation/providers/uc_preset_provider.dart';
+import 'package:nai_launcher/presentation/utils/prompt_preset_import_utils.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -67,7 +73,7 @@ void main() {
           ],
         ),
         qualityToggle: true,
-        ucPreset: UcPresetType.heavy.index,
+        ucPreset: api.UcPresets.toApiValue(api.UcPresetType.heavy),
         characters: [
           CharacterPrompt.create(
             name: 'A',
@@ -95,7 +101,7 @@ void main() {
       expect(
         payload.mainText,
         equals(
-          'year 2025, 1girl, cinematic lighting, very aesthetic, masterpiece, no text',
+          'year 2025, 1girl, cinematic lighting, location, very aesthetic, masterpiece, no text',
         ),
       );
       expect(
@@ -116,9 +122,26 @@ void main() {
         prompt: '<hero>',
         negativePrompt: '<bad>',
         model: 'nai-diffusion-4-5-full',
-        fixedTagsState: const FixedTagsState(),
+        fixedTagsState: FixedTagsState(
+          entries: [
+            FixedTagEntry.create(
+              name: 'negative-prefix',
+              content: 'bad anatomy',
+              position: FixedTagPosition.prefix,
+              promptType: FixedTagPromptType.negative,
+              sortOrder: 0,
+            ),
+            FixedTagEntry.create(
+              name: 'negative-suffix',
+              content: 'text',
+              position: FixedTagPosition.suffix,
+              promptType: FixedTagPromptType.negative,
+              sortOrder: 1,
+            ),
+          ],
+        ),
         qualityToggle: true,
-        ucPreset: UcPresetType.light.index,
+        ucPreset: api.UcPresets.toApiValue(api.UcPresetType.light),
         characters: [
           CharacterPrompt.create(
             name: 'A',
@@ -137,7 +160,7 @@ void main() {
       expect(
         payload.mainText,
         equals(
-          'nsfw, lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, bad hands',
+          'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, bad anatomy, bad hands, text',
         ),
       );
       expect(
@@ -146,8 +169,101 @@ void main() {
       );
       expect(
         payload.breakdown.map((item) => item.label).toList(),
-        equals(['负面提示词', '负面预设', '角色负面']),
+        equals(['负面提示词', '负面固定词', '负面预设', '角色负面']),
       );
+    });
+  });
+
+  group('metadata prompt preset import', () {
+    test('should apply imported preset fields to the new providers', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      applyImportedQualityToggle(container.read, false);
+      applyImportedUcPreset(
+        container.read,
+        api.UcPresets.toApiValue(api.UcPresetType.humanFocus),
+      );
+
+      expect(
+        container.read(qualityPresetNotifierProvider).mode,
+        PromptPresetMode.none,
+      );
+      expect(
+        container.read(ucPresetNotifierProvider).presetType,
+        api.UcPresetType.humanFocus,
+      );
+
+      applyImportedQualityToggle(container.read, true);
+      applyImportedUcPreset(container.read, api.UCPresets.furryFocus);
+
+      expect(
+        container.read(qualityPresetNotifierProvider).mode,
+        PromptPresetMode.naiDefault,
+      );
+      expect(
+        container.read(ucPresetNotifierProvider).presetType,
+        api.UcPresetType.furryFocus,
+      );
+    });
+  });
+
+  group('FixedTagsState link helpers', () {
+    test('should resolve linked endpoints and mismatched enabled state', () {
+      final positive = FixedTagEntry.create(
+        name: 'character',
+        content: '1girl',
+      );
+      final negative = FixedTagEntry.create(
+        name: 'character-negative',
+        content: 'bad anatomy',
+        enabled: false,
+        promptType: FixedTagPromptType.negative,
+      );
+      final link = FixedTagLink.create(
+        positiveEntryId: positive.id,
+        negativeEntryId: negative.id,
+      );
+      final state = FixedTagsState(
+        entries: [positive, negative],
+        links: [link],
+      );
+
+      expect(state.linkedNegativesOf(positive.id), equals([negative]));
+      expect(state.linkedPositivesOf(negative.id), equals([positive]));
+      expect(state.isMismatched(link), isTrue);
+      expect(
+        FixedTagLink.fromJson(link.toJson()).negativeEntryId,
+        equals(negative.id),
+      );
+    });
+
+    test('notifier should undo and redo link creation', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(fixedTagsNotifierProvider.notifier);
+
+      final positive = await notifier.addEntry(
+        name: 'character',
+        content: '1girl',
+      );
+      final negative = await notifier.addEntry(
+        name: 'character-negative',
+        content: 'bad anatomy',
+        promptType: FixedTagPromptType.negative,
+      );
+
+      await notifier.createLink(
+        positiveEntryId: positive.id,
+        negativeEntryId: negative.id,
+      );
+      expect(container.read(fixedTagsNotifierProvider).links, hasLength(1));
+
+      await notifier.undo();
+      expect(container.read(fixedTagsNotifierProvider).links, isEmpty);
+
+      await notifier.redo();
+      expect(container.read(fixedTagsNotifierProvider).links, hasLength(1));
     });
   });
 

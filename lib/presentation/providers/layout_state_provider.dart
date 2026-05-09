@@ -12,6 +12,10 @@ class LayoutState {
   final double rightPanelWidth;
   final double promptAreaHeight;
   final bool promptMaximized;
+  final bool fixedTagsSidebarExpanded;
+  final double fixedTagsSidebarWidth;
+  final String fixedTagsSidebarViewMode;
+  final double fixedTagsNegativeHeight;
 
   const LayoutState({
     this.leftPanelExpanded = true,
@@ -20,6 +24,10 @@ class LayoutState {
     this.rightPanelWidth = 280.0,
     this.promptAreaHeight = 200.0,
     this.promptMaximized = false,
+    this.fixedTagsSidebarExpanded = false,
+    this.fixedTagsSidebarWidth = 280.0,
+    this.fixedTagsSidebarViewMode = 'list',
+    this.fixedTagsNegativeHeight = 180.0,
   });
 
   /// 复制并更新部分字段
@@ -30,6 +38,10 @@ class LayoutState {
     double? rightPanelWidth,
     double? promptAreaHeight,
     bool? promptMaximized,
+    bool? fixedTagsSidebarExpanded,
+    double? fixedTagsSidebarWidth,
+    String? fixedTagsSidebarViewMode,
+    double? fixedTagsNegativeHeight,
   }) {
     return LayoutState(
       leftPanelExpanded: leftPanelExpanded ?? this.leftPanelExpanded,
@@ -38,6 +50,14 @@ class LayoutState {
       rightPanelWidth: rightPanelWidth ?? this.rightPanelWidth,
       promptAreaHeight: promptAreaHeight ?? this.promptAreaHeight,
       promptMaximized: promptMaximized ?? this.promptMaximized,
+      fixedTagsSidebarExpanded:
+          fixedTagsSidebarExpanded ?? this.fixedTagsSidebarExpanded,
+      fixedTagsSidebarWidth:
+          fixedTagsSidebarWidth ?? this.fixedTagsSidebarWidth,
+      fixedTagsSidebarViewMode:
+          fixedTagsSidebarViewMode ?? this.fixedTagsSidebarViewMode,
+      fixedTagsNegativeHeight:
+          fixedTagsNegativeHeight ?? this.fixedTagsNegativeHeight,
     );
   }
 }
@@ -57,6 +77,10 @@ class LayoutStateNotifier extends _$LayoutStateNotifier {
       rightPanelWidth: storage.getRightPanelWidth(),
       promptAreaHeight: storage.getPromptAreaHeight(),
       promptMaximized: storage.getPromptMaximized(),
+      fixedTagsSidebarExpanded: storage.getFixedTagsSidebarExpanded(),
+      fixedTagsSidebarWidth: storage.getFixedTagsSidebarWidth(),
+      fixedTagsSidebarViewMode: storage.getFixedTagsSidebarViewMode(),
+      fixedTagsNegativeHeight: storage.getFixedTagsNegativeHeight(),
     );
   }
 
@@ -122,5 +146,45 @@ class LayoutStateNotifier extends _$LayoutStateNotifier {
     // 保存到本地存储
     final storage = ref.read(localStorageServiceProvider);
     await storage.setPromptMaximized(maximized);
+  }
+
+  /// 设置固定词侧边栏展开状态
+  Future<void> setFixedTagsSidebarExpanded(bool expanded) async {
+    state = state.copyWith(fixedTagsSidebarExpanded: expanded);
+
+    final storage = ref.read(localStorageServiceProvider);
+    await storage.setFixedTagsSidebarExpanded(expanded);
+  }
+
+  /// 切换固定词侧边栏展开状态
+  Future<void> toggleFixedTagsSidebar() async {
+    await setFixedTagsSidebarExpanded(!state.fixedTagsSidebarExpanded);
+  }
+
+  /// 设置固定词侧边栏宽度
+  Future<void> setFixedTagsSidebarWidth(double width) async {
+    final clamped = width.clamp(240.0, 400.0).toDouble();
+    state = state.copyWith(fixedTagsSidebarWidth: clamped);
+
+    final storage = ref.read(localStorageServiceProvider);
+    await storage.setFixedTagsSidebarWidth(clamped);
+  }
+
+  /// 设置固定词侧边栏视图模式
+  Future<void> setFixedTagsSidebarViewMode(String mode) async {
+    final normalized = mode == 'grid' ? 'grid' : 'list';
+    state = state.copyWith(fixedTagsSidebarViewMode: normalized);
+
+    final storage = ref.read(localStorageServiceProvider);
+    await storage.setFixedTagsSidebarViewMode(normalized);
+  }
+
+  /// 设置负向固定词区域高度
+  Future<void> setFixedTagsNegativeHeight(double height) async {
+    final clamped = height.clamp(60.0, 500.0).toDouble();
+    state = state.copyWith(fixedTagsNegativeHeight: clamped);
+
+    final storage = ref.read(localStorageServiceProvider);
+    await storage.setFixedTagsNegativeHeight(clamped);
   }
 }

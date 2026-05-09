@@ -48,6 +48,10 @@ class StorageKeys {
   static const String leftPanelWidth = 'left_panel_width';
   static const String promptAreaHeight = 'prompt_area_height';
   static const String promptMaximized = 'prompt_maximized';
+  static const String fixedTagsSidebarExpanded = 'fixed_tags_sidebar_expanded';
+  static const String fixedTagsSidebarWidth = 'fixed_tags_sidebar_width';
+  static const String fixedTagsSidebarViewMode = 'fixed_tags_sidebar_view_mode';
+  static const String fixedTagsNegativeHeight = 'fixed_tags_negative_height';
 
   // Panel Expansion State Keys (面板展开状态)
   static const String advancedOptionsExpanded = 'advanced_options_expanded';
@@ -160,6 +164,9 @@ class StorageKeys {
   // Fixed Tags (固定词相关)
   static const String fixedTagsBox = 'fixed_tags';
   static const String fixedTagsData = 'fixed_tags_data';
+  static const String fixedTagLinksData = 'fixed_tag_links_data';
+  static const String fixedTagsNegativePanelExpanded =
+      'fixed_tags_negative_panel_expanded';
   static const String fixedTagCategoriesData = 'fixed_tag_categories_data';
 
   // Tag Library (词库相关)

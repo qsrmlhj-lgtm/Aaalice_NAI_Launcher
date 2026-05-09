@@ -1,25 +1,8 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../../core/enums/uc_preset_type.dart';
 import '../../../core/storage/local_storage_service.dart';
 
 part 'generation_settings_notifiers.g.dart';
-
-/// 质量标签设置 Notifier
-@Riverpod(keepAlive: true)
-class QualityTagsSettings extends _$QualityTagsSettings {
-  LocalStorageService get _storage => ref.read(localStorageServiceProvider);
-
-  @override
-  bool build() => _storage.getAddQualityTags();
-
-  void toggle() => set(!state);
-
-  void set(bool value) {
-    state = value;
-    _storage.setAddQualityTags(value);
-  }
-}
 
 /// 自动补全设置 Notifier
 @Riverpod(keepAlive: true)
@@ -98,25 +81,6 @@ class CooccurrenceSettings extends _$CooccurrenceSettings {
   void set(bool value) {
     state = value;
     _storage.setEnableCooccurrenceRecommendation(value);
-  }
-}
-
-/// 负面提示词预设设置 Notifier
-@Riverpod(keepAlive: true)
-class UcPresetSettings extends _$UcPresetSettings {
-  LocalStorageService get _storage => ref.read(localStorageServiceProvider);
-
-  @override
-  UcPresetType build() {
-    final index = _storage.getUcPresetType();
-    return (index >= 0 && index < UcPresetType.values.length)
-        ? UcPresetType.values[index]
-        : UcPresetType.heavy;
-  }
-
-  void set(UcPresetType type) {
-    state = type;
-    _storage.setUcPresetType(type.index);
   }
 }
 

@@ -3,6 +3,7 @@ import 'dart:math';
 import '../utils/alias_parser.dart';
 import '../utils/app_logger.dart';
 import '../../data/models/fixed_tag/fixed_tag_entry.dart';
+import '../../data/models/fixed_tag/fixed_tag_prompt_type.dart';
 import '../../data/models/tag_library/tag_library_entry.dart';
 
 /// 参数处理结果
@@ -33,7 +34,8 @@ class ParameterProcessingResult {
   });
 
   /// 创建未处理的结果
-  factory ParameterProcessingResult.unprocessed(String prompt, String negativePrompt) {
+  factory ParameterProcessingResult.unprocessed(
+      String prompt, String negativePrompt) {
     return ParameterProcessingResult(
       prompt: prompt,
       negativePrompt: negativePrompt,
@@ -69,7 +71,8 @@ class ParameterProcessingService {
         _fixedTags = fixedTags;
 
   /// 获取词库条目
-  List<TagLibraryEntry> get tagLibraryEntries => List.unmodifiable(_tagLibraryEntries);
+  List<TagLibraryEntry> get tagLibraryEntries =>
+      List.unmodifiable(_tagLibraryEntries);
 
   /// 获取固定词条目
   List<FixedTagEntry> get fixedTags => List.unmodifiable(_fixedTags);
@@ -78,12 +81,12 @@ class ParameterProcessingService {
   ///
   /// 依次执行：
   /// 1. 别名解析（将 <词库名> 展开为实际内容，包括正向和负向提示词）
-  /// 2. 固定词应用（将启用的固定词添加到正向提示词前后，负向提示词不应用固定词）
+  /// 2. 固定词应用（正向/负向分别按前缀 + 主体 + 后缀组装）
   ///
   /// [prompt] 正向提示词
   /// [negativePrompt] 负向提示词
   /// [resolveAliases] 是否解析别名（默认 true）
-  /// [applyFixedTags] 是否应用固定词（默认 true，仅作用于正向提示词）
+  /// [applyFixedTags] 是否应用固定词（默认 true，正向/负向分别应用）
   ParameterProcessingResult process({
     required String prompt,
     required String negativePrompt,
@@ -115,8 +118,12 @@ class ParameterProcessingService {
     // 2. 应用固定词
     if (applyFixedTags) {
       final fixedPrompt = _applyFixedTags(processedPrompt);
-      if (fixedPrompt != processedPrompt) {
+      final fixedNegativePrompt =
+          _applyNegativeFixedTags(processedNegativePrompt);
+      if (fixedPrompt != processedPrompt ||
+          fixedNegativePrompt != processedNegativePrompt) {
         processedPrompt = fixedPrompt;
+        processedNegativePrompt = fixedNegativePrompt;
         fixedTagsWereApplied = true;
         appliedFixedTagsCount = _enabledFixedTags.length;
         AppLogger.d(
@@ -151,18 +158,44 @@ class ParameterProcessingService {
     return _applyFixedTags(prompt);
   }
 
+  /// 仅应用负向固定词
+  ///
+  /// [negativePrompt] 用户负向提示词
+  /// 返回应用负向固定词后的提示词
+  String applyNegativeFixedTags(String negativePrompt) {
+    return _applyNegativeFixedTags(negativePrompt);
+  }
+
   /// 获取启用的固定词列表
   List<FixedTagEntry> get _enabledFixedTags =>
       _fixedTags.where((e) => e.enabled).toList();
 
+  List<FixedTagEntry> get _enabledPositiveFixedTags => _enabledFixedTags
+      .where((e) => e.promptType == FixedTagPromptType.positive)
+      .toList();
+
+  List<FixedTagEntry> get _enabledNegativeFixedTags => _enabledFixedTags
+      .where((e) => e.promptType == FixedTagPromptType.negative)
+      .toList();
+
   /// 获取启用的前缀固定词（已排序）
-  List<FixedTagEntry> get _enabledPrefixes => _enabledFixedTags
+  List<FixedTagEntry> get _enabledPrefixes => _enabledPositiveFixedTags
       .where((e) => e.position == FixedTagPosition.prefix)
       .toList()
       .sortedByOrder();
 
   /// 获取启用的后缀固定词（已排序）
-  List<FixedTagEntry> get _enabledSuffixes => _enabledFixedTags
+  List<FixedTagEntry> get _enabledSuffixes => _enabledPositiveFixedTags
+      .where((e) => e.position == FixedTagPosition.suffix)
+      .toList()
+      .sortedByOrder();
+
+  List<FixedTagEntry> get _enabledNegativePrefixes => _enabledNegativeFixedTags
+      .where((e) => e.position == FixedTagPosition.prefix)
+      .toList()
+      .sortedByOrder();
+
+  List<FixedTagEntry> get _enabledNegativeSuffixes => _enabledNegativeFixedTags
       .where((e) => e.position == FixedTagPosition.suffix)
       .toList()
       .sortedByOrder();
@@ -182,6 +215,27 @@ class ParameterProcessingService {
     final parts = <String>[
       ...enabledPrefixContents,
       userPrompt,
+      ...enabledSuffixContents,
+    ].where((s) => s.isNotEmpty).toList();
+
+    return parts.join(', ');
+  }
+
+  /// 应用负向固定词到负向提示词
+  String _applyNegativeFixedTags(String userNegativePrompt) {
+    final enabledPrefixContents = _enabledNegativePrefixes
+        .map((e) => e.weightedContent)
+        .where((c) => c.isNotEmpty)
+        .toList();
+
+    final enabledSuffixContents = _enabledNegativeSuffixes
+        .map((e) => e.weightedContent)
+        .where((c) => c.isNotEmpty)
+        .toList();
+
+    final parts = <String>[
+      ...enabledPrefixContents,
+      userNegativePrompt,
       ...enabledSuffixContents,
     ].where((s) => s.isNotEmpty).toList();
 
@@ -354,4 +408,3 @@ class FixedTagsStatistics {
         'prefix: $prefixCount, suffix: $suffixCount)';
   }
 }
-

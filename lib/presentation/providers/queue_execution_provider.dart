@@ -318,11 +318,12 @@ class QueueExecutionNotifier extends _$QueueExecutionNotifier {
 
   /// 填充提示词到主界面
   void _fillPrompt(ReplicationTask task) {
-    // 只填充队列任务自身的提示词。固定词和正负面预设统一由生成路径解析，
-    // 避免队列执行时把同一组选项提前拼进文本后再次应用。
-    ref.read(generationParamsNotifierProvider.notifier)
-      ..updatePrompt(task.prompt)
-      ..updateNegativePrompt(task.negativePrompt);
+    // 队列任务只回填用户基础正向提示词。
+    // 固定词、质量词和 UC 预设由生成链路统一组装，避免队列执行时重复拼接。
+    // 负向提示词沿用主界面设置，符合任务编辑器“负面提示词从主界面读取”的语义。
+    ref.read(generationParamsNotifierProvider.notifier).updatePrompt(
+          task.prompt,
+        );
   }
 
   /// 触发自动生成（自动执行模式下使用）

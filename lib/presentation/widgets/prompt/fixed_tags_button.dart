@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/utils/localization_extension.dart';
 import '../../../data/models/fixed_tag/fixed_tag_entry.dart';
 import '../../providers/fixed_tags_provider.dart';
+import '../../providers/layout_state_provider.dart';
 import 'fixed_tags_dialog.dart';
 
 /// 固定词按钮组件
@@ -22,7 +23,8 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final fixedTagsState = ref.watch(fixedTagsNotifierProvider);
-    final enabledCount = fixedTagsState.enabledCount;
+    final enabledCount =
+        fixedTagsState.entries.where((entry) => entry.enabled).length;
     final hasEntries = fixedTagsState.entries.isNotEmpty;
     final hasEnabled = enabledCount > 0;
 
@@ -53,7 +55,21 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
         ),
         padding: const EdgeInsets.all(12),
         child: GestureDetector(
-          onTap: () => _showFixedTagsDialog(context),
+          onTap: () {
+            final sidebarExpanded = ref.read(
+              layoutStateNotifierProvider.select(
+                (state) => state.fixedTagsSidebarExpanded,
+              ),
+            );
+            if (!sidebarExpanded) {
+              _showFixedTagsDialog(context);
+            }
+          },
+          onLongPress: () {
+            ref
+                .read(layoutStateNotifierProvider.notifier)
+                .toggleFixedTagsSidebar();
+          },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -137,8 +153,14 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
       return _buildEmptyState(theme);
     }
 
-    final enabledPrefixes = state.enabledPrefixes;
-    final enabledSuffixes = state.enabledSuffixes;
+    final enabledPrefixes = [
+      ...state.enabledPrefixes,
+      ...state.negativeEnabledPrefixes,
+    ];
+    final enabledSuffixes = [
+      ...state.enabledSuffixes,
+      ...state.negativeEnabledSuffixes,
+    ];
     final disabledEntries = entries.where((e) => !e.enabled).toList();
 
     return Column(
@@ -151,6 +173,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
           isDark,
           enabledPrefixes.length,
           enabledSuffixes.length,
+          state.links.length,
         ),
 
         // 启用的条目列表
@@ -216,7 +239,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
               ),
               const SizedBox(height: 2),
               Text(
-                context.l10n.fixedTags_clickToManage,
+                '点击管理，长按打开侧栏',
                 style: TextStyle(
                   fontSize: 10,
                   color: theme.colorScheme.outline,
@@ -235,6 +258,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
     bool isDark,
     int prefixCount,
     int suffixCount,
+    int linkCount,
   ) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -271,6 +295,20 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
             label: context.l10n.fixedTags_suffix,
             color: theme.colorScheme.tertiary,
             isActive: suffixCount > 0,
+          ),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            width: 1,
+            height: 16,
+            color: theme.colorScheme.outlineVariant.withOpacity(0.3),
+          ),
+          _buildCompactStat(
+            theme,
+            icon: Icons.link_rounded,
+            count: linkCount,
+            label: '联动',
+            color: theme.colorScheme.secondary,
+            isActive: linkCount > 0,
           ),
         ],
       ),
@@ -546,7 +584,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
           ),
           const SizedBox(width: 4),
           Text(
-            context.l10n.fixedTags_clickToManage,
+            '点击管理，长按侧栏',
             style: TextStyle(
               fontSize: 10,
               color: theme.colorScheme.outline.withOpacity(0.6),
