@@ -1033,6 +1033,7 @@ class _FixedTagsDialogState extends ConsumerState<FixedTagsDialog> {
           enabled: true,
           promptType: promptType,
           sourceEntryId: entry.id, // 【修复】传递词库条目ID，启用双向同步
+          categoryId: entry.categoryId,
         );
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/utils/localization_extension.dart';
 import '../../../data/models/fixed_tag/fixed_tag_entry.dart';
 import '../../providers/fixed_tags_provider.dart';
+import '../../providers/layout_state_provider.dart';
 import 'fixed_tags_dialog.dart';
 
 /// 固定词按钮组件
@@ -54,7 +55,21 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
         ),
         padding: const EdgeInsets.all(12),
         child: GestureDetector(
-          onTap: () => _showFixedTagsDialog(context),
+          onTap: () {
+            final sidebarExpanded = ref.read(
+              layoutStateNotifierProvider.select(
+                (state) => state.fixedTagsSidebarExpanded,
+              ),
+            );
+            if (!sidebarExpanded) {
+              _showFixedTagsDialog(context);
+            }
+          },
+          onLongPress: () {
+            ref
+                .read(layoutStateNotifierProvider.notifier)
+                .toggleFixedTagsSidebar();
+          },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -224,7 +239,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
               ),
               const SizedBox(height: 2),
               Text(
-                context.l10n.fixedTags_clickToManage,
+                '点击管理，长按打开侧栏',
                 style: TextStyle(
                   fontSize: 10,
                   color: theme.colorScheme.outline,
@@ -569,7 +584,7 @@ class _FixedTagsButtonState extends ConsumerState<FixedTagsButton> {
           ),
           const SizedBox(width: 4),
           Text(
-            context.l10n.fixedTags_clickToManage,
+            '点击管理，长按侧栏',
             style: TextStyle(
               fontSize: 10,
               color: theme.colorScheme.outline.withOpacity(0.6),

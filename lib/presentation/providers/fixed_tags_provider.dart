@@ -115,6 +115,15 @@ class FixedTagsState {
   int get negativeDisabledCount =>
       negativeEntries.where((e) => !e.enabled).length;
 
+  /// 按分类分组的正向固定词条目
+  Map<String?, List<FixedTagEntry>> get positiveByCategory {
+    final grouped = <String?, List<FixedTagEntry>>{};
+    for (final entry in positiveEntries.sortedByOrder()) {
+      grouped.putIfAbsent(entry.categoryId, () => []).add(entry);
+    }
+    return grouped;
+  }
+
   /// 获取启用的负向前缀条目
   List<FixedTagEntry> get negativeEnabledPrefixes => entries
       .where(
@@ -297,6 +306,80 @@ class FixedTagsState {
     }
     return trimmedRest.substring(0, trimmedRest.length - 1).trimRight();
   }
+}
+
+/// 从词库条目推断固定词分类。
+List<FixedTagEntry> inferFixedTagCategories(
+  List<FixedTagEntry> fixedEntries,
+  List<TagLibraryEntry> libraryEntries,
+) {
+  if (libraryEntries.isEmpty) return fixedEntries;
+  final entryById = {for (final entry in libraryEntries) entry.id: entry};
+
+  return [
+    for (final entry in fixedEntries)
+      if (entry.categoryId != null || entry.sourceEntryId == null)
+        entry
+      else
+        entryById[entry.sourceEntryId]?.categoryId == null
+            ? entry
+            : entry.copyWith(
+                categoryId: entryById[entry.sourceEntryId]!.categoryId,
+              ),
+  ];
+}
+
+/// 在筛选后的可见条目内重排，保持隐藏条目的相对位置。
+List<FixedTagEntry> reorderFixedTagsWithinVisibleIds({
+  required List<FixedTagEntry> entries,
+  required FixedTagPromptType promptType,
+  required List<String> visibleIds,
+  required int oldIndex,
+  required int newIndex,
+}) {
+  final sameType = entries
+      .where((entry) => entry.promptType == promptType)
+      .toList()
+      .sortedByOrder();
+  final visibleSet = visibleIds.toSet();
+  final visible =
+      sameType.where((entry) => visibleSet.contains(entry.id)).toList();
+
+  if (oldIndex < 0 || oldIndex >= visible.length) return entries;
+  if (newIndex < 0 || newIndex > visible.length) return entries;
+  if (newIndex > oldIndex) newIndex--;
+  if (oldIndex == newIndex) return entries;
+
+  final moved = visible.removeAt(oldIndex);
+  visible.insert(newIndex, moved);
+
+  var visibleCursor = 0;
+  final reorderedSameType = [
+    for (final entry in sameType)
+      if (visibleSet.contains(entry.id)) visible[visibleCursor++] else entry,
+  ].reindex();
+
+  final reorderedById = {
+    for (final entry in reorderedSameType) entry.id: entry,
+  };
+  return entries
+      .map((entry) => reorderedById[entry.id] ?? entry)
+      .toList()
+      .sortedByOrder();
+}
+
+bool _sameCategoryAssignments(
+  List<FixedTagEntry> before,
+  List<FixedTagEntry> after,
+) {
+  if (before.length != after.length) return false;
+  for (var i = 0; i < before.length; i++) {
+    if (before[i].id != after[i].id ||
+        before[i].categoryId != after[i].categoryId) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// 固定词 Provider
@@ -487,6 +570,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
     bool enabled = true,
     FixedTagPromptType promptType = FixedTagPromptType.positive,
     String? sourceEntryId, // 【新增】来源词库条目ID
+    String? categoryId,
   }) async {
     final entry = FixedTagEntry.create(
       name: name,
@@ -496,6 +580,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       enabled: enabled,
       promptType: promptType,
       sourceEntryId: sourceEntryId, // 【新增】
+      categoryId: categoryId,
       sortOrder: state.entries.length,
     );
 
@@ -576,6 +661,7 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
         newEntries[index] = fixedTag.copyWith(
           name: tagEntry.name,
           content: tagEntry.content,
+          categoryId: tagEntry.categoryId,
           updatedAt: DateTime.now(),
         );
       }
@@ -588,6 +674,19 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       'Synced ${entriesToSync.length} fixed tags from tag library: ${tagEntry.name}',
       'FixedTagsProvider',
     );
+  }
+
+  /// 从词库条目补齐已关联固定词缺失的分类。
+  Future<void> inferCategoriesFromLibrary() async {
+    final tagLibraryState = ref.read(tagLibraryPageNotifierProvider);
+    final inferred = inferFixedTagCategories(
+      state.entries,
+      tagLibraryState.entries,
+    );
+    if (_sameCategoryAssignments(state.entries, inferred)) return;
+
+    state = state.copyWith(entries: inferred);
+    await _saveEntries();
   }
 
   /// 【新增】同步到词库（反向同步）
@@ -667,7 +766,11 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
       );
     } catch (e, stack) {
       AppLogger.e(
-          'Failed to sync to tag library: $e', e, stack, 'FixedTagsProvider');
+        'Failed to sync to tag library: $e',
+        e,
+        stack,
+        'FixedTagsProvider',
+      );
     }
   }
 
@@ -781,6 +884,27 @@ class FixedTagsNotifier extends _$FixedTagsNotifier {
         .sortedByOrder();
 
     _commitState(state.copyWith(entries: newEntries));
+    await _saveEntries();
+  }
+
+  /// 在可见固定词 ID 范围内重排，适用于分类或搜索筛选后的列表。
+  Future<void> reorderWithinVisibleIds({
+    required FixedTagPromptType promptType,
+    required List<String> visibleIds,
+    required int oldIndex,
+    required int newIndex,
+  }) async {
+    final reordered = reorderFixedTagsWithinVisibleIds(
+      entries: state.entries,
+      promptType: promptType,
+      visibleIds: visibleIds,
+      oldIndex: oldIndex,
+      newIndex: newIndex,
+    );
+    if (identical(reordered, state.entries) || reordered == state.entries) {
+      return;
+    }
+    _commitState(state.copyWith(entries: reordered));
     await _saveEntries();
   }
 
