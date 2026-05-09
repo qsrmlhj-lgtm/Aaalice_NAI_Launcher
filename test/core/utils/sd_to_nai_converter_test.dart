@@ -70,6 +70,24 @@ void main() {
       );
     });
 
+    test('should convert SD weights when NAI numeric syntax is present', () {
+      expect(
+        SdToNaiConverter.convert(
+          '1.2::masterpiece::, (cinematic lighting), [bad anatomy]',
+        ),
+        equals(
+          '1.2::masterpiece::, 1.1::cinematic lighting::, 0.90909::bad anatomy::',
+        ),
+      );
+    });
+
+    test('should convert SD weights when NAI brace syntax is present', () {
+      expect(
+        SdToNaiConverter.convert('{best quality}, (cinematic lighting:1.3)'),
+        equals('{best quality}, 1.3::cinematic lighting::'),
+      );
+    });
+
     test('should unescape escaped parentheses while converting SD weights', () {
       expect(
         SdToNaiConverter.convert(r'\(literal\), (cinematic lighting)'),
